@@ -1,0 +1,34 @@
+[project]
+name = "lms-backend"
+version = "0.1.0"
+description = "Бэкенд LMS для учителей Казахстана"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Автогенерённые миграции: длину строк и хвостовые пробелы не правим руками
+"migrations/versions/*" = ["E501", "W291"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
