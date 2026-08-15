@@ -1,0 +1,7 @@
+# Хостовый .venv не должен попадать в образ: там симлинки на macOS-python
+.venv
+.git
+.env
+__pycache__
+.pytest_cache
+.ruff_cache

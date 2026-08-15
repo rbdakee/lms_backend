@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,6 +9,8 @@ from app.config import get_settings
 
 
 def create_app() -> FastAPI:
+    # INFO, иначе заглушка SMS молчит, а без кода в логе не войти
+    logging.basicConfig(level=logging.INFO)
     cfg = get_settings()
     app = FastAPI(title="LMS API", version="0.1.0")
 
