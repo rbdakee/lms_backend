@@ -288,6 +288,16 @@ class QuizAttempt(Base):
             unique=True,
             postgresql_where=text("is_counted"),
         ),
+        # Активная попытка тоже одна и тоже гарантией базы: у пересдаваемого
+        # теста попытка стартует незачётной, зачётный индекс молчит — без
+        # этого гонка двойного старта рождала бы попытку-фантом.
+        Index(
+            "uq_quiz_attempt_active",
+            "user_id",
+            "quiz_id",
+            unique=True,
+            postgresql_where=text("finished_at IS NULL"),
+        ),
     )
 
 
@@ -301,6 +311,10 @@ class Answer(Base):
     option_ids: Mapped[list[int]] = mapped_column(
         ARRAY(BigInteger), default=list, server_default="{}"
     )
+
+
+# Условие индекса собрано заранее: внутри класса имя text перекрыто колонкой.
+_SUBMISSION_PENDING_ONLY = text("status = 'pending'")
 
 
 class Submission(Base):
@@ -317,6 +331,18 @@ class Submission(Base):
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
     reviewed_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    # Одна работа «на проверке» — гарантия базы: проверка в коде не закрывает
+    # гонку двух одновременных отправок.
+    __table_args__ = (
+        Index(
+            "uq_submission_pending",
+            "user_id",
+            "task_id",
+            unique=True,
+            postgresql_where=_SUBMISSION_PENDING_ONLY,
+        ),
+    )
 
 
 class Certificate(Base):

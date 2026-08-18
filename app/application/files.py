@@ -35,7 +35,7 @@ DEFAULT_MIME = "application/octet-stream"
 BAD_LINK = "Ссылка устарела — откройте файл заново"
 
 
-def _safe_name(raw: str) -> str:
+def safe_name(raw: str) -> str:
     """Имя, как его прислал браузер, очищенное от путей: старые браузеры шлют
     путь целиком, и `C:\\Users\\Айгуль\\памятка.pdf` — это имя файла."""
     name = raw.replace("\\", "/").rsplit("/", 1)[-1].strip()
@@ -70,7 +70,7 @@ def _capped(chunks: Iterable[bytes], limit: int, max_mb: int) -> Iterator[bytes]
 def _download_path(file_id: int, name: str) -> str:
     """Путь раздачи — он же строка, которую подписываем: у nginx в подпись
     идёт `$uri`, то есть путь без запроса и уже раскодированный."""
-    return f"/files/lesson/{file_id}/{_safe_name(name)}"
+    return f"/files/lesson/{file_id}/{safe_name(name)}"
 
 
 class FilesService:
@@ -89,7 +89,7 @@ class FilesService:
     def upload(self, filename: str, stream: BinaryIO) -> dict:
         """Загруженный файл ни к чему не привязан: привязка происходит в том
         запросе, куда `key` передаётся дальше (сдача работы, материал урока)."""
-        name = _safe_name(filename)
+        name = safe_name(filename)
         chunks = _chunks(stream)
         first = next(chunks, b"")
         if not first:

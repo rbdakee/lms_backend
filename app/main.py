@@ -4,7 +4,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import register_error_handlers
-from app.api.routers import admin, auth, courses, dictionaries, files, health, lessons, me
+from app.api.routers import (
+    admin,
+    auth,
+    courses,
+    dictionaries,
+    files,
+    health,
+    lessons,
+    me,
+    quizzes,
+    tasks,
+)
 from app.config import get_settings
 
 
@@ -31,6 +42,9 @@ def create_app() -> FastAPI:
     app.include_router(dictionaries.router)
     app.include_router(courses.router)
     app.include_router(lessons.router)
+    app.include_router(quizzes.router)
+    app.include_router(quizzes.attempts_router)
+    app.include_router(tasks.router)
     app.include_router(files.router)
     app.include_router(admin.router)
     return app

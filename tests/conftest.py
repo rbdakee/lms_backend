@@ -22,7 +22,10 @@ from app.adapters.db.models import (
     Lesson,
     LessonProgress,
     Module,
+    Option,
+    Question,
     Quiz,
+    Submission,
     Task,
 )
 from app.api.deps import get_playback_limiter, get_sms, get_storage, get_telegram
@@ -232,11 +235,29 @@ def make_quiz(module_id, **kw):
     return seed(Quiz(**fields))
 
 
+def make_question(quiz_id, **kw):
+    fields = {"quiz_id": quiz_id, "type": "single", "text": "Вопрос", "points": 1}
+    fields.update(kw)
+    return seed(Question(**fields))
+
+
+def make_option(question_id, **kw):
+    fields = {"question_id": question_id, "text": "Вариант", "is_correct": False}
+    fields.update(kw)
+    return seed(Option(**fields))
+
+
 def make_task(module_id, **kw):
     fields = {"module_id": module_id, "title": "Задание",
               "statement": {"text": "Опишите свой урок"}}
     fields.update(kw)
     return seed(Task(**fields))
+
+
+def make_submission(user_id, task_id, **kw):
+    fields = {"user_id": user_id, "task_id": task_id, "text": "Первый вариант"}
+    fields.update(kw)
+    return seed(Submission(**fields))
 
 
 def make_enrollment(user_id, course_id, **kw):

@@ -22,6 +22,17 @@ class ValidationAppError(AppError):
     code = "validation_error"
 
 
+class FieldError(ValidationAppError):
+    """Ошибка одного поля формы: экран подсвечивает поле по имени, поэтому
+    текст уходит внутри details.fields, а не только общим сообщением."""
+
+    def __init__(self, field: str, message: str):
+        super().__init__(
+            "Проверьте заполнение полей",
+            details={"fields": [{"field": field, "message": message}]},
+        )
+
+
 class UnauthorizedError(AppError):
     status = 401
     code = "unauthorized"
@@ -75,6 +86,101 @@ class EnrollmentClosedError(AppError):
 
     def __init__(self):
         super().__init__("Набор на курс закрыт — заявку отправить нельзя")
+
+
+# Состояния экрана теста: попытка потрачена, сертификат выдан, тест пуст.
+
+
+class AttemptUsedError(AppError):
+    status = 409
+    code = "attempt_used"
+
+    def __init__(self):
+        super().__init__("Попытка уже использована — тест нельзя пройти повторно")
+
+
+class CertificateIssuedError(AppError):
+    """Сертификат выдан — результат под ним больше не меняется, даже
+    у пересдаваемого теста."""
+
+    status = 409
+    code = "certificate_issued"
+
+    def __init__(self):
+        super().__init__("Сертификат уже выдан — результаты теста изменить нельзя")
+
+
+class QuizEmptyError(AppError):
+    status = 409
+    code = "quiz_empty"
+
+    def __init__(self):
+        super().__init__("Тест ещё наполняется — вопросов пока нет")
+
+
+class AttemptFinishedError(AppError):
+    status = 409
+    code = "attempt_finished"
+
+    def __init__(self):
+        super().__init__("Попытка уже завершена")
+
+
+class TimeExpiredError(AppError):
+    """Ответ не сохранён: время вышло. Фронт зовёт finish — счёт пойдёт
+    по тому, что человек успел ответить."""
+
+    status = 409
+    code = "time_expired"
+
+    def __init__(self):
+        super().__init__("Время истекло — ответы отправлены на подсчёт")
+
+
+class AttemptNotFinishedError(AppError):
+    status = 409
+    code = "attempt_not_finished"
+
+    def __init__(self):
+        super().__init__("Сначала завершите тест")
+
+
+class ReviewUnavailableError(AppError):
+    status = 403
+    code = "review_unavailable"
+
+    def __init__(self):
+        super().__init__("Разбор у этого теста не показывается")
+
+
+# Состояния экрана задания: работа ждёт проверки, задание закрыто, вердикт стоит.
+
+
+class SubmissionPendingError(AppError):
+    status = 409
+    code = "submission_pending"
+
+    def __init__(self):
+        super().__init__("Работа уже на проверке — дождитесь ответа")
+
+
+class TaskAcceptedError(AppError):
+    status = 409
+    code = "task_accepted"
+
+    def __init__(self):
+        super().__init__("Задание уже зачтено")
+
+
+class AlreadyReviewedError(AppError):
+    """Вердикт ставится один раз: передумал — учитель пришлёт доработку,
+    и у неё будет свой вердикт."""
+
+    status = 409
+    code = "already_reviewed"
+
+    def __init__(self):
+        super().__init__("Работа уже проверена")
 
 
 class NoFileError(ValidationAppError):

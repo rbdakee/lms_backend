@@ -8,15 +8,20 @@ from sqlalchemy.orm import Session as DbSession
 from app.adapters.db.base import get_db
 from app.adapters.db.models import Session, User
 from app.adapters.db.repos import (
+    AttemptRepo,
     AuthCodeRepo,
+    CertificateRepo,
     CourseRepo,
     EnrollmentRepo,
     LeadRepo,
     LessonRepo,
     NotificationRepo,
     ProgressRepo,
+    QuizRepo,
     ReviewRepo,
     SessionRepo,
+    SubmissionRepo,
+    TaskRepo,
     UserRepo,
     now_utc,
 )
@@ -29,7 +34,10 @@ from app.application.files import FilesService
 from app.application.leads import LeadsService
 from app.application.lessons import LessonsService
 from app.application.ports import SmsPort, StoragePort, TelegramPort
+from app.application.quizzes import QuizzesService
 from app.application.ratelimit import SlidingWindowLimiter
+from app.application.submissions_admin import SubmissionsAdminService
+from app.application.tasks import TasksService
 from app.application.users import UsersService
 from app.config import Settings, get_settings
 from app.domain.errors import BlockedError, ForbiddenError, UnauthorizedError
@@ -111,6 +119,43 @@ def get_lessons_service(
         enrollments=EnrollmentRepo(db),
         progress=ProgressRepo(db),
         playback_limiter=playback_limiter,
+    )
+
+
+def get_quizzes_service(db: Annotated[DbSession, Depends(get_db)]) -> QuizzesService:
+    return QuizzesService(
+        quizzes=QuizRepo(db),
+        attempts=AttemptRepo(db),
+        enrollments=EnrollmentRepo(db),
+        certificates=CertificateRepo(db),
+    )
+
+
+def get_tasks_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    storage: Annotated[StoragePort, Depends(get_storage)],
+    telegram: Annotated[TelegramPort, Depends(get_telegram)],
+) -> TasksService:
+    return TasksService(
+        tasks=TaskRepo(db),
+        submissions=SubmissionRepo(db),
+        enrollments=EnrollmentRepo(db),
+        storage=storage,
+        telegram=telegram,
+        cfg=get_settings(),
+        commit=db.commit,
+    )
+
+
+def get_submissions_admin_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    storage: Annotated[StoragePort, Depends(get_storage)],
+) -> SubmissionsAdminService:
+    return SubmissionsAdminService(
+        submissions=SubmissionRepo(db),
+        notifications=NotificationRepo(db),
+        storage=storage,
+        cfg=get_settings(),
     )
 
 

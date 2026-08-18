@@ -306,6 +306,212 @@ class PlaybackOut(BaseModel):
     expires_at: datetime | None
 
 
+# -- тесты и попытки ---------------------------------------------------
+
+
+QuestionType = Literal["single", "multi", "bool"]
+
+
+class QuizOptionOut(BaseModel):
+    """Вариант внутри идущей попытки: is_correct здесь нет и быть не может."""
+
+    id: int
+    text: str
+
+
+class QuizQuestionOut(BaseModel):
+    id: int
+    type: QuestionType
+    text: str
+    points: int
+    # Варианты идут своим порядком: перемешивается порядок вопросов, не ответов
+    options: list[QuizOptionOut]
+
+
+class QuizAnswerOut(BaseModel):
+    question_id: int
+    # Пустой список — ответ снят
+    option_ids: list[int]
+
+
+class QuizAttemptOut(BaseModel):
+    id: int
+    quiz_id: int
+    started_at: datetime
+    # null — у теста нет лимита времени, попытка не истекает
+    remaining_sec: int | None
+    questions: list[QuizQuestionOut]
+    answers: list[QuizAnswerOut]
+
+
+class QuizResultOut(BaseModel):
+    """Результат попытки — ответ finish и он же `result` завершённого теста."""
+
+    id: int
+    score: int
+    max_score: int
+    score_percent: int
+    pass_score: int
+    passed: bool
+    is_counted: bool
+    timed_out: bool
+    minutes_spent: int
+    review_available: bool
+
+
+class QuizAttemptHistoryOut(BaseModel):
+    id: int
+    started_at: datetime
+    finished_at: datetime
+    minutes_spent: int
+    score: int
+    max_score: int
+    score_percent: int
+    passed: bool
+    timed_out: bool
+    is_counted: bool
+
+
+class QuizStateNotStartedOut(BaseModel):
+    status: Literal["not_started"]
+    # false — только когда по курсу уже выдан сертификат
+    can_start: bool
+
+
+class QuizStateInProgressOut(BaseModel):
+    status: Literal["in_progress"]
+    attempt: QuizAttemptOut
+
+
+class QuizStateFinishedOut(BaseModel):
+    status: Literal["finished"]
+    result: QuizResultOut
+    can_retake: bool
+    review_available: bool
+
+
+QuizStateOut = Annotated[
+    QuizStateNotStartedOut | QuizStateInProgressOut | QuizStateFinishedOut,
+    Field(discriminator="status"),
+]
+
+
+class QuizOut(BaseModel):
+    id: int
+    module_id: int
+    title: str
+    is_final: bool
+    pass_score: int
+    time_limit_min: int | None
+    retakable: bool
+    show_review: bool
+    time_required_min: int
+    # Числа видимых вопросов; сами вопросы уходят только внутри попытки
+    questions_count: int
+    max_score: int
+    state: QuizStateOut
+    # Завершённые попытки, старые сверху; незавершённая — в state
+    attempts: list[QuizAttemptHistoryOut]
+
+
+class AnswerIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    question_id: int
+    option_ids: list[int]
+
+
+class QuizReviewOptionOut(BaseModel):
+    id: int
+    text: str
+    # is_correct — как надо было, is_chosen — как ответил человек
+    is_correct: bool
+    is_chosen: bool
+
+
+class QuizReviewQuestionOut(BaseModel):
+    id: int
+    type: QuestionType
+    text: str
+    points: int
+    earned_points: int
+    # null — пояснения у вопроса нет, блок не рисуется
+    explanation: str | None
+    options: list[QuizReviewOptionOut]
+
+
+class QuizReviewOut(BaseModel):
+    result: QuizResultOut
+    questions: list[QuizReviewQuestionOut]
+
+
+# -- задания и сдачи ---------------------------------------------------
+
+
+class TemplateFileOut(BaseModel):
+    """Файл-шаблон задания. Ссылки здесь нет — за ней идут отдельно,
+    в GET /tasks/{id}/template_file."""
+
+    name: str
+    size_bytes: int
+    mime: str
+
+
+class SubmissionFileOut(BaseModel):
+    name: str
+    size_bytes: int
+    mime: str
+    # Постоянная ссылка, а не ключ хранилища: байты отдаются с проверкой сессии
+    url: str
+
+
+class SubmissionOut(BaseModel):
+    """Элемент истории сдач — и ответ на отправку работы. reviewed_by здесь
+    нет: имя проверяющего учителю не отдаётся."""
+
+    id: int
+    status: Literal["pending", "accepted", "rework"]
+    created_at: datetime
+    text: str | None
+    files: list[SubmissionFileOut]
+    comment: str | None
+    reviewed_at: datetime | None
+
+
+class TaskOut(BaseModel):
+    id: int
+    module_id: int
+    title: str
+    # Условие как в базе, без обработки: форма фиксируется в сессии 7
+    statement: dict
+    template_file: TemplateFileOut | None
+    submit_format: Literal["text", "file", "both"]
+    # Пустой список — принимается любое расширение
+    allowed_ext: list[str]
+    max_size_mb: int
+    time_required_min: int
+    # Статус последней сдачи; none — ещё не сдавал
+    status: Literal["none", "pending", "accepted", "rework"]
+    can_submit: bool
+    # История сдач, свежие сверху
+    submissions: list[SubmissionOut]
+
+
+class SubmissionFileIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # key из ответа POST /files; наружу он больше не возвращается
+    key: str = Field(max_length=500)
+    name: str = Field(max_length=300)
+
+
+class SubmissionIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    text: str | None = Field(None, max_length=20000)
+    files: list[SubmissionFileIn] = Field(default_factory=list)
+
+
 # -- файлы -------------------------------------------------------------
 
 
@@ -469,3 +675,76 @@ class EnrollmentOut(BaseModel):
     paid: bool
     # Комментарий к оплате (paid_note); при paid=false — null, комментарий ушёл в заявку
     note: str | None
+
+
+# -- админка: очередь проверки работ -----------------------------------
+
+
+class SubmissionTeacherOut(BaseModel):
+    """Учитель в очереди: телефона и школы здесь нет — они на карточке
+    учителя, а очередь их не показывает."""
+
+    id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+    photo_url: str | None
+
+
+class SubmissionCourseOut(BaseModel):
+    id: int
+    lang: str
+    title: str
+
+
+class SubmissionTaskOut(BaseModel):
+    id: int
+    title: str
+
+
+class AdminSubmissionOut(BaseModel):
+    id: int
+    status: Literal["pending", "accepted", "rework"]
+    # 1 — первая работа, больше — доработка после rework
+    attempt_number: int
+    created_at: datetime
+    # У проверенных всегда 0 — работа больше не ждёт
+    waiting_days: int
+    teacher: SubmissionTeacherOut
+    task: SubmissionTaskOut
+    course: SubmissionCourseOut
+
+
+class AdminSubmissionsPageOut(BaseModel):
+    items: list[AdminSubmissionOut]
+    total: int
+    page: int
+    per_page: int
+
+
+class AdminSubmissionTaskOut(SubmissionTaskOut):
+    """Задание в карточке проверки: слева условие, справа работа."""
+
+    statement: dict
+    template_file: TemplateFileOut | None
+    submit_format: Literal["text", "file", "both"]
+    allowed_ext: list[str]
+    max_size_mb: int
+
+
+class AdminSubmissionCardOut(AdminSubmissionOut):
+    task: AdminSubmissionTaskOut
+    text: str | None
+    files: list[SubmissionFileOut]
+    comment: str | None
+    reviewed_at: datetime | None
+    # Прежние сдачи той же пары, свежие сверху; самой работы здесь нет
+    history: list[SubmissionOut]
+
+
+class SubmissionReviewIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    verdict: Literal["accepted", "rework"]
+    # При rework обязателен — проверяет сценарий, текст отказа один на форму
+    comment: str | None = Field(None, max_length=4000)

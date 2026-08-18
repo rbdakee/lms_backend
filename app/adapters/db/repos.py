@@ -5,12 +5,15 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.db.models import (
+    Answer,
     AuthCode,
+    Certificate,
     Course,
     Enrollment,
     Lead,
@@ -19,6 +22,7 @@ from app.adapters.db.models import (
     LessonProgress,
     Module,
     Notification,
+    Option,
     Question,
     Quiz,
     QuizAttempt,
@@ -36,8 +40,11 @@ CATALOG_STATUSES = ("planned", "open", "closed")
 # Заявка «в работе»: new | contacted | paid. granted и declined — закрытые.
 OPEN_LEAD_STATUSES = ("new", "contacted", "paid")
 
-# Оценка задания бинарная: зачтено или на доработку (BACKEND_NOTES, раздел 5).
+# Оценка задания бинарная: зачтено или на доработку (BACKEND_NOTES, раздел 5),
+# до вердикта работа ждёт в очереди. Других статусов у сдачи не бывает.
+SUBMISSION_PENDING = "pending"
 SUBMISSION_ACCEPTED = "accepted"
+SUBMISSION_REWORK = "rework"
 
 
 def now_utc() -> datetime:
@@ -345,6 +352,407 @@ class LessonRepo:
         """Без проверок видимости: этой строкой пользуется раздача байтов,
         где право на файл доказывает подпись ссылки, а не сессия."""
         return self.db.get(LessonFile, file_id)
+
+
+class QuizRepo:
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def visible_with_course(self, quiz_id: int) -> tuple[Quiz, Course] | None:
+        """Тест вместе с курсом: доступ проверяется по курсу. Своего is_hidden
+        у теста нет — прячет его только невидимый курс."""
+        row = self.db.execute(
+            select(Quiz, Course)
+            .join(Module, Module.id == Quiz.module_id)
+            .join(Course, Course.id == Module.course_id)
+            .where(Quiz.id == quiz_id, Course.status.in_(CATALOG_STATUSES))
+        ).first()
+        return (row[0], row[1]) if row is not None else None
+
+    def visible_questions(self, quiz_id: int) -> list[Question]:
+        """Вопросы, из которых собирается попытка. Скрытые не показываются
+        и не считаются — ни в questions_count, ни в max_score."""
+        return list(
+            self.db.scalars(
+                select(Question)
+                .where(Question.quiz_id == quiz_id, Question.is_hidden.is_(False))
+                .order_by(Question.order_index, Question.id)
+            )
+        )
+
+    def questions_by_ids(self, question_ids: list[int]) -> dict[int, Question]:
+        """Вопросы снимка попытки — включая те, что успели скрыть: балл
+        и разбор идут по составу попытки, а не по нынешнему тесту."""
+        if not question_ids:
+            return {}
+        rows = self.db.scalars(select(Question).where(Question.id.in_(question_ids)))
+        return {question.id: question for question in rows}
+
+    def options(self, question_ids: list[int]) -> dict[int, list[Option]]:
+        """Варианты по вопросам — {question_id: [Option]}. Внутри вопроса они
+        всегда идут своим порядком: перемешивается порядок вопросов, не ответов."""
+        if not question_ids:
+            return {}
+        rows = self.db.scalars(
+            select(Option)
+            .where(Option.question_id.in_(question_ids))
+            .order_by(Option.question_id, Option.order_index, Option.id)
+        )
+        by_question: dict[int, list[Option]] = {}
+        for option in rows:
+            by_question.setdefault(option.question_id, []).append(option)
+        return by_question
+
+
+class AttemptRepo:
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def active_for(self, user_id: int, quiz_id: int) -> QuizAttempt | None:
+        """Незавершённая попытка теста. Она одна: новую не начать, пока эта идёт."""
+        return self.db.scalar(
+            select(QuizAttempt).where(
+                QuizAttempt.user_id == user_id,
+                QuizAttempt.quiz_id == quiz_id,
+                QuizAttempt.finished_at.is_(None),
+            )
+        )
+
+    def finished_for(self, user_id: int, quiz_id: int) -> list[QuizAttempt]:
+        """История попыток, старые сверху — в этом порядке её рисует экран."""
+        return list(
+            self.db.scalars(
+                select(QuizAttempt)
+                .where(
+                    QuizAttempt.user_id == user_id,
+                    QuizAttempt.quiz_id == quiz_id,
+                    QuizAttempt.finished_at.is_not(None),
+                )
+                .order_by(QuizAttempt.started_at, QuizAttempt.id)
+            )
+        )
+
+    def own_with_quiz(
+        self, attempt_id: int, user_id: int
+    ) -> tuple[QuizAttempt, Quiz, Course] | None:
+        """Своя попытка вместе с тестом и курсом. Чужая не находится вовсе:
+        попытки личные, и их id не публикуются — отсюда 404, а не 403."""
+        row = self.db.execute(
+            select(QuizAttempt, Quiz, Course)
+            .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
+            .join(Module, Module.id == Quiz.module_id)
+            .join(Course, Course.id == Module.course_id)
+            .where(
+                QuizAttempt.id == attempt_id,
+                QuizAttempt.user_id == user_id,
+                Course.status.in_(CATALOG_STATUSES),
+            )
+        ).first()
+        return (row[0], row[1], row[2]) if row is not None else None
+
+    def create(
+        self, user_id: int, quiz_id: int, question_order: list[int], *, is_counted: bool
+    ) -> QuizAttempt | None:
+        """Новая попытка. None — один из частичных уникальных индексов не
+        пустил вторую: зачётную у непересдаваемого или активную у любого.
+        Это и есть защита от двойного клика, и сценарий в этом случае
+        отвечает уже существующей попыткой.
+
+        Точка отсчёта ставится здесь, часами приложения: таймер потом считается
+        теми же часами, а не серверными — смешивать их значит подарить или
+        отнять у человека несколько секунд.
+        """
+        attempt = QuizAttempt(
+            user_id=user_id,
+            quiz_id=quiz_id,
+            started_at=now_utc(),
+            question_order=question_order,
+            is_counted=is_counted,
+        )
+        try:
+            # SAVEPOINT: откатывать всю транзакцию запроса из-за проигранной
+            # гонки незачем — дальше сценарий читает попытку победителя
+            with self.db.begin_nested():
+                self.db.add(attempt)
+                self.db.flush()
+        except IntegrityError:
+            return None
+        return attempt
+
+    def counted_for(self, user_id: int, quiz_id: int) -> QuizAttempt | None:
+        return self.db.scalar(
+            select(QuizAttempt).where(
+                QuizAttempt.user_id == user_id,
+                QuizAttempt.quiz_id == quiz_id,
+                QuizAttempt.is_counted.is_(True),
+            )
+        )
+
+    def switch_counted(self, attempt: QuizAttempt) -> None:
+        """Зачётной становится последняя завершённая попытка.
+
+        Порядок обязателен: сперва снять зачёт со старой, потом поставить
+        на эту, и всё в одной транзакции — иначе частичный уникальный индекс
+        не пустит вторую зачётную даже на миг.
+        """
+        self.db.execute(
+            update(QuizAttempt)
+            .where(
+                QuizAttempt.user_id == attempt.user_id,
+                QuizAttempt.quiz_id == attempt.quiz_id,
+                QuizAttempt.id != attempt.id,
+                QuizAttempt.is_counted.is_(True),
+            )
+            .values(is_counted=False)
+        )
+        attempt.is_counted = True
+        self.db.flush()
+
+    def answers(self, attempt_id: int) -> list[Answer]:
+        return list(
+            self.db.scalars(
+                select(Answer)
+                .where(Answer.attempt_id == attempt_id)
+                .order_by(Answer.question_id)
+            )
+        )
+
+    def save_answer(self, attempt_id: int, question_id: int, option_ids: list[int]) -> None:
+        """Ответ на вопрос — upsert: человек передумал, а не ответил дважды."""
+        self.db.execute(
+            pg_insert(Answer)
+            .values(attempt_id=attempt_id, question_id=question_id, option_ids=option_ids)
+            .on_conflict_do_update(
+                index_elements=[Answer.attempt_id, Answer.question_id],
+                set_={"option_ids": option_ids},
+            )
+        )
+
+    def max_scores(self, attempts: list[QuizAttempt]) -> dict[int, int]:
+        """Максимум по каждой попытке — сумма баллов её снимка вопросов.
+        Одним запросом на всю историю: у теста их бывает много."""
+        question_ids = {qid for attempt in attempts for qid in attempt.question_order}
+        if not question_ids:
+            return {attempt.id: 0 for attempt in attempts}
+        points = dict(
+            self.db.execute(
+                select(Question.id, Question.points).where(Question.id.in_(question_ids))
+            ).all()
+        )
+        return {
+            attempt.id: sum(points.get(qid, 0) for qid in attempt.question_order)
+            for attempt in attempts
+        }
+
+
+class TaskRepo:
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def visible_with_course(self, task_id: int) -> tuple[Task, Course] | None:
+        """Задание вместе с курсом: доступ проверяется по курсу. Своего
+        is_hidden у задания нет — прячет его только невидимый курс."""
+        row = self.db.execute(
+            select(Task, Course)
+            .join(Module, Module.id == Task.module_id)
+            .join(Course, Course.id == Module.course_id)
+            .where(Task.id == task_id, Course.status.in_(CATALOG_STATUSES))
+        ).first()
+        return (row[0], row[1]) if row is not None else None
+
+    def by_id(self, task_id: int) -> Task | None:
+        """Без проверок видимости: этой строкой пользуется раздача байтов
+        шаблона, где право на файл доказывает подпись ссылки, а не сессия."""
+        return self.db.get(Task, task_id)
+
+
+class SubmissionRepo:
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def by_id(self, submission_id: int) -> Submission | None:
+        return self.db.get(Submission, submission_id)
+
+    def last_for(self, user_id: int, task_id: int) -> Submission | None:
+        """Последняя сдача пары: её статус — и есть статус задания на экране."""
+        return self.db.scalar(
+            select(Submission)
+            .where(Submission.user_id == user_id, Submission.task_id == task_id)
+            .order_by(Submission.created_at.desc(), Submission.id.desc())
+            .limit(1)
+        )
+
+    def history_for(self, user_id: int, task_id: int) -> list[Submission]:
+        """История сдач, свежие сверху — в этом порядке её рисует экран."""
+        return list(
+            self.db.scalars(
+                select(Submission)
+                .where(Submission.user_id == user_id, Submission.task_id == task_id)
+                .order_by(Submission.created_at.desc(), Submission.id.desc())
+            )
+        )
+
+    def earlier_than(self, submission: Submission) -> list[Submission]:
+        """Прежние сдачи той же пары, свежие сверху: history карточки проверки
+        показывает, что человек присылал до этой работы, — саму работу нет."""
+        return list(
+            self.db.scalars(
+                select(Submission)
+                .where(
+                    Submission.user_id == submission.user_id,
+                    Submission.task_id == submission.task_id,
+                    tuple_(Submission.created_at, Submission.id)
+                    < tuple_(submission.created_at, submission.id),
+                )
+                .order_by(Submission.created_at.desc(), Submission.id.desc())
+            )
+        )
+
+    def create(
+        self, user_id: int, task_id: int, text: str | None, files: list
+    ) -> Submission | None:
+        """Каждая отправка — новая строка: история сдач не переписывается,
+        и вердикт остаётся при той работе, к которой он был написан.
+
+        None — частичный индекс не пустил вторую pending-строку: гонка двух
+        одновременных отправок, сценарий отвечает «работа уже на проверке»."""
+        submission = Submission(user_id=user_id, task_id=task_id, text=text, files=files)
+        try:
+            # SAVEPOINT: проигранная гонка не должна откатывать всю транзакцию
+            with self.db.begin_nested():
+                self.db.add(submission)
+                self.db.flush()
+        except IntegrityError:
+            return None
+        return submission
+
+    def mark_reviewed(
+        self,
+        submission: Submission,
+        *,
+        status: str,
+        comment: str | None,
+        reviewed_by: int,
+        reviewed_at: datetime,
+    ) -> bool:
+        """Вердикт — условным UPDATE: переход только из pending. False — работу
+        уже проверил другой админ, и его решение не затирается: reviewed_by
+        должен указывать на того, кто решение принял на самом деле."""
+        result = self.db.execute(
+            update(Submission)
+            .where(Submission.id == submission.id, Submission.status == SUBMISSION_PENDING)
+            .values(
+                status=status,
+                comment=comment,
+                reviewed_by=reviewed_by,
+                reviewed_at=reviewed_at,
+            )
+        )
+        if result.rowcount == 0:
+            return False
+        self.db.refresh(submission)
+        return True
+
+    def attempt_number(self, submission: Submission) -> int:
+        """Номер сдачи в паре учитель+задание: 1 — первая работа, больше —
+        доработка. Порядок тот же, что в очереди, — по времени создания."""
+        return (
+            self.db.scalar(
+                select(func.count())
+                .select_from(Submission)
+                .where(
+                    Submission.user_id == submission.user_id,
+                    Submission.task_id == submission.task_id,
+                    tuple_(Submission.created_at, Submission.id)
+                    <= tuple_(submission.created_at, submission.id),
+                )
+            )
+            or 0
+        )
+
+    def by_id_with_context(
+        self, submission_id: int
+    ) -> tuple[Submission, User, Task, Course] | None:
+        """Работа со всем, что рисует карточка проверки. Видимость курса здесь
+        не проверяется: админ открывает работу и по скрытому курсу."""
+        row = self.db.execute(
+            select(Submission, User, Task, Course)
+            .join(User, User.id == Submission.user_id)
+            .join(Task, Task.id == Submission.task_id)
+            .join(Module, Module.id == Task.module_id)
+            .join(Course, Course.id == Module.course_id)
+            .where(Submission.id == submission_id)
+        ).first()
+        return (row[0], row[1], row[2], row[3]) if row is not None else None
+
+    def admin_page(
+        self,
+        *,
+        status: str | None,
+        course_id: int | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[tuple[Submission, User, Task, Course, int]], int]:
+        """Очередь проверки: старые сверху — наверху тот, кто ждёт дольше всех."""
+        conds = []
+        if status is not None:
+            conds.append(Submission.status == status)
+        if course_id is not None:
+            conds.append(Module.course_id == course_id)
+
+        total = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(Submission)
+                .join(Task, Task.id == Submission.task_id)
+                .join(Module, Module.id == Task.module_id)
+                .where(*conds)
+            )
+            or 0
+        )
+        # Номер сдачи считает база одним окном на всю страницу: считать его
+        # запросом на каждую строку — это N+1 на самом ходовом экране админки
+        numbered = select(
+            Submission.id.label("submission_id"),
+            func.row_number()
+            .over(
+                partition_by=(Submission.user_id, Submission.task_id),
+                order_by=(Submission.created_at, Submission.id),
+            )
+            .label("attempt_number"),
+        ).subquery()
+        rows = self.db.execute(
+            select(Submission, User, Task, Course, numbered.c.attempt_number)
+            .join(User, User.id == Submission.user_id)
+            .join(Task, Task.id == Submission.task_id)
+            .join(Module, Module.id == Task.module_id)
+            .join(Course, Course.id == Module.course_id)
+            .join(numbered, numbered.c.submission_id == Submission.id)
+            .where(*conds)
+            .order_by(Submission.created_at, Submission.id)
+            .offset(offset)
+            .limit(limit)
+        )
+        return [
+            (submission, teacher, task, course, number)
+            for submission, teacher, task, course, number in rows
+        ], total
+
+
+class CertificateRepo:
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def active_for(self, user_id: int, course_id: int) -> Certificate | None:
+        """Действующий сертификат по курсу: он закрывает новые попытки тестов.
+        Отозванный не считается — результат снова можно менять."""
+        return self.db.scalar(
+            select(Certificate).where(
+                Certificate.user_id == user_id,
+                Certificate.course_id == course_id,
+                Certificate.revoked_at.is_(None),
+            )
+        )
 
 
 class ProgressRepo:
