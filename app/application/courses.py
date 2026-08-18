@@ -1,0 +1,239 @@
+"""Каталог, страница курса, отзывы и «мои курсы». Формы словарей здесь —
+ровно формы ответов из CONTRACT.md: роутеры их только заворачивают в схемы.
+"""
+
+from app.adapters.db.models import Course, Review, User
+from app.adapters.db.repos import (
+    CourseRepo,
+    EnrollmentRepo,
+    LeadRepo,
+    ProgressRepo,
+    ReviewRepo,
+    now_utc,
+)
+from app.application.program import build_program, course_progress, with_statuses
+from app.domain.errors import ForbiddenError, NotFoundError
+from app.domain.kz_time import waiting_days
+from app.domain.program import progress_of
+
+
+def _lang_order(versions: list[Course]) -> list[Course]:
+    # ru перед kz — в порядке бейджа RU·KZ на карточке
+    return sorted(versions, key=lambda c: 0 if c.lang == "ru" else 1)
+
+
+def _review_out(review: Review, author: User) -> dict:
+    name = " ".join(
+        part for part in (author.last_name, author.first_name, author.middle_name) if part
+    )
+    return {
+        "id": review.id,
+        "author_name": name,
+        "school": author.school,
+        "city": author.city,
+        "rating": review.rating,
+        "text": review.text,
+        "created_at": review.created_at,
+        # Ответ админа на отзыв в модели данных хранить пока негде — поле
+        # в контракте заранее, чтобы форма не поменялась, когда место найдут.
+        "reply": None,
+    }
+
+
+class CoursesService:
+    def __init__(
+        self,
+        courses: CourseRepo,
+        reviews: ReviewRepo,
+        leads: LeadRepo,
+        enrollments: EnrollmentRepo,
+        progress: ProgressRepo,
+    ):
+        self.courses = courses
+        self.reviews = reviews
+        self.leads = leads
+        self.enrollments = enrollments
+        self.progress = progress
+
+    # -- каталог --------------------------------------------------------
+
+    def catalog(self) -> list[dict]:
+        versions = self.courses.catalog()
+        if not versions:
+            return []
+        ids = [c.id for c in versions]
+        lessons = self.courses.lessons_count(ids)
+        students = self.courses.students_count(ids)
+        ratings = self.courses.group_ratings(list({c.group_id for c in versions}))
+
+        groups: dict[int, list[Course]] = {}
+        for course in versions:
+            groups.setdefault(course.group_id, []).append(course)
+
+        items = []
+        # Свежие курсы сверху: группы по самой новой версии
+        ordered = sorted(
+            groups.items(), key=lambda kv: max(c.created_at for c in kv[1]), reverse=True
+        )
+        for group_id, group in ordered:
+            group = _lang_order(group)
+            rating, reviews_count = ratings.get(group_id, (None, 0))
+            items.append(
+                {
+                    "group_id": group_id,
+                    "langs": [c.lang for c in group],
+                    "rating": rating,
+                    "reviews_count": reviews_count,
+                    "versions": [self._card(c, lessons, students) for c in group],
+                }
+            )
+        return items
+
+    def _card(
+        self, course: Course, lessons_count: dict[int, int], students_count: dict[int, int]
+    ) -> dict:
+        return {
+            "id": course.id,
+            "lang": course.lang,
+            "title": course.title,
+            "category_id": course.category_id,
+            "cover": course.cover,
+            "hours": course.hours,
+            "duration_text": course.duration_text,
+            "price": course.price,
+            "status": course.status,
+            "starts_at": course.starts_at,
+            "created_at": course.created_at,
+            "lessons_count": lessons_count.get(course.id, 0),
+            "students_count": students_count.get(course.id, 0),
+        }
+
+    # -- страница курса -------------------------------------------------
+
+    def _visible(self, course_id: int) -> Course:
+        course = self.courses.visible_by_id(course_id)
+        if course is None:
+            raise NotFoundError("Курс не найден")
+        return course
+
+    def course_page(self, course_id: int, user: User | None) -> dict:
+        course = self._visible(course_id)
+        lessons = self.courses.lessons_count([course.id])
+        students = self.courses.students_count([course.id])
+        rating, reviews_count = self.courses.group_ratings([course.group_id]).get(
+            course.group_id, (None, 0)
+        )
+        chips = [
+            {"id": c.id, "lang": c.lang, "title": c.title, "status": c.status}
+            for c in _lang_order(self.courses.group_versions(course.group_id))
+        ]
+        # Программа собирается один раз: она же нужна счётчикам прогресса
+        program = build_program(self.courses, course.id)
+        data = self._card(course, lessons, students)
+        data.update(
+            {
+                "short": course.short,
+                "full": course.full,
+                "versions": chips,
+                "rating": rating,
+                "reviews_count": reviews_count,
+                # Порядок прохождения виден ещё до выдачи доступа; сами статусы
+                # элементов считает GET /courses/{id}/program
+                "strict_order": course.strict_order,
+                "program": program,
+                "access": self._access(course, user, program),
+            }
+        )
+        return data
+
+    def program_page(self, user: User, course_id: int) -> dict:
+        """Сайдбар экрана урока. Порядок проверок общий: вход (роутер),
+        существование курса, потом доступ."""
+        course = self._visible(course_id)
+        if self.enrollments.active_for(user.id, course.id) is None:
+            raise ForbiddenError("Доступ к курсу не открыт")
+        program = build_program(self.courses, course.id)
+        return {"program": with_statuses(self.progress, course, user.id, program)}
+
+    def _access(self, course: Course, user: User | None, program: list[dict]) -> dict:
+        if user is None:
+            return {"state": "none"}
+        if self.enrollments.active_for(user.id, course.id) is not None:
+            return {
+                "state": "granted",
+                **progress_of(with_statuses(self.progress, course, user.id, program)),
+            }
+        lead = self.leads.open_for(user.id, course.id)
+        if lead is not None:
+            return {
+                "state": "requested",
+                "waiting_days": waiting_days(lead.created_at, now_utc()),
+            }
+        return {"state": "none"}
+
+    # -- отзывы ---------------------------------------------------------
+
+    def reviews_page(self, course_id: int, offset: int, limit: int) -> dict:
+        self._visible(course_id)
+        breakdown = self.reviews.breakdown(course_id)
+        authors_total = sum(breakdown.values())
+        rating = (
+            round(sum(star * n for star, n in breakdown.items()) / authors_total, 1)
+            if authors_total
+            else None
+        )
+        return {
+            "items": [
+                _review_out(review, author)
+                for review, author in self.reviews.page(course_id, offset, limit)
+            ],
+            "total": self.reviews.count(course_id),
+            "rating": rating,
+            "breakdown": {str(star): breakdown.get(star, 0) for star in (5, 4, 3, 2, 1)},
+        }
+
+    def add_review(self, user: User, course_id: int, rating: int, text: str) -> dict:
+        self._visible(course_id)
+        if self.enrollments.active_for(user.id, course_id) is None:
+            raise ForbiddenError("Отзыв может оставить только учитель с доступом к курсу")
+        # Премодерации нет: отзыв виден сразу, админ отвечает или удаляет постфактум
+        review = self.reviews.create(course_id, user.id, rating, text)
+        return _review_out(review, user)
+
+    # -- мои курсы ------------------------------------------------------
+
+    def my_courses(self, user: User) -> dict:
+        items = []
+        for enrollment, course in self.enrollments.active_for_user(user.id):
+            items.append(
+                {
+                    "id": course.id,
+                    "lang": course.lang,
+                    "title": course.title,
+                    "category_id": course.category_id,
+                    "cover": course.cover,
+                    "hours": course.hours,
+                    "price": course.price,
+                    "status": course.status,
+                    **course_progress(self.courses, self.progress, course, user.id),
+                    "completed_at": enrollment.completed_at,
+                }
+            )
+        leads = []
+        for lead, course in self.leads.open_for_user(user.id):
+            leads.append(
+                {
+                    "id": lead.id,
+                    "status": lead.status,
+                    "created_at": lead.created_at,
+                    "waiting_days": waiting_days(lead.created_at, now_utc()),
+                    "course": {
+                        "id": course.id,
+                        "title": course.title,
+                        "cover": course.cover,
+                        # Снимок на момент заявки: человеку показывали эту цену
+                        "price": lead.price_snapshot,
+                    },
+                }
+            )
+        return {"items": items, "leads": leads}

@@ -96,6 +96,8 @@ class Course(Base):
     price: Mapped[int | None] = mapped_column(Integer)  # тенге; эквайринга нет, цена — число
     status: Mapped[str] = mapped_column(Text, default="draft", server_default="draft")
     starts_at: Mapped[datetime | None] = mapped_column(Date)
+    # Строгий порядок прохождения: элемент открывается после предыдущего.
+    strict_order: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (

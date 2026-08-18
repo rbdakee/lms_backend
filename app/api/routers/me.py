@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, status
 
 from app.adapters.db.models import Session, User
 from app.api import deps
-from app.api.schemas import SessionListOut, UserOut, UserPatch
+from app.api.schemas import MyCoursesOut, SessionListOut, UserOut, UserPatch
+from app.application.courses import CoursesService
 from app.application.users import UsersService
 
 router = APIRouter(prefix="/me")
@@ -24,6 +25,15 @@ def patch_me(
 ) -> UserOut:
     updated = svc.update_profile(user, body.model_dump(exclude_unset=True))
     return UserOut.from_user(updated)
+
+
+@router.get("/courses")
+def my_courses(
+    user: Annotated[User, Depends(deps.get_current_user)],
+    svc: Annotated[CoursesService, Depends(deps.get_courses_service)],
+) -> MyCoursesOut:
+    # Курсы с прогрессом и открытые заявки — один ответ на весь экран /my
+    return MyCoursesOut(**svc.my_courses(user))
 
 
 @router.get("/sessions")

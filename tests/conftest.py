@@ -5,19 +5,35 @@ os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://lms:lms@localhost:5445/lms_test"
 )
 
+import itertools
+
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.orm import Session as OrmSession
 
 from app.adapters.db.base import get_engine
-from app.adapters.db.models import Base
-from app.api.deps import get_sms
+from app.adapters.db.models import (
+    Base,
+    Course,
+    Enrollment,
+    Lesson,
+    LessonProgress,
+    Module,
+    Quiz,
+    Task,
+)
+from app.api.deps import get_playback_limiter, get_sms, get_storage, get_telegram
+from app.application.ratelimit import SlidingWindowLimiter
+from app.config import get_settings
 from app.main import app
 
 PHONE = "+7 (707) 123-45-67"
 NORM = "+77071234567"
+ADMIN_PHONE = "+7 (700) 000-00-99"
+ADMIN_NORM = "+77000000099"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -47,6 +63,75 @@ def sms():
     app.dependency_overrides[get_sms] = lambda: fake
     yield fake
     app.dependency_overrides.pop(get_sms, None)
+
+
+class FakeTelegram:
+    def __init__(self):
+        self.sent: list[str] = []
+
+    def notify_admins(self, text: str) -> None:
+        self.sent.append(text)
+
+
+@pytest.fixture
+def telegram():
+    fake = FakeTelegram()
+    app.dependency_overrides[get_telegram] = lambda: fake
+    yield fake
+    app.dependency_overrides.pop(get_telegram, None)
+
+
+class FakeStorage:
+    """Хранилище в памяти: тесту не нужен ни диск, ни уборка за собой."""
+
+    def __init__(self):
+        self.objects: dict[str, bytes] = {}
+
+    def save(self, key, chunks) -> int:
+        # Исключение из итератора (превышен лимит) объект не создаёт —
+        # как и локальный адаптер, который удаляет недописанный файл
+        data = b"".join(chunks)
+        self.objects[key] = data
+        return len(data)
+
+    def size(self, key):
+        data = self.objects.get(key)
+        return len(data) if data is not None else None
+
+    def read(self, key):
+        return iter([self.objects[key]])
+
+
+@pytest.fixture
+def storage():
+    fake = FakeStorage()
+    app.dependency_overrides[get_storage] = lambda: fake
+    yield fake
+    app.dependency_overrides.pop(get_storage, None)
+
+
+class FakeClock:
+    """Часы лимитера: минуту в тесте не переждёшь."""
+
+    def __init__(self):
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+    def shift(self, seconds: float) -> None:
+        self.value += seconds
+
+
+@pytest.fixture(autouse=True)
+def limiter_clock():
+    """Лимитер playback живёт в памяти процесса, то есть переживает тест.
+    Свой на каждый тест — иначе счётчик течёт из одного теста в другой."""
+    clock = FakeClock()
+    limiter = SlidingWindowLimiter(get_settings().playback_per_min, 60, clock)
+    app.dependency_overrides[get_playback_limiter] = lambda: limiter
+    yield clock
+    app.dependency_overrides.pop(get_playback_limiter, None)
 
 
 @pytest.fixture
@@ -88,3 +173,81 @@ def login(client, sms, phone=PHONE):
     # Следующему входу в этом же тесте не должен мешать лимит повторной отправки
     age_codes(2)
     return resp
+
+
+def make_admin(phone=NORM):
+    """Флаг админа сырым SQL — по образцу age_codes: PATCH /me его нарочно не меняет."""
+    with get_engine().begin() as conn:
+        conn.execute(
+            text('UPDATE "user" SET is_admin = true WHERE phone = :phone'), {"phone": phone}
+        )
+
+
+def login_admin(client, sms, phone=ADMIN_PHONE):
+    resp = login(client, sms, phone)
+    make_admin(resp.json()["phone"])
+    return resp
+
+
+def seed(obj):
+    """Кладёт ORM-объект в базу напрямую: админских редакторов курсов ещё нет,
+    тестовые данные готовятся мимо HTTP."""
+    with OrmSession(get_engine()) as db:
+        db.add(obj)
+        db.commit()
+        db.refresh(obj)
+        db.expunge(obj)
+    return obj
+
+
+# group_id сквозной на прогон: таблицы чистятся между тестами, а уникальность
+# (group_id, lang) важна только внутри одного теста
+_group_seq = itertools.count(1)
+
+
+def make_course(**kw):
+    kw.setdefault("group_id", next(_group_seq))
+    fields = {"lang": "ru", "title": "Курс", "category_id": 1, "hours": 72,
+              "price": 45000, "status": "open"}
+    fields.update(kw)
+    return seed(Course(**fields))
+
+
+def make_module(course_id, **kw):
+    fields = {"course_id": course_id, "title": "Модуль"}
+    fields.update(kw)
+    return seed(Module(**fields))
+
+
+def make_lesson(module_id, **kw):
+    fields = {"module_id": module_id, "title": "Урок", "kind": "video",
+              "video_url": "https://youtube.com/watch?v=demo", "time_required_min": 15}
+    fields.update(kw)
+    return seed(Lesson(**fields))
+
+
+def make_quiz(module_id, **kw):
+    fields = {"module_id": module_id, "title": "Тест", "pass_score": 70}
+    fields.update(kw)
+    return seed(Quiz(**fields))
+
+
+def make_task(module_id, **kw):
+    fields = {"module_id": module_id, "title": "Задание",
+              "statement": {"text": "Опишите свой урок"}}
+    fields.update(kw)
+    return seed(Task(**fields))
+
+
+def make_enrollment(user_id, course_id, **kw):
+    fields = {"user_id": user_id, "course_id": course_id, "granted_by": user_id}
+    fields.update(kw)
+    return seed(Enrollment(**fields))
+
+
+def make_progress(user_id, lesson_id):
+    return seed(LessonProgress(user_id=user_id, lesson_id=lesson_id))
+
+
+def user_id(client) -> int:
+    return client.get("/me").json()["id"]

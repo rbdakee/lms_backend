@@ -18,6 +18,21 @@ class Settings(BaseSettings):
     session_ttl_days: int = 180
 
     sms_provider: str = "log"
+    telegram_provider: str = "log"
+    storage_provider: str = "local"
+
+    # Приватное хранилище файлов. Локально — каталог внутри backend, он же
+    # версия для разработки: публичного бакета нет нигде (BACKEND_NOTES, 9).
+    storage_dir: str = "var/storage"
+    # Секрет подписи ссылок. В бою тот же самый лежит в secure_link_md5 nginx.
+    storage_secret: str = "dev-secret"
+    # Откуда фронт скачивает файл: в бою адрес API, локально сам бэкенд
+    public_base_url: str = "http://localhost:8000"
+    # Ссылка живёт 15 минут и перевыдаётся молча — длина TTL не болезненна
+    file_url_ttl_min: int = 15
+    upload_max_mb: int = 20
+    # Без лимита playback превращается в удобную качалку курса
+    playback_per_min: int = 10
 
     # Правила входа. Числа сняты с экрана /login и раздела 8 BACKEND_NOTES:
     # код 4 цифры живёт 5 минут, 3 попытки ввода, блок на 10 минут,

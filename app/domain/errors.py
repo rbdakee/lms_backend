@@ -58,6 +58,46 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+# Состояния кнопки «Записаться»: доступ уже есть / набор закрыт.
+
+
+class AlreadyEnrolledError(AppError):
+    status = 409
+    code = "already_enrolled"
+
+    def __init__(self, message: str = "Доступ к курсу уже открыт"):
+        super().__init__(message)
+
+
+class EnrollmentClosedError(AppError):
+    status = 409
+    code = "enrollment_closed"
+
+    def __init__(self):
+        super().__init__("Набор на курс закрыт — заявку отправить нельзя")
+
+
+class NoFileError(ValidationAppError):
+    """Поля file нет или файл пустой: для человека это один и тот же случай —
+    он не выбрал файл, — поэтому и ответ один."""
+
+    def __init__(self):
+        super().__init__(
+            "Файл не выбран",
+            details={"fields": [{"field": "file", "message": "Field required"}]},
+        )
+
+
+class FileTooLargeError(AppError):
+    status = 413
+    code = "file_too_large"
+
+    def __init__(self, max_size_mb: int):
+        super().__init__(
+            f"Файл больше {max_size_mb} МБ", details={"max_size_mb": max_size_mb}
+        )
+
+
 class RateLimitedError(AppError):
     """Слишком часто. В details всегда retry_after_sec — фронт рисует таймер."""
 
