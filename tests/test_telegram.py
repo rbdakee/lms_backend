@@ -2,6 +2,7 @@ import json
 import logging
 import time
 import urllib.error
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import text
@@ -9,13 +10,16 @@ from sqlalchemy.orm import Session as OrmSession
 
 from app.adapters.db.base import get_engine
 from app.adapters.db.repos import SessionRepo, SettingRepo
-from app.adapters.telegram.bot import TelegramBot, TelegramError
+from app.adapters.telegram import bot as bot_module
+from app.adapters.telegram.bot import ATTEMPTS, PAUSE_SEC, TelegramBot, TelegramError
 from app.adapters.telegram.log_telegram import LogTelegram
 from app.api.deps import get_telegram
+from app.api.routers.telegram import MAX_BODY_BYTES
 from app.application.settings import TELEGRAM_KEY
 from app.application.telegram_bind import (
     CODE_ALPHABET,
     CONNECTED,
+    MAX_ATTEMPTS,
     TEST_MESSAGE,
     WRONG_CODE,
 )
@@ -658,3 +662,182 @@ def test_the_provider_is_chosen_by_configuration(monkeypatch):
 
         monkeypatch.setattr(get_settings(), "telegram_provider", "log")
         assert isinstance(get_telegram(db), LogTelegram)
+
+
+# -- сессия 8: одноразовость кода, потолок попыток, повторы, размер тела ----
+
+
+def test_two_starts_with_one_code_bind_a_single_chat(client, sms, telegram, bot, monkeypatch):
+    """Код одноразовый и под одновременными запросами тоже.
+
+    Раньше гашение шло чтением и записью: оба `/start` успевали прочитать
+    живой код, и побеждал последний — второй чат перезаписывал `chat_id`
+    первого, а первый об этом не узнавал. Теперь сравнивает база, и второму
+    достаётся ноль изменённых строк.
+    """
+    login_admin(client, sms)
+    code = client.post(BIND_CODE).json()["code"]
+    # Обе стороны выходят из чтения строки настроек одновременно — без этого
+    # запросы почти всегда успевают разойтись по времени
+    meet_at(monkeypatch, SettingRepo, "get")
+
+    first, second = in_parallel(
+        lambda: webhook(client, start(code, id=-100111, title="Первый чат")),
+        lambda: webhook(client, start(code, id=-100222, title="Второй чат")),
+    )
+    monkeypatch.undo()
+
+    # Вебхук отвечает 200 обоим: свой код ответа означал бы переотправку
+    assert [first.status_code, second.status_code] == [200, 200]
+    # А чат привязан ровно один, и отказ ушёл ровно один
+    connected = [text for _, text in telegram.to_chat if text == CONNECTED]
+    refused = [text for _, text in telegram.to_chat if text == WRONG_CODE]
+    assert len(connected) == 1, telegram.to_chat
+    assert len(refused) == 1, telegram.to_chat
+    assert stored_telegram()["chat_id"] in ("-100111", "-100222")
+
+
+def test_after_ten_misses_the_bot_goes_quiet_but_the_code_lives(client, sms, telegram, bot):
+    """Промахи гасят ОТВЕТ бота, а не код.
+
+    Сначала было сделано наоборот — десять промахов гасили код, — и это
+    оказалось хуже дыры, которую закрывало: бот публичный, и любой прохожий
+    десятью сообщениями оставлял админа без привязки, повторяемо, на каждый
+    новый код. Подбор угрозой не был и без потолка: миллиард вариантов
+    на 10 минут. Потолок остаётся про исходящие сообщения — они стоят денег
+    и лимитов Telegram.
+    """
+    login_admin(client, sms)
+    code = client.post(BIND_CODE).json()["code"]
+    wrong = "ZZZZZZ" if code != "ZZZZZZ" else "YYYYYYY"
+
+    # Десять промахов из ЧУЖОГО чата — ровно то, чем ломали привязку
+    for number in range(MAX_ATTEMPTS):
+        assert webhook(client, start(wrong, id=-900_000 - number)).status_code == 200
+    assert [text for _, text in telegram.to_chat] == [WRONG_CODE] * MAX_ATTEMPTS
+
+    # Одиннадцатый промах остаётся без ответа: исходящие кончились
+    telegram.to_chat.clear()
+    assert webhook(client, start(wrong, id=-900_999)).status_code == 200
+    assert telegram.to_chat == []
+
+    # А код цел, и админ по нему привязывается
+    assert webhook(client, start(code)).status_code == 200
+    assert telegram.to_chat[-1][1] == CONNECTED
+    assert stored_telegram()["chat_id"] == str(CHAT_ID)
+
+
+def test_a_new_code_gives_the_bot_its_voice_back(client, sms, telegram, bot):
+    """Счётчик промахов живёт вместе с кодом: выдали новый — считаем заново.
+    Иначе замолчавший однажды бот молчал бы навсегда."""
+    login_admin(client, sms)
+    wrong = "ZZZZZZ"
+    for _ in range(MAX_ATTEMPTS + 1):
+        webhook(client, start(wrong))
+
+    telegram.to_chat.clear()
+    # Новый код переписывает строку настроек целиком — вместе со счётчиком
+    client.post(UNBIND)
+    client.post(BIND_CODE)
+    assert webhook(client, start(wrong)).status_code == 200
+    assert telegram.to_chat[-1][1] == WRONG_CODE
+
+
+def test_a_bare_start_does_not_spend_an_attempt(client, sms, telegram, bot):
+    """`/start` без кода — любопытный посетитель публичного бота, а не
+    промах: тратить на него потолок попыток незачем."""
+    login_admin(client, sms)
+    code = client.post(BIND_CODE).json()["code"]
+
+    for _ in range(MAX_ATTEMPTS + 5):
+        assert webhook(client, {"message": {"chat": CHAT, "text": "/start"}}).status_code == 200
+
+    # Код цел: продиктованный админу по телефону, он пережил чужое любопытство
+    assert webhook(client, start(code)).status_code == 200
+    assert telegram.to_chat[-1][1] == CONNECTED
+
+
+def test_a_fat_webhook_body_is_not_parsed(client, sms, telegram, bot, caplog):
+    """Тело больше потолка не разбирается вовсе, а ответ тот же 200: свой
+    код ответа заставил бы Telegram переотправлять то же тело по нарастающей."""
+    login_admin(client, sms)
+    code = client.post(BIND_CODE).json()["code"]
+
+    # Настоящая команда, утопленная в мусоре: разберись сервер с телом —
+    # чат бы привязался
+    fat = json.dumps(
+        {**start(code)["message"], "padding": "x" * MAX_BODY_BYTES}
+    ).encode()
+    assert len(fat) > MAX_BODY_BYTES
+
+    with caplog.at_level(logging.WARNING, logger="telegram"):
+        assert webhook(client, None, raw=b'{"message": ' + fat + b"}").status_code == 200
+
+    assert stored_telegram().get("chat_id") is None
+    assert telegram.to_chat == []
+    # В логе остаётся факт и потолок, самого тела там быть не должно
+    assert str(MAX_BODY_BYTES) in caplog.text
+    assert code not in caplog.text
+
+
+def test_admin_notification_is_retried_when_telegram_is_unreachable(monkeypatch, caplog):
+    """Раздел 11 BACKEND_NOTES обещает отправку с повторами. Недоставку
+    повторяем — сеть моргает чаще, чем Telegram отказывает."""
+    calls = []
+    pauses = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(timeout)
+        raise TimeoutError("сокет молчит")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    # Подменяем модуль целиком, а не `time.sleep` в нём: `bot.time` — это сам
+    # stdlib-модуль, и правка его атрибута отменяла бы паузы всему процессу.
+    # Паузы не выжидаем, а записываем: полторы секунды на тест — это дорого
+    monkeypatch.setattr(bot_module, "time", SimpleNamespace(sleep=pauses.append))
+
+    with caplog.at_level(logging.WARNING, logger="telegram"):
+        with pytest.raises(TelegramError):
+            TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins("Новая заявка №1")
+
+    assert len(calls) == ATTEMPTS
+    assert pauses == [PAUSE_SEC] * (ATTEMPTS - 1)
+    assert "Новая заявка" not in caplog.text
+
+
+def test_admin_notification_is_not_retried_when_telegram_refuses(monkeypatch):
+    """Осмысленный отказ повторять бессмысленно: то же сообщение не примут
+    и со второй попытки, а заявка учителя ждёт ответа всё это время."""
+    calls = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(request.full_url)
+        raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(bot_module, "time", SimpleNamespace(sleep=_no_sleep))
+
+    with pytest.raises(TelegramError):
+        TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins("Новая заявка №1")
+    assert len(calls) == 1
+
+
+def test_a_five_hundred_from_telegram_is_retried(monkeypatch):
+    """Пятисотый — это сбой на той стороне: сообщение не отвергнуто,
+    оно не доставлено, и такое повторяют."""
+    calls = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(request.full_url)
+        raise urllib.error.HTTPError(request.full_url, 502, "Bad Gateway", {}, None)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(bot_module, "time", SimpleNamespace(sleep=_no_sleep))
+
+    with pytest.raises(TelegramError):
+        TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins("Новая заявка №1")
+    assert len(calls) == ATTEMPTS
+
+
+def _no_sleep(_seconds):
+    """Повторы проверяются числом попыток, а не тем, сколько тест простоял."""

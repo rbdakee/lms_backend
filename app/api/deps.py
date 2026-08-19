@@ -89,7 +89,10 @@ _preview_attempts = PreviewAttemptStore()
 
 
 def get_sms() -> SmsPort:
-    # Провайдер пока один — заглушка; настоящий добавится строчкой конфигурации
+    # Провайдер пока один — заглушка; настоящий добавится строчкой
+    # конфигурации. Что в SMS_PROVIDER стоит именно `log`, проверено
+    # при старте (`check_providers`): иначе настройка обещала бы отправку,
+    # а код входа уходил бы в лог
     return LogSms()
 
 
@@ -99,12 +102,14 @@ def get_telegram(db: Annotated[DbSession, Depends(get_db)]) -> TelegramPort:
     Настоящему боту нужен чат, куда слать «админам», а он лежит в настройках
     площадки — отсюда зависимость от базы. Заглушке чат не нужен, и строку
     настроек она не читает вовсе.
+
+    Значений ровно два, и проверены они при старте (`check_providers`):
+    опечатка в TELEGRAM_PROVIDER роняла бы каждую заявку, а сервис до того
+    выглядел бы здоровым.
     """
     cfg = get_settings()
     if cfg.telegram_provider == "log":
         return LogTelegram()
-    if cfg.telegram_provider != "bot":
-        raise ValueError(f"Неизвестный провайдер Telegram: {cfg.telegram_provider}")
     # chat_id приходит только от вебхука привязки: вписанный руками чужой чат —
     # это заявки с телефонами учителей, ушедшие незнакомому человеку
     return TelegramBot(cfg.telegram_bot_token, SettingRepo(db).get(TELEGRAM_KEY).get("chat_id"))
@@ -116,16 +121,15 @@ def get_admin_notifier(
 ) -> AdminNotifier:
     """Уведомления админам идут через обёртку с флагами типов сообщений:
     выключенный переключатель на экране обязан что-то значить."""
-    return AdminNotifier(telegram=telegram, settings=SettingRepo(db))
+    return AdminNotifier(telegram=telegram, settings=SettingRepo(db), commit=db.commit)
 
 
 def get_storage() -> StoragePort:
     """Выбор адаптера — конфигурацией, а не `if` в месте вызова. Провайдер
-    пока один: локальный каталог, он же версия для разработки."""
-    cfg = get_settings()
-    if cfg.storage_provider != "local":
-        raise ValueError(f"Неизвестное хранилище: {cfg.storage_provider}")
-    return LocalStorage(Path(cfg.storage_dir))
+    пока один: локальный каталог, он же версия для разработки. Что в
+    STORAGE_PROVIDER стоит именно он, проверено при старте
+    (`check_providers`)."""
+    return LocalStorage(Path(get_settings().storage_dir))
 
 
 def get_playback_limiter() -> SlidingWindowLimiter:
@@ -364,6 +368,10 @@ def get_quizzes_service(
         attempts=repos.attempts,
         enrollments=enrollments,
         certificates=CertificateRepo(db),
+        # Репозитории видимости, а не настоящие: замок на старте попытки
+        # считается по той же программе, что видит учитель на экране
+        courses=repos.courses,
+        progress=ProgressRepo(db),
         preview_course_id=preview_course_id,
         preview_attempts=preview_attempts,
     )
@@ -577,7 +585,9 @@ def get_telegram_bind_service(
 ) -> TelegramBindService:
     # Порт напрямую, без флагов: привязка отвечает боту на его же команду,
     # а тестовое сообщение админ послал сам — обоих переключатель не касается
-    return TelegramBindService(settings=SettingRepo(db), telegram=telegram, cfg=get_settings())
+    return TelegramBindService(
+        settings=SettingRepo(db), telegram=telegram, cfg=get_settings(), commit=db.commit
+    )
 
 
 def get_overview_service(db: Annotated[DbSession, Depends(get_db)]) -> OverviewService:

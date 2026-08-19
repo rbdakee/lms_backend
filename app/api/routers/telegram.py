@@ -21,6 +21,14 @@ log = logging.getLogger("telegram")
 router = APIRouter()
 admin_router = APIRouter(prefix="/admin/settings/telegram")
 
+# Потолок на тело апдейта. Больше 4096 знаков в сообщении Telegram не берёт,
+# файлы приезжают ссылками, а не байтами, — самый жирный апдейт (сообщение
+# с разметкой и вложенным `reply_to_message`) не дотягивает и до десятков
+# килобайт. 64 КБ — запас поверх этого; всё, что толще, до разбора JSON
+# не доходит вовсе, иначе двадцатимегабайтное тело читается целиком в память
+# и разбирается.
+MAX_BODY_BYTES = 64 * 1024
+
 
 @router.post("/telegram/webhook", dependencies=[Depends(deps.verify_telegram_secret)])
 async def telegram_webhook(
@@ -40,7 +48,17 @@ async def telegram_webhook(
     Петля самоподдерживающаяся: Telegram переотправляет апдейт именно тогда,
     когда вебхук отвечал долго.
     """
-    body = await request.body()
+    # Тело читается кусками и обрывается на потолке: `request.body()` втянул
+    # бы в память и двадцать мегабайт. Слишком толстое просто не разбираем,
+    # но отвечаем тем же 200 — свой код ответа означал бы переотправку того же
+    # тела по нарастающей. В лог уходит факт и потолок, самого тела там быть
+    # не должно: это переписка людей
+    body = b""
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > MAX_BODY_BYTES:
+            log.warning("Тело вебхука больше %s байт — не разбираем", MAX_BODY_BYTES)
+            return {}
     await run_in_threadpool(_handle, svc, body)
     return {}
 

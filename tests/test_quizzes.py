@@ -869,3 +869,62 @@ def test_start_409_when_all_points_zero(client, sms):
     resp = client.post(f"/quizzes/{quiz.id}/quiz_attempts")
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "quiz_empty"
+
+
+# -- сессия 8: строгий порядок закрывает старт попытки ----------------------
+
+
+def strict_course_with_quiz(uid):
+    """Курс со строгим порядком: урок, за ним тест. Доступ у учителя есть,
+    урок не пройден — значит тест закрыт."""
+    course = make_course(strict_order=True)
+    module = make_module(course.id)
+    lesson = make_lesson(module.id, order_index=1)
+    quiz = make_quiz(module.id, order_index=2, time_limit_min=15)
+    question = make_question(quiz.id, text="Что фиксирует дескриптор?", points=1)
+    make_option(question.id, text="Наблюдаемое действие", is_correct=True)
+    make_option(question.id, text="Настроение ученика")
+    make_enrollment(uid, course.id)
+    return course, lesson, quiz
+
+
+def test_a_locked_quiz_does_not_start(client, sms):
+    """Замок программы у теста — отказ, а не только вид на экране.
+
+    Попытка единственная и не возвращается: сгоревшая не в свой черёд стоит
+    человеку курса. Уроки и задания замком по-прежнему не закрываются —
+    заглянувший вперёд ничего не теряет.
+    """
+    login(client, sms)
+    course, lesson, quiz = strict_course_with_quiz(user_id(client))
+
+    # Экран честно рисует замок
+    program = client.get(f"/courses/{course.id}/program").json()["program"]
+    statuses = {item["kind"]: item["status"] for item in program[0]["items"]}
+    assert statuses == {"video": "available", "quiz": "locked"}
+
+    resp = client.post(f"/quizzes/{quiz.id}/quiz_attempts")
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["error"]["code"] == "forbidden"
+    # Попытка не завелась: потратить единственную мимо экрана нельзя
+    page = client.get(f"/quizzes/{quiz.id}").json()
+    assert page["attempts"] == []
+    # И экран теста говорит то же, что сервер: живая кнопка «Начать тест»
+    # при отказе на нажатие — это хуже, чем закрытый тест
+    assert page["state"] == {"status": "not_started", "can_start": False}
+
+    # Урок пройден — тест открылся и на экране, и на сервере
+    assert client.post(f"/lessons/{lesson.id}/complete").status_code == 200
+    state = client.get(f"/quizzes/{quiz.id}").json()["state"]
+    assert state == {"status": "not_started", "can_start": True}
+    assert client.post(f"/quizzes/{quiz.id}/quiz_attempts").status_code == 200
+
+
+def test_a_lesson_out_of_turn_is_still_only_a_screen_rule(client, sms):
+    """Урок и задание остались правилом показа — так решил владелец:
+    отказ заводится только там, где ошибка необратима."""
+    login(client, sms)
+    course, lesson, quiz = strict_course_with_quiz(user_id(client))
+    second = make_lesson(make_module(course.id, title="Второй модуль").id, order_index=1)
+
+    assert client.get(f"/lessons/{second.id}").status_code == 200

@@ -73,6 +73,40 @@ class Settings(BaseSettings):
     thread_messages_per_min: int = 3
 
 
+# Значения провайдеров, под которые в коде есть адаптер. Опечатка в них
+# не должна доживать до первого запроса: сервис с неизвестным
+# TELEGRAM_PROVIDER поднимается здоровым и падает на каждой заявке учителя,
+# а неизвестный SMS_PROVIDER без этой проверки не значит вообще ничего —
+# код входа продолжает уходить в лог заглушкой.
+PROVIDERS = {
+    "sms_provider": ("log",),
+    "telegram_provider": ("log", "bot"),
+    "storage_provider": ("local",),
+}
+
+
+def check_providers(cfg: Settings) -> None:
+    """Проверка провайдеров при старте: неизвестное значение роняет сервис
+    здесь, а не в середине сценария. Зовётся из `create_app`."""
+    for field, allowed in PROVIDERS.items():
+        value = getattr(cfg, field)
+        if value not in allowed:
+            raise RuntimeError(
+                f"{field.upper()}={value!r} — такого провайдера нет."
+                f" Допустимые значения: {', '.join(allowed)}"
+            )
+    # Имени провайдера мало: `bot` без токена проверку проходил, а дальше
+    # каждое уведомление админу уходило в 4xx — и терялось молча, потому
+    # что осмысленный отказ Telegram не повторяют. Это ровно тот случай,
+    # ради которого проверка и заведена: сервис выглядит здоровым,
+    # а ломается на заявке учителя.
+    if cfg.telegram_provider == "bot" and not cfg.telegram_bot_token:
+        raise RuntimeError(
+            "TELEGRAM_PROVIDER=bot, но TELEGRAM_BOT_TOKEN пуст —"
+            " уведомления админу уходили бы в никуда"
+        )
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()

@@ -1,3 +1,5 @@
+import logging
+
 from app.domain.errors import CourseInUseError, HasProgressError, HasSubmissionsError
 
 
@@ -5,6 +7,44 @@ def test_health(client):
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_health_is_not_ok_when_the_database_is_down(client, monkeypatch, caplog):
+    """Ручку читает балансировщик, а не человек: без похода в базу она
+    отвечала `200` тогда, когда все остальные отдавали `500`, и сломанный
+    инстанс оставался в трафике, а раскатка катилась дальше.
+
+    В логе — только факт: строка подключения с паролем туда попасть не должна.
+    """
+
+    def dead_engine():
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("app.api.routers.health._health_engine", dead_engine)
+
+    with caplog.at_level(logging.WARNING, logger="app"):
+        resp = client.get("/health")
+
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "not_ready"
+    assert "connection refused" not in caplog.text
+
+
+def test_health_does_not_stand_in_the_queue_of_working_requests():
+    """Соединение проверки — своё, мимо общего пула.
+
+    Из общего пула `connect()` ждёт свободного места, и под нагрузкой ручка
+    отвечала бы `503` «база не отвечает» при живой базе. Балансировщику
+    сказано снимать инстанс по `503` — то есть он гасил бы здоровый сервис
+    ровно в час пик, а при нескольких инстансах добивал бы соседей.
+    """
+    from sqlalchemy.pool import NullPool
+
+    from app.adapters.db.base import get_engine
+    from app.api.routers.health import _health_engine
+
+    assert _health_engine() is not get_engine()
+    assert isinstance(_health_engine().pool, NullPool)
 
 
 def test_openapi_opens(client):

@@ -1,14 +1,17 @@
 """Репозитории — адаптер Postgres. Сценарии получают их готовыми объектами
 и не знают про SQLAlchemy."""
 
+import hashlib
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import (
     ColumnElement,
+    Integer,
     Text,
     and_,
+    cast,
     delete,
     func,
     literal,
@@ -67,6 +70,20 @@ SUBMISSION_REWORK = "rework"
 
 def now_utc() -> datetime:
     return datetime.now(UTC)
+
+
+# Пространства ключей советующей блокировки: номер и адрес — разные потолки,
+# и совпасть их ключи между собой не должны.
+LOCK_PHONE = 1
+LOCK_IP = 2
+
+
+def _lock_key(value: str) -> int:
+    """Советующей блокировке нужно число, а считаем мы по строке: берём
+    четыре байта sha256. Совпадение двух разных строк стоит лишнего ожидания,
+    но не ошибки — блокировка только упорядочивает, а решает всё равно счёт.
+    """
+    return int.from_bytes(hashlib.sha256(value.encode()).digest()[:4], "big", signed=True)
 
 
 class UserRepo:
@@ -156,6 +173,62 @@ class AuthCodeRepo:
         self.db.add(code)
         self.db.flush()
         return code
+
+    def _advisory_lock(self, namespace: int, value: str) -> None:
+        self.db.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    cast(namespace, Integer), cast(_lock_key(value), Integer)
+                )
+            )
+        )
+
+    def lock_sending(self, phone: str, ip: str | None) -> None:
+        """Занять до конца транзакции право отправить код этому номеру
+        с этого адреса.
+
+        Потолки SMS — это «прочитали, посчитали, записали», а между чтением
+        и записью помещается такой же запрос: залп из сорока одновременных
+        отправок читает один и тот же счётчик и уходит сорока SMS, за которые
+        платит площадка. Уникальным индексом это не закрыть — живой код
+        отличается от погашенного сравнением `expires_at` с now(), а предикат
+        индекса обязан быть неизменяемым. Поэтому блокировка, и советующая,
+        а не строчная: считаем мы не строку, а номер и адрес, и на девятом
+        коде блокировать нечего — строки десятого ещё нет. Ждать здесь некому:
+        отправок на номер десять в сутки.
+
+        Порядок ключей всегда один — сначала номер, потом адрес: две
+        блокировки, взятые в разном порядке, дают взаимную.
+        """
+        self._advisory_lock(LOCK_PHONE, phone)
+        if ip is not None:
+            self._advisory_lock(LOCK_IP, ip)
+
+    def lock_attempts(self, code: AuthCode) -> int:
+        """Занять строку кода до конца транзакции и вернуть счётчик попыток,
+        какой он сейчас в базе.
+
+        Строка занимается до сверки, а не после: без этого залп сверяет код
+        столько раз, сколько в залпе запросов, и восемь одновременных
+        подборов проходят там, где попыток три.
+        """
+        return self.db.scalar(
+            select(AuthCode.attempts).where(AuthCode.id == code.id).with_for_update()
+        )
+
+    def bump_attempts(self, code: AuthCode) -> int:
+        """Увеличить счётчик попыток и вернуть, сколько стало.
+
+        Считает база, а не питон, по той же причине, что и `bump` у настроек:
+        два `attempts += 1`, посчитанные чтением и записью, дают в базе
+        единицу — и «три попытки» превращаются в «три попытки на залп».
+        """
+        return self.db.scalar(
+            update(AuthCode)
+            .where(AuthCode.id == code.id)
+            .values(attempts=AuthCode.attempts + 1)
+            .returning(AuthCode.attempts)
+        )
 
 
 class SessionRepo:
@@ -2834,6 +2907,43 @@ class SettingRepo:
                 set_={"value": Setting.value.op("||", return_type=JSONB)(stmt.excluded.value)},
             )
         )
+
+    def clear_if(self, key: str, field: str, value: str) -> bool:
+        """Обнулить значение строки, если её поле равно ожидаемому. True —
+        обнулили именно мы.
+
+        Сравнение делает база, а не питон: между «прочитали» и «записали»
+        успевает пройти второй такой же запрос, и одноразовый код привязки
+        срабатывал дважды — второй чат перезаписывал `chat_id` первого.
+        Здесь второму достаётся ноль изменённых строк.
+        """
+        result = self.db.execute(
+            update(Setting)
+            .where(Setting.key == key, Setting.value[field].astext == value)
+            .values(value={})
+        )
+        return result.rowcount == 1
+
+    def bump(self, key: str, field: str) -> int:
+        """Увеличить счётчик в значении строки и вернуть, сколько стало.
+        Строки нет — считать нечего, вернётся 0.
+
+        Считает Postgres, а не питон, по той же причине, что и `merge`:
+        два одновременных промаха, посчитанных чтением и записью, дают
+        в базе один.
+        """
+        counted = func.coalesce(Setting.value[field].as_integer(), 0) + 1
+        result = self.db.execute(
+            update(Setting)
+            .where(Setting.key == key)
+            .values(
+                value=Setting.value.op("||", return_type=JSONB)(
+                    func.jsonb_build_object(literal(field, Text), counted)
+                )
+            )
+            .returning(Setting.value[field].as_integer())
+        )
+        return result.scalar() or 0
 
     def unset(self, key: str, fields: tuple[str, ...]) -> None:
         """Убрать перечисленные ключи из значения строки, не трогая соседние.

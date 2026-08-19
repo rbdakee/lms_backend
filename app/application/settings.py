@@ -39,6 +39,14 @@ SLOTS = (LOGO_SLOT, *CERT_SLOTS.values())
 
 NO_IMAGE = "Картинка не найдена"
 
+# Что принимает слот. Логотип платформы стоит на лендинге, и svg ему нужен;
+# три картинки сертификата уходят в fpdf2, а он берёт только растр — svg
+# в документ не вставится, и админ узнает об этом с уже выданной бумаги,
+# где печати просто нет.
+CERT_MIME = ("image/png", "image/jpeg")
+NOT_A_CERT_IMAGE = "Нужна картинка: PNG или JPEG"
+NOT_AN_IMAGE = "Нужна картинка: PNG, JPEG, GIF, WEBP или SVG"
+
 
 class SettingsService:
     def __init__(self, settings: SettingRepo, storage: StoragePort, cfg: Settings):
@@ -192,18 +200,23 @@ class SettingsService:
             if field in certificate_images:
                 # Имя поля в ошибке — как на экране: certificate_images.stamp
                 changed[slot] = self._checked_image(
-                    f"certificate_images.{field}", certificate_images[field]
+                    f"certificate_images.{field}",
+                    certificate_images[field],
+                    for_certificate=True,
                 )
         return changed or None
 
-    def _checked_image(self, field: str, value: dict | None) -> dict | None:
+    def _checked_image(
+        self, field: str, value: dict | None, *, for_certificate: bool = False
+    ) -> dict | None:
         """Ключ объекта и имя файла; null убирает картинку из слота.
 
         Проверок две и порядок у них важен: сперва объект в хранилище есть
         (иначе админ увидит пустой блок вместо только что загруженного файла),
-        и только потом — что это картинка. Проверяем `image/*`, а не список
-        расширений: логотипом кладут и svg, а вот подсунутый в сертификат docx
-        сломает генерацию PDF в момент выдачи документа, а не сейчас.
+        и только потом — формат. Формат у слотов разный: логотипу платформы
+        годится любая картинка, включая svg, а слоты сертификата принимают
+        только png и jpeg — остальное fpdf2 либо не возьмёт, либо не покажет,
+        и обнаружится это на выданном документе, а не здесь.
 
         Картинка опознаётся по байтам объекта, а не по присланному имени: имя
         сочиняет клиент, и `договор.docx`, названный `печать.png`, проходил бы
@@ -217,8 +230,10 @@ class SettingsService:
             return None
         if self.storage.size(value["key"]) is None:
             raise NotFoundError("Загруженный файл не найден — загрузите его заново")
-        if not (image_mime(self._head(value["key"])) or "").startswith("image/"):
-            raise FieldError(field, "Нужна картинка: PNG или JPEG")
+        mime = image_mime(self._head(value["key"])) or ""
+        fits = mime in CERT_MIME if for_certificate else mime.startswith("image/")
+        if not fits:
+            raise FieldError(field, NOT_A_CERT_IMAGE if for_certificate else NOT_AN_IMAGE)
         return {"key": value["key"], "name": safe_name(value["name"])}
 
     def _head(self, key: str) -> bytes:

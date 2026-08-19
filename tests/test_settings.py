@@ -441,3 +441,74 @@ def test_branding_does_not_let_an_svg_run_on_the_api_domain(client, client2, sms
     assert resp.headers["content-security-policy"] == (
         "default-src 'none'; style-src 'unsafe-inline'"
     )
+
+
+# -- сессия 8: слоты сертификата принимают только png и jpeg ---------------
+
+GIF = b"GIF89a" + b"fake" * 64
+WEBP = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"fake" * 64
+JPEG = b"\xff\xd8\xff" + b"fake" * 64
+
+
+def test_certificate_slots_take_only_png_and_jpeg(client, sms, storage):
+    """Шаблон сертификата рисует fpdf2, а он берёт только растр. Пропущенный
+    сюда svg не вставится, и админ узнает об этом с уже выданной бумаги,
+    где на месте печати пусто, — поэтому отказ приходит при загрузке."""
+    login_admin(client, sms)
+
+    for field in ("logo", "sign", "stamp"):
+        for name, content in (("pechat.svg", SVG), ("pechat.gif", GIF), ("pechat.webp", WEBP)):
+            resp = client.patch(
+                "/admin/settings",
+                json={"certificate_images": {field: {"key": upload(client, name, content),
+                                                     "name": name}}},
+            )
+            assert resp.status_code == 422, (field, name, resp.text)
+            fields = resp.json()["error"]["details"]["fields"]
+            # Имя поля в ошибке — как на экране
+            assert fields[0]["field"] == f"certificate_images.{field}"
+            assert fields[0]["message"] == "Нужна картинка: PNG или JPEG"
+
+    # Ни один отказ ничего не записал: слоты остались пустыми
+    body = client.get("/admin/settings").json()
+    assert body["certificate_images"] == {"logo": None, "sign": None, "stamp": None}
+
+    # А png и jpeg проходят
+    for field, content, name in (
+        ("logo", PNG, "gerb.png"),
+        ("sign", JPEG, "podpis.jpg"),
+        ("stamp", PNG, "pechat.png"),
+    ):
+        resp = client.patch(
+            "/admin/settings",
+            json={"certificate_images": {field: {"key": upload(client, name, content),
+                                                 "name": name}}},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["certificate_images"][field]["name"] == name
+
+
+def test_platform_logo_still_takes_svg(client, sms, storage):
+    """Логотипу платформы svg нужен: он стоит на лендинге и растянут
+    по-разному в шапке и в подвале. Сузили только слоты сертификата."""
+    login_admin(client, sms)
+    resp = client.patch(
+        "/admin/settings",
+        json={"logo": {"key": upload(client, "logo.svg", SVG), "name": "logo.svg"}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["logo"]["name"] == "logo.svg"
+
+
+def test_the_logo_error_names_what_the_slot_takes(client, sms, storage):
+    """Текст отказа у слотов разный: обещать логотипу «PNG или JPEG» —
+    значит врать про слот, который берёт и svg."""
+    login_admin(client, sms)
+    resp = client.patch(
+        "/admin/settings",
+        json={"logo": {"key": upload(client, "dogovor.docx", b"PK\x03\x04not a picture"),
+                       "name": "dogovor.docx"}},
+    )
+    assert resp.status_code == 422, resp.text
+    message = resp.json()["error"]["details"]["fields"][0]["message"]
+    assert "SVG" in message and message != "Нужна картинка: PNG или JPEG"

@@ -12,11 +12,14 @@ from app.adapters.db.models import Course, Option, Question, Quiz, QuizAttempt, 
 from app.adapters.db.repos import (
     AttemptRepo,
     CertificateRepo,
+    CourseRepo,
     EnrollmentRepo,
+    ProgressRepo,
     QuizRepo,
     now_utc,
 )
 from app.application.preview_quiz import PreviewAttempt, SessionAttempts
+from app.application.program import build_program, with_statuses
 from app.domain.errors import (
     AttemptFinishedError,
     AttemptNotFinishedError,
@@ -29,6 +32,7 @@ from app.domain.errors import (
     TimeExpiredError,
     ValidationAppError,
 )
+from app.domain.program import LOCKED, item_key
 from app.domain.quiz import (
     deadline,
     earned_points,
@@ -41,6 +45,9 @@ from app.domain.quiz import (
 )
 
 QUIZ_DENIED = "Тест доступен после выдачи доступа к курсу"
+# Замок программы у теста — отказ, а не только вид на экране: попытка
+# единственная и не возвращается (решение владельца, сессия 8)
+QUIZ_LOCKED = "Тест откроется, когда будут пройдены предыдущие элементы курса"
 
 # Попытка бывает строкой базы и снимком в памяти (режим предпросмотра): счёт,
 # таймер и разбор одинаковы для обеих, поля у них называются одинаково.
@@ -57,6 +64,8 @@ class QuizzesService:
         attempts: AttemptRepo,
         enrollments: EnrollmentRepo,
         certificates: CertificateRepo,
+        courses: CourseRepo,
+        progress: ProgressRepo,
         preview_course_id: int | None,
         preview_attempts: SessionAttempts | None,
     ):
@@ -64,6 +73,11 @@ class QuizzesService:
         self.attempts = attempts
         self.enrollments = enrollments
         self.certificates = certificates
+        # Программа курса и прогресс — только ради замка на старте попытки:
+        # статус элемента считает та же функция, что рисует его на экране,
+        # иначе экран и сервер разошлись бы в понимании «закрыт»
+        self.courses = courses
+        self.progress = progress
         # Курс, который админ смотрит «как учитель», и попытка этой сессии
         # в памяти процесса: в базу в режиме не уходит ничего
         self.preview_course_id = preview_course_id
@@ -111,12 +125,16 @@ class QuizzesService:
             # Активная попытка главнее прочего: экран возвращает человека в неё
             return {"status": "in_progress", "attempt": self._attempt_out(active, quiz)}
         has_certificate = self.certificates.active_for(user.id, course.id) is not None
+        # Замок программы входит в «можно начать» тем же расчётом, каким
+        # его проверяет старт: иначе экран рисует живую кнопку, а нажатие даёт 403 —
+        # человек видит открытый тест и получает отказ
+        blocked = has_certificate or self._is_locked(user, quiz, course)
         if not finished:
-            return {"status": "not_started", "can_start": not has_certificate}
+            return {"status": "not_started", "can_start": not blocked}
         return {
             "status": "finished",
             "result": self._result_out(self._counted(finished), quiz),
-            "can_retake": quiz.retakable and not has_certificate,
+            "can_retake": quiz.retakable and not blocked,
             "review_available": review_available(quiz.retakable, quiz.show_review),
         }
 
@@ -160,6 +178,7 @@ class QuizzesService:
             # Идемпотентность по активной попытке: двойной клик по «Начать тест»
             # возвращает ту же попытку с сохранёнными ответами
             return self._attempt_out(active, quiz)
+        self._check_unlocked(user, quiz, course)
         if self.certificates.active_for(user.id, course.id) is not None:
             raise CertificateIssuedError()
         if not quiz.retakable and self.attempts.finished_for(user.id, quiz.id):
@@ -180,6 +199,35 @@ class QuizzesService:
             if attempt is None or attempt.finished_at is not None:
                 raise AttemptUsedError()
         return self._attempt_out(attempt, quiz)
+
+    def _is_locked(self, user: User, quiz: Quiz, course: Course) -> bool:
+        """Закрыт ли тест замком программы — строгим порядком курса или
+        правилом итогового теста, ждущего все уроки.
+
+        Статус спрашивается у той же функции, что рисует программу на экране:
+        два отдельных расчёта разошлись бы, и человек получал бы отказ
+        на тесте, который экран показывает открытым.
+        """
+        program = with_statuses(
+            self.progress, course, user.id, build_program(self.courses, course.id)
+        )
+        return any(
+            item["status"] == LOCKED and item_key(item) == ("quiz", quiz.id)
+            for module in program
+            for item in module["items"]
+        )
+
+    def _check_unlocked(self, user: User, quiz: Quiz, course: Course) -> None:
+        """Тест не начинается раньше своего черёда.
+
+        Замок программы до этого был правилом показа: экран рисовал его,
+        а сервер отдавал попытку любому, кто позвал ручку мимо экрана.
+        Уроки и задания так и остались правилом показа — заглянувший вперёд
+        ничего не теряет, — а вот попытка единственная и не возвращается:
+        сгоревшая не в свой черёд стоит человеку курса.
+        """
+        if self._is_locked(user, quiz, course):
+            raise ForbiddenError(QUIZ_LOCKED)
 
     def _question_order(self, quiz: Quiz) -> list[int]:
         """Снимок состава попытки: что и в каком порядке человек будет решать."""

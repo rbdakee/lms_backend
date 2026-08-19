@@ -77,6 +77,12 @@ class AuthService:
 
         self._check_not_blocked(phone)
 
+        # Дальше идут одни «прочитать, посчитать, записать»: и повтор раз
+        # в минуту, и оба суточных потолка. Без блокировки одновременные
+        # запросы читают один и тот же счётчик и уходят каждый своей SMS —
+        # почему именно советующая блокировка, написано у lock_sending
+        self.codes.lock_sending(phone, ip)
+
         last = self.codes.last_sent_at(phone)
         if last is not None:
             since = (now_utc() - last).total_seconds()
@@ -106,6 +112,15 @@ class AuthService:
         self.codes.expire_active(phone)
         code = "".join(secrets.choice("0123456789") for _ in range(self.cfg.code_length))
         self.codes.create(phone, _hash_code(phone, code), ip, self.cfg.code_ttl_min)
+        # Коммит до отправки, а не после: он отпускает блокировки lock_sending,
+        # которые иначе держались бы весь поход к SMS-шлюзу. Ключ адреса
+        # за прокси один на всех, и вход всей площадки встал бы в очередь
+        # со скоростью одной SMS за раз.
+        #
+        # Плата за это известна: не ушедшая SMS оставляет строку кода
+        # в базе, и человек ждёт минуту до повторной отправки. Обратный
+        # порядок стоил бы дороже — очередь на входе для всех сразу.
+        self.commit()
         self.sms.send_code(phone, code)
         return self.cfg.code_resend_sec
 
@@ -119,9 +134,16 @@ class AuthService:
         if active is None or active.expires_at <= now_utc():
             raise CodeExpiredError()
 
+        # Строка кода занимается до сверки: попытки считаются, чтобы подбор
+        # четырёхзначного кода стоил три сверки, а не три сверки на залп
+        attempts = self.codes.lock_attempts(active)
+        if attempts >= self.cfg.code_max_attempts:
+            # Попытки исчерпал сосед по залпу, пока мы ждали строку: сверять
+            # уже нечего, и ответ у нас с ним один
+            raise TooManyAttemptsError(self.cfg.code_block_min * 60)
+
         if _hash_code(phone, code) != active.code_hash:
-            active.attempts += 1
-            attempts_left = self.cfg.code_max_attempts - active.attempts
+            attempts_left = self.cfg.code_max_attempts - self.codes.bump_attempts(active)
             if attempts_left <= 0:
                 active.blocked_until = now_utc() + timedelta(minutes=self.cfg.code_block_min)
                 self.commit()

@@ -12,6 +12,7 @@
 
 import logging
 import secrets
+from collections.abc import Callable
 from datetime import datetime, timedelta
 
 from app.adapters.db.repos import SettingRepo, now_utc
@@ -33,6 +34,19 @@ BIND_KEY = "telegram_bind"
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CODE_LENGTH = 6
 
+# Промахи по коду считаются в той же строке настроек. Потолок — десяток:
+# код диктуют по телефону вслух, и пара опечаток при наборе это норма.
+# Дальше бот на промахи просто МОЛЧИТ — но код не гасит.
+#
+# Гасить код промахами нельзя, хотя сначала было сделано именно так: бот
+# публичный, его имя знает кто угодно, и десять сообщений от прохожего
+# оставляли админа без привязки — повторяемо, на каждый новый код.
+# Подбор при этом не был угрозой и без потолка: 32 знака алфавита в шести
+# позициях — миллиард вариантов на 10 минут жизни кода. Потолок здесь
+# про другое: каждая попытка стоит одного исходящего сообщения.
+ATTEMPTS_FIELD = "attempts"
+MAX_ATTEMPTS = 10
+
 # Поля привязки. Флаги типов сообщений лежат в той же строке и отвязкой
 # не стираются: отвязали чат — не значит передумали получать заявки.
 BOUND_FIELDS = ("chat_id", "chat_title", "connected_at")
@@ -45,10 +59,21 @@ TEST_MESSAGE = "Проверка связи: платформа видит эт�
 
 
 class TelegramBindService:
-    def __init__(self, settings: SettingRepo, telegram: TelegramPort, cfg: Settings):
+    def __init__(
+        self,
+        settings: SettingRepo,
+        telegram: TelegramPort,
+        cfg: Settings,
+        commit: Callable[[], None],
+    ):
         self.settings = settings
         self.telegram = telegram
         self.cfg = cfg
+        # Запись в настройки коммитится до похода в Telegram: иначе строка
+        # стоит занятой весь сетевой вызов, а прислать боту сообщение может
+        # кто угодно — и все они выстраиваются в очередь на одной строке,
+        # каждый со своим занятым соединением базы
+        self.commit = commit
 
     # -- POST /admin/settings/telegram/bind_code ---------------------------
 
@@ -107,23 +132,27 @@ class TelegramBindService:
         # Код набирают и руками, с продиктованного по телефону: алфавит
         # заглавный, поэтому регистр присланного значения не важен
         code = argument.strip().upper()
-        if not self._burn_code(code):
-            self.telegram.send_to(str(chat_id), WRONG_CODE)
-            return
+        if self._burn_code(code):
+            # Слиянием, а не целой строкой: флаги уведомлений лежат в ней же,
+            # и админ мог переключить их, пока код шёл до бота
+            self.settings.merge(
+                TELEGRAM_KEY,
+                {
+                    "chat_id": str(chat_id),
+                    "chat_title": _chat_title(chat, chat_id),
+                    # ISO-строка UTC: в JSONB нет своего типа под время,
+                    # и такой же лежит в примерах контракта
+                    "connected_at": _iso(now_utc()),
+                },
+            )
+            reply = CONNECTED
+        else:
+            reply = WRONG_CODE if self._miss_deserves_an_answer(code) else None
 
-        # Слиянием, а не целой строкой: флаги уведомлений лежат в ней же,
-        # и админ мог переключить их, пока код шёл до бота
-        self.settings.merge(
-            TELEGRAM_KEY,
-            {
-                "chat_id": str(chat_id),
-                "chat_title": _chat_title(chat, chat_id),
-                # ISO-строка UTC: в JSONB нет своего типа под время,
-                # и такой же лежит в примерах контракта
-                "connected_at": _iso(now_utc()),
-            },
-        )
-        self.telegram.send_to(str(chat_id), CONNECTED)
+        # Запись закончена — отпускаем строку до сетевого вызова
+        self.commit()
+        if reply is not None:
+            self.telegram.send_to(str(chat_id), reply)
 
     # -- POST /admin/settings/telegram/test --------------------------------
 
@@ -133,6 +162,8 @@ class TelegramBindService:
         chat_id = self.settings.get(TELEGRAM_KEY).get("chat_id")
         if not chat_id:
             raise TelegramNotConnectedError()
+        # Чтение открыло транзакцию, а дальше сетевой вызов на пять секунд
+        self.commit()
         try:
             self.telegram.send_to(chat_id, TEST_MESSAGE)
         except Exception as err:
@@ -163,15 +194,31 @@ class TelegramBindService:
     # -- код привязки -------------------------------------------------------
 
     def _burn_code(self, code: str) -> bool:
-        """Код одноразовый: сработал — гасится. Не подошёл или просрочен —
-        в настройках не меняется ничего, и админ берёт новый код."""
+        """Код одноразовый: сработал — гаснет. Не подошёл или просрочен —
+        в настройках не меняется ничего, и админ берёт новый код.
+
+        Гасит код условная запись в базе, а не «прочитали, сравнили,
+        записали»: между чтением и записью успевает пройти второй `/start`
+        с тем же кодом, и одноразовый код привязывал два чата — второй
+        перезаписывал `chat_id` первого, а первый об этом не узнавал.
+        """
         stored = self.settings.get(BIND_KEY)
         if not code or code != stored.get("code"):
             return False
         if _expired(stored.get("expires_at"), now_utc()):
             return False
-        self.settings.put(BIND_KEY, {})
-        return True
+        return self.settings.clear_if(BIND_KEY, "code", code)
+
+    def _miss_deserves_an_answer(self, code: str) -> bool:
+        """Отвечать ли на промах. Код при этом не трогаем — см. MAX_ATTEMPTS.
+
+        Голый `/start` не считается вовсе: это любопытный посетитель
+        публичного бота, а не опечатка админа. Счётчик обнуляется вместе
+        с выдачей нового кода — строка настроек переписывается целиком.
+        """
+        if not code:
+            return False
+        return self.settings.bump(BIND_KEY, ATTEMPTS_FIELD) <= MAX_ATTEMPTS
 
 
 def _new_code() -> str:
