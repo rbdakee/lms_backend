@@ -242,3 +242,42 @@ class TooManyAttemptsError(AppError):
             "Ввод кода заблокирован на 10 минут",
             details={"retry_after_sec": retry_after_sec},
         )
+
+
+# Состояния выдачи сертификата: условия не выполнены, попытка ещё идёт.
+
+
+class ConditionsNotMetError(AppError):
+    """Чек-лист уходит в details целиком: экран должен показать, чего не
+    хватает, а не просто отказ."""
+
+    status = 409
+    code = "conditions_not_met"
+
+    def __init__(self, conditions: list[dict]):
+        super().__init__(
+            "Условия сертификата ещё не выполнены",
+            details={"conditions": conditions},
+        )
+
+
+class AttemptInProgressError(AppError):
+    """Незавершённая попытка ещё может поменять зачёт: выдать сертификат
+    сейчас — значит выдать его по неокончательному результату."""
+
+    status = 409
+    code = "attempt_in_progress"
+
+    def __init__(self):
+        super().__init__("Завершите начатый тест — он ещё может изменить зачёт")
+
+
+class ProfileIncompleteError(AppError):
+    """Имя печатается на бумаге и остаётся снимком: выдать документ с пустым
+    ФИО — значит потом только отзывать его и выдавать заново."""
+
+    status = 409
+    code = "profile_incomplete"
+
+    def __init__(self):
+        super().__init__("Заполните фамилию и имя — они печатаются на сертификате")

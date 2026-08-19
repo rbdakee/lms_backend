@@ -8,6 +8,8 @@ from app.api.pagination import PageParams, page_out
 from app.api.schemas import (
     AdminLeadOut,
     AdminLeadsPageOut,
+    AdminOverviewOut,
+    AdminReportOut,
     AdminSubmissionCardOut,
     AdminSubmissionsPageOut,
     EnrollmentIn,
@@ -16,6 +18,8 @@ from app.api.schemas import (
     SubmissionReviewIn,
 )
 from app.application.leads import LeadsService
+from app.application.overview import OverviewService
+from app.application.reports import ReportsService
 from app.application.submissions_admin import SubmissionsAdminService
 
 router = APIRouter(prefix="/admin")
@@ -99,3 +103,27 @@ def review_submission(
     return AdminSubmissionCardOut(
         **svc.review(admin, submission_id, body.verdict, body.comment)
     )
+
+
+@router.get("/overview")
+def admin_overview(
+    admin: Annotated[User, Depends(deps.get_current_admin)],
+    svc: Annotated[OverviewService, Depends(deps.get_overview_service)],
+) -> AdminOverviewOut:
+    # Весь дашборд одним ответом: три счётчика, три списка и справочные числа
+    return AdminOverviewOut(**svc.overview())
+
+
+@router.get("/reports/{course_id}")
+def admin_report(
+    course_id: int,
+    admin: Annotated[User, Depends(deps.get_current_admin)],
+    params: Annotated[PageParams, Depends()],
+    svc: Annotated[ReportsService, Depends(deps.get_reports_service)],
+    # Поиск по ФИО: в таблице участников их восемь сотен
+    q: Annotated[str | None, Query(max_length=100)] = None,
+) -> AdminReportOut:
+    data = svc.report(course_id, q=q, offset=params.offset, limit=params.per_page)
+    # Сводка и воронка приходят целиком, страницами режется только таблица
+    participants = page_out(data["participants"]["items"], data["participants"]["total"], params)
+    return AdminReportOut(**{**data, "participants": participants})

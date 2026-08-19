@@ -16,6 +16,7 @@ from app.adapters.db.repos import (
     QuizRepo,
     now_utc,
 )
+from app.application.preview_quiz import PreviewAttempt, SessionAttempts
 from app.domain.errors import (
     AttemptFinishedError,
     AttemptNotFinishedError,
@@ -41,6 +42,10 @@ from app.domain.quiz import (
 
 QUIZ_DENIED = "Тест доступен после выдачи доступа к курсу"
 
+# Попытка бывает строкой базы и снимком в памяти (режим предпросмотра): счёт,
+# таймер и разбор одинаковы для обеих, поля у них называются одинаково.
+AnyAttempt = QuizAttempt | PreviewAttempt
+
 # single и bool — один вариант ответа; multi — сколько угодно.
 SINGLE_CHOICE_TYPES = ("single", "bool")
 
@@ -52,18 +57,34 @@ class QuizzesService:
         attempts: AttemptRepo,
         enrollments: EnrollmentRepo,
         certificates: CertificateRepo,
+        preview_course_id: int | None,
+        preview_attempts: SessionAttempts | None,
     ):
         self.quizzes = quizzes
         self.attempts = attempts
         self.enrollments = enrollments
         self.certificates = certificates
+        # Курс, который админ смотрит «как учитель», и попытка этой сессии
+        # в памяти процесса: в базу в режиме не уходит ничего
+        self.preview_course_id = preview_course_id
+        self.preview_attempts = preview_attempts
 
     # -- GET /quizzes/{id} ----------------------------------------------
 
     def quiz_page(self, user: User, quiz_id: int) -> dict:
         quiz, course = self._accessible(user, quiz_id)
         questions = self.quizzes.visible_questions(quiz.id)
-        finished = self.attempts.finished_for(user.id, quiz.id)
+        if self._preview(course):
+            # В предпросмотре история — это единственная попытка из памяти,
+            # и та пока не завершена (BACKEND_NOTES, раздел 12)
+            attempt = self._preview_attempt(quiz)
+            finished: list[AnyAttempt] = (
+                [attempt] if attempt is not None and attempt.finished_at is not None else []
+            )
+            state = self._preview_state(quiz, attempt)
+        else:
+            finished = list(self.attempts.finished_for(user.id, quiz.id))
+            state = self._state(user, quiz, course, finished)
         return {
             "id": quiz.id,
             "module_id": quiz.module_id,
@@ -78,12 +99,12 @@ class QuizzesService:
             # изучают, не тратя единственную попытку
             "questions_count": len(questions),
             "max_score": sum(question.points for question in questions),
-            "state": self._state(user, quiz, course, finished),
+            "state": state,
             "attempts": self._history(quiz, finished),
         }
 
     def _state(
-        self, user: User, quiz: Quiz, course: Course, finished: list[QuizAttempt]
+        self, user: User, quiz: Quiz, course: Course, finished: list[AnyAttempt]
     ) -> dict:
         active = self.attempts.active_for(user.id, quiz.id)
         if active is not None:
@@ -100,7 +121,7 @@ class QuizzesService:
         }
 
     @staticmethod
-    def _counted(finished: list[QuizAttempt]) -> QuizAttempt:
+    def _counted(finished: list[AnyAttempt]) -> AnyAttempt:
         """Зачётная попытка — та, что помечена is_counted. Пометки нет только
         у истории, оставшейся от отзыва сертификата: там показываем последнюю."""
         return next(
@@ -108,7 +129,7 @@ class QuizzesService:
             finished[-1],
         )
 
-    def _history(self, quiz: Quiz, finished: list[QuizAttempt]) -> list[dict]:
+    def _history(self, quiz: Quiz, finished: list[AnyAttempt]) -> list[dict]:
         max_scores = self.attempts.max_scores(finished)
         return [
             {
@@ -132,6 +153,8 @@ class QuizzesService:
 
     def start(self, user: User, quiz_id: int) -> dict:
         quiz, course = self._accessible(user, quiz_id)
+        if self._preview(course):
+            return self._preview_start(user, quiz)
         active = self.attempts.active_for(user.id, quiz.id)
         if active is not None:
             # Идемпотентность по активной попытке: двойной клик по «Начать тест»
@@ -142,16 +165,7 @@ class QuizzesService:
         if not quiz.retakable and self.attempts.finished_for(user.id, quiz.id):
             raise AttemptUsedError()
 
-        questions = self.quizzes.visible_questions(quiz.id)
-        if not questions or not sum(question.points for question in questions):
-            # Пустой max_score сделал бы процент бессмысленным, а попытку —
-            # потраченной впустую: тест из вопросов по нулю баллов не сдаётся
-            # ни при каком ответе
-            raise QuizEmptyError()
-        order = [question.id for question in questions]
-        if quiz.shuffle:
-            random.shuffle(order)
-
+        order = self._question_order(quiz)
         # У непересдаваемого попытка сразу зачётная: вторую не пустит индекс
         attempt = self.attempts.create(
             user.id, quiz.id, order, is_counted=not quiz.retakable
@@ -166,6 +180,19 @@ class QuizzesService:
             if attempt is None or attempt.finished_at is not None:
                 raise AttemptUsedError()
         return self._attempt_out(attempt, quiz)
+
+    def _question_order(self, quiz: Quiz) -> list[int]:
+        """Снимок состава попытки: что и в каком порядке человек будет решать."""
+        questions = self.quizzes.visible_questions(quiz.id)
+        if not questions or not sum(question.points for question in questions):
+            # Пустой max_score сделал бы процент бессмысленным, а попытку —
+            # потраченной впустую: тест из вопросов по нулю баллов не сдаётся
+            # ни при каком ответе
+            raise QuizEmptyError()
+        order = [question.id for question in questions]
+        if quiz.shuffle:
+            random.shuffle(order)
+        return order
 
     # -- POST /quiz_attempts/{id}/answers --------------------------------
 
@@ -189,7 +216,11 @@ class QuizzesService:
             raise self._invalid("option_ids", "Вариант не из этого вопроса")
 
         # Пустой список — снятый ответ, а не отсутствие строки: человек передумал
-        self.attempts.save_answer(attempt.id, question_id, option_ids)
+        if isinstance(attempt, PreviewAttempt):
+            # Ответ ложится в память процесса и уйдёт вместе с режимом
+            attempt.answers[question_id] = list(option_ids)
+        else:
+            self.attempts.save_answer(attempt.id, question_id, option_ids)
 
     @staticmethod
     def _invalid(field: str, message: str) -> ValidationAppError:
@@ -208,10 +239,7 @@ class QuizzesService:
             return self._result_out(attempt, quiz)
 
         questions, options = self._snapshot(attempt)
-        chosen = {
-            answer.question_id: set(answer.option_ids)
-            for answer in self.attempts.answers(attempt.id)
-        }
+        chosen = {question_id: set(ids) for question_id, ids in self._answers(attempt)}
         score = 0
         for question_id in attempt.question_order:
             question = questions.get(question_id)
@@ -230,7 +258,8 @@ class QuizzesService:
         attempt.finished_at = limit if limit is not None and now >= limit else now
         attempt.score = score
         attempt.passed = score_percent(score, max_score) >= quiz.pass_score
-        if quiz.retakable:
+        if quiz.retakable and not isinstance(attempt, PreviewAttempt):
+            # У попытки в памяти зачёт переключать не с чем: она там одна
             self.attempts.switch_counted(attempt)
         return self._result_out(attempt, quiz)
 
@@ -244,10 +273,7 @@ class QuizzesService:
             raise ReviewUnavailableError()
 
         questions, options = self._snapshot(attempt)
-        chosen = {
-            answer.question_id: set(answer.option_ids)
-            for answer in self.attempts.answers(attempt.id)
-        }
+        chosen = {question_id: set(ids) for question_id, ids in self._answers(attempt)}
         items = []
         # Порядок попытки, а не теста: человек должен увидеть то же, что решал
         for question_id in attempt.question_order:
@@ -282,12 +308,22 @@ class QuizzesService:
     # -- общее ------------------------------------------------------------
 
     def _snapshot(
-        self, attempt: QuizAttempt
+        self, attempt: AnyAttempt
     ) -> tuple[dict[int, Question], dict[int, list[Option]]]:
         questions = self.quizzes.questions_by_ids(attempt.question_order)
         return questions, self.quizzes.options(list(questions))
 
-    def _attempt_out(self, attempt: QuizAttempt, quiz: Quiz) -> dict:
+    def _answers(self, attempt: AnyAttempt) -> list[tuple[int, list[int]]]:
+        """Ответы попытки парами «вопрос — варианты», из базы или из памяти.
+        Порядок один и тот же — по вопросу: экран сравнивает их между собой."""
+        if isinstance(attempt, PreviewAttempt):
+            return sorted(attempt.answers.items())
+        return [
+            (answer.question_id, list(answer.option_ids))
+            for answer in self.attempts.answers(attempt.id)
+        ]
+
+    def _attempt_out(self, attempt: AnyAttempt, quiz: Quiz) -> dict:
         questions, options = self._snapshot(attempt)
         return {
             "id": attempt.id,
@@ -311,12 +347,14 @@ class QuizzesService:
                 if qid in questions
             ],
             "answers": [
-                {"question_id": answer.question_id, "option_ids": answer.option_ids}
-                for answer in self.attempts.answers(attempt.id)
+                {"question_id": question_id, "option_ids": ids}
+                for question_id, ids in self._answers(attempt)
             ],
         }
 
-    def _result_out(self, attempt: QuizAttempt, quiz: Quiz) -> dict:
+    def _result_out(self, attempt: AnyAttempt, quiz: Quiz) -> dict:
+        # max_scores читает у попытки только id и снимок вопросов, поэтому
+        # считает и попытку из памяти — баллы всё равно берутся из базы
         max_score = self.attempts.max_scores([attempt])[attempt.id]
         return {
             "id": attempt.id,
@@ -344,9 +382,23 @@ class QuizzesService:
             raise ForbiddenError(QUIZ_DENIED)
         return quiz, course
 
-    def _own_attempt(self, user: User, attempt_id: int) -> tuple[QuizAttempt, Quiz, Course]:
+    def _own_attempt(self, user: User, attempt_id: int) -> tuple[AnyAttempt, Quiz, Course]:
         """Доступ к курсу проверяется на каждый вызов, а не только на старте:
-        отозвали посреди попытки — следующий ответ уже не примут."""
+        отозвали посреди попытки — следующий ответ уже не примут.
+
+        Первой спрашивается память: в режиме предпросмотра попытка живёт там,
+        и дальше ответ, подсчёт и разбор идут общим кодом (раздел 12).
+        """
+        preview = self.preview_attempts.get() if self.preview_attempts is not None else None
+        if preview is not None and preview.id == attempt_id:
+            found_quiz = self.quizzes.visible_with_course(preview.quiz_id)
+            if found_quiz is None:
+                raise NotFoundError("Попытка не найдена")
+            quiz, course = found_quiz
+            if self.enrollments.active_for(user.id, course.id) is None:
+                raise ForbiddenError(QUIZ_DENIED)
+            return preview, quiz, course
+
         found = self.attempts.own_with_quiz(attempt_id, user.id)
         if found is None:
             raise NotFoundError("Попытка не найдена")
@@ -354,3 +406,47 @@ class QuizzesService:
         if self.enrollments.active_for(user.id, course.id) is None:
             raise ForbiddenError(QUIZ_DENIED)
         return attempt, quiz, course
+
+    # -- предпросмотр ------------------------------------------------------
+
+    def _preview(self, course: Course) -> bool:
+        """Тест предпросматриваемого курса: попытка по нему живёт в памяти,
+        а в базу не уходит ни строки (BACKEND_NOTES, раздел 12)."""
+        return course.id == self.preview_course_id and self.preview_attempts is not None
+
+    def _preview_attempt(self, quiz: Quiz) -> PreviewAttempt | None:
+        """Попытка сессии, если она по этому тесту: попытка одна на сессию,
+        и от соседнего теста она этому экрану не принадлежит."""
+        attempt = self.preview_attempts.get() if self.preview_attempts is not None else None
+        return attempt if attempt is not None and attempt.quiz_id == quiz.id else None
+
+    def _preview_state(self, quiz: Quiz, attempt: PreviewAttempt | None) -> dict:
+        """Тот же `state`, что у настоящего теста: сертификат ничего не запирает —
+        выдать его в режиме нельзя, значит и мешать он не может."""
+        if attempt is None:
+            return {"status": "not_started", "can_start": True}
+        if attempt.finished_at is None:
+            return {"status": "in_progress", "attempt": self._attempt_out(attempt, quiz)}
+        return {
+            "status": "finished",
+            "result": self._result_out(attempt, quiz),
+            "can_retake": quiz.retakable,
+            "review_available": review_available(quiz.retakable, quiz.show_review),
+        }
+
+    def _preview_start(self, user: User, quiz: Quiz) -> dict:
+        """Старт без единой записи: снимок вопросов ложится в память процесса.
+
+        Единственная попытка здесь ничем не рискует и потому не расходуется:
+        админ пересматривает тест столько раз, сколько нужно, — новый старт
+        просто заменяет прежний снимок.
+        """
+        active = self._preview_attempt(quiz)
+        if active is not None and active.finished_at is None:
+            # Идемпотентность та же, что у настоящего старта: двойной клик
+            # возвращает ту же попытку с уже выбранными ответами
+            return self._attempt_out(active, quiz)
+        attempt = self.preview_attempts.start(
+            user_id=user.id, quiz_id=quiz.id, question_order=self._question_order(quiz)
+        )
+        return self._attempt_out(attempt, quiz)

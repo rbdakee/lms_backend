@@ -116,6 +116,7 @@ class TasksService:
         telegram: TelegramPort,
         cfg: Settings,
         commit: Callable[[], None],
+        preview_course_id: int | None,
     ):
         self.tasks = tasks
         self.submissions = submissions
@@ -123,6 +124,8 @@ class TasksService:
         self.storage = storage
         self.telegram = telegram
         self.cfg = cfg
+        # Курс, который админ смотрит «как учитель»: по нему ничего не пишется
+        self.preview_course_id = preview_course_id
         # Работа обязана быть в базе до того, как уйдёт в Telegram: бот
         # недоступен, а работа всё равно в очереди проверки.
         self.commit = commit
@@ -225,7 +228,26 @@ class TasksService:
             raise TaskAcceptedError()
 
         text = (text or "").strip() or None
-        snapshot = self._snapshot(task, text, files)
+        preview = course.id == self.preview_course_id
+        snapshot = self._snapshot(task, text, files, preview=preview)
+        if preview:
+            # Ранний выход после проверок состава: они и есть то, ради чего
+            # админ жмёт «Отправить» в предпросмотре. Ни строки в submission,
+            # ни сообщения в бот (BACKEND_NOTES, раздел 12). Объект создан
+            # в памяти и в сессию SQLAlchemy не добавлен; id=0 — ссылки на его
+            # файлы никуда не ведут, потому что и файлов нет
+            return submission_out(
+                Submission(
+                    id=0,
+                    user_id=user.id,
+                    task_id=task.id,
+                    text=text,
+                    files=snapshot,
+                    status=SUBMISSION_PENDING,
+                    created_at=now_utc(),
+                ),
+                self.cfg.public_base_url,
+            )
         submission = self.submissions.create(user.id, task.id, text=text, files=snapshot)
         if submission is None:
             # Гонка двух одновременных отправок: вторую pending не пустила база
@@ -241,12 +263,17 @@ class TasksService:
             log.exception("Telegram-уведомление о работе %s не ушло", submission.id)
         return submission_out(submission, self.cfg.public_base_url)
 
-    def _snapshot(self, task: Task, text: str | None, files: list[dict]) -> list[dict]:
+    def _snapshot(
+        self, task: Task, text: str | None, files: list[dict], *, preview: bool = False
+    ) -> list[dict]:
         """Проверки состава и файлов — здесь, а не при загрузке: POST /files
         не знает, в какое задание файл поедет.
 
         Метаданные снимаются с хранилища: присланным размеру и типу верить
         нечего, а имя берётся из запроса — под ним человек файл и узнает.
+        В предпросмотре снимать их неоткуда: загрузка там тоже no-op, объекта
+        под ключом нет, — поэтому размер считается нулевым, а состав и формат
+        проверяются как обычно (BACKEND_NOTES, раздел 12).
         """
         self._check_format(task, text, files)
         if len(files) > MAX_FILES:
@@ -257,7 +284,7 @@ class TasksService:
         snapshot = []
         for file in files:
             name = safe_name(file["name"])
-            size = self.storage.size(file["key"])
+            size = 0 if preview else self.storage.size(file["key"])
             if size is None:
                 raise FieldError("files", "Файл не найден — загрузите заново")
             ext = ext_of(name)

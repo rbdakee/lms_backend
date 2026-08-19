@@ -13,18 +13,25 @@ router = APIRouter(prefix="/me")
 
 
 @router.get("")
-def get_me(user: Annotated[User, Depends(deps.get_current_user)]) -> UserOut:
-    return UserOut.from_user(user)
+def get_me(
+    user: Annotated[User, Depends(deps.get_current_user)],
+    preview_course_id: Annotated[int | None, Depends(deps.get_preview_course_id)],
+) -> UserOut:
+    # Про режим предпросмотра клиентское приложение узнаёт отсюда
+    return UserOut.from_user(user, preview_course_id)
 
 
 @router.patch("")
 def patch_me(
     body: UserPatch,
     user: Annotated[User, Depends(deps.get_current_user)],
+    preview_course_id: Annotated[int | None, Depends(deps.get_preview_course_id)],
     svc: Annotated[UsersService, Depends(deps.get_users_service)],
 ) -> UserOut:
     updated = svc.update_profile(user, body.model_dump(exclude_unset=True))
-    return UserOut.from_user(updated)
+    # Признак режима приходит везде, где приходит пользователь: иначе правка
+    # профиля в режиме прочиталась бы фронтом как выход из него
+    return UserOut.from_user(updated, preview_course_id)
 
 
 @router.get("/courses")

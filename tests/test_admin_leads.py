@@ -121,7 +121,7 @@ def test_grant_enrollment(client, client2, sms):
             text("SELECT type, params, user_id FROM notification")
         ).one()
     assert n_type == "access_granted"
-    assert params == {"course_id": course.id}
+    assert params == {"course_id": course.id, "course_title": course.title}
     assert n_user == teacher_id
     # Курс появился в кабинете учителя
     assert client.get("/me/courses").json()["items"][0]["id"] == course.id

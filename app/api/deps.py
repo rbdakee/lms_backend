@@ -7,6 +7,11 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.db.base import get_db
 from app.adapters.db.models import Session, User
+from app.adapters.db.preview import (
+    PreviewEnrollmentRepo,
+    VisibilityRepos,
+    visibility_repos,
+)
 from app.adapters.db.repos import (
     AttemptRepo,
     AuthCodeRepo,
@@ -14,14 +19,12 @@ from app.adapters.db.repos import (
     CourseRepo,
     EnrollmentRepo,
     LeadRepo,
-    LessonRepo,
     NotificationRepo,
     ProgressRepo,
-    QuizRepo,
     ReviewRepo,
     SessionRepo,
     SubmissionRepo,
-    TaskRepo,
+    ThreadMessageRepo,
     UserRepo,
     now_utc,
 )
@@ -29,13 +32,20 @@ from app.adapters.sms.log_sms import LogSms
 from app.adapters.storage.local_storage import LocalStorage
 from app.adapters.telegram.log_telegram import LogTelegram
 from app.application.auth import AuthService, hash_token
+from app.application.certificates import CertificatesService
 from app.application.courses import CoursesService
 from app.application.files import FilesService
 from app.application.leads import LeadsService
 from app.application.lessons import LessonsService
+from app.application.notifications import NotificationsService
+from app.application.overview import OverviewService
 from app.application.ports import SmsPort, StoragePort, TelegramPort
+from app.application.preview import Preview, PreviewService
+from app.application.preview_quiz import PreviewAttemptStore, SessionAttempts
+from app.application.questions import QuestionsService
 from app.application.quizzes import QuizzesService
 from app.application.ratelimit import SlidingWindowLimiter
+from app.application.reports import ReportsService
 from app.application.submissions_admin import SubmissionsAdminService
 from app.application.tasks import TasksService
 from app.application.users import UsersService
@@ -49,6 +59,13 @@ TOUCH_EVERY = timedelta(minutes=5)
 # Счётчик частоты живёт в памяти процесса, значит он один на всё приложение:
 # создавать его на каждый запрос — значит не считать ничего
 _playback_limiter = SlidingWindowLimiter(get_settings().playback_per_min, 60)
+# Проверка сертификата публична: без лимита номера перебираются с одного адреса
+_verify_limiter = SlidingWindowLimiter(get_settings().verify_per_min, 60)
+# Форма вопроса под уроком капчи не имеет — лимит на пользователя
+_thread_limiter = SlidingWindowLimiter(get_settings().thread_messages_per_min, 60)
+# Попытки предпросмотра живут в памяти процесса, значит хранилище одно на всё
+# приложение: заводить его на каждый запрос — значит не хранить ничего
+_preview_attempts = PreviewAttemptStore()
 
 
 def get_sms() -> SmsPort:
@@ -74,11 +91,157 @@ def get_playback_limiter() -> SlidingWindowLimiter:
     return _playback_limiter
 
 
+def get_verify_limiter() -> SlidingWindowLimiter:
+    return _verify_limiter
+
+
+def get_thread_limiter() -> SlidingWindowLimiter:
+    return _thread_limiter
+
+
 def get_client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Адрес клиента для лимитов.
+
+    Заголовку верим только при `trust_forwarded_for`: иначе перебор реестра
+    сертификатов обходится одной строчкой в заголовке, а словарь лимитера
+    растёт на каждый выдуманный адрес.
+    """
+    if get_settings().trust_forwarded_for:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return request.client.host if request.client else None
+
+
+def get_current_session_optional(
+    request: Request, db: Annotated[DbSession, Depends(get_db)]
+) -> Session | None:
+    """Сессия по куке или её отсутствие. Поиск живёт здесь, а не в строгой
+    версии: сессию спрашивают и публичные экраны, и признак предпросмотра,
+    и второй такой же запрос в базу на каждый вызов был бы лишним."""
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        return None
+    session = SessionRepo(db).by_token_hash(hash_token(token))
+    if session is None:
+        return None
+    if now_utc() - session.last_seen_at > TOUCH_EVERY:
+        session.last_seen_at = now_utc()
+    return session
+
+
+def get_current_session(
+    session: Annotated[Session | None, Depends(get_current_session_optional)],
+) -> Session:
+    if session is None:
+        raise UnauthorizedError()
+    return session
+
+
+def get_current_user(
+    session: Annotated[Session, Depends(get_current_session)],
+    db: Annotated[DbSession, Depends(get_db)],
+) -> User:
+    user = db.get(User, session.user_id)
+    if user is None:
+        raise UnauthorizedError()
+    if user.is_blocked:
+        # Блокировка действует сразу, не дожидаясь конца сессии
+        raise BlockedError()
+    return user
+
+
+def get_current_user_optional(
+    session: Annotated[Session | None, Depends(get_current_session_optional)],
+    db: Annotated[DbSession, Depends(get_db)],
+) -> User | None:
+    """Публичные экраны показывают состояние доступа, если человек вошёл.
+
+    Нет куки или сессия умерла — не ошибка, а анонимный просмотр.
+    Блокировка действует и здесь: залогиненный заблокированный получает 403.
+    """
+    if session is None:
+        return None
+    try:
+        return get_current_user(session, db)
+    except UnauthorizedError:
+        return None
+
+
+def get_current_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
+    # Отдельного входа в админку нет: та же кука, проверка is_admin на сервере
+    if not user.is_admin:
+        raise ForbiddenError("Доступно только администратору")
+    return user
+
+
+def get_preview(
+    session: Annotated[Session | None, Depends(get_current_session_optional)],
+    db: Annotated[DbSession, Depends(get_db)],
+) -> Preview | None:
+    """Включённый режим предпросмотра — или None, если его нет.
+
+    Право проверяется здесь, а не только на входе в режим: сняли у человека
+    is_admin, пока флаг стоял, — режим гаснет вместе с правом.
+    """
+    if session is None or session.preview_course_id is None:
+        return None
+    user = db.get(User, session.user_id)
+    if user is None or not user.is_admin:
+        return None
+    return Preview(
+        session_id=str(session.id),
+        user_id=session.user_id,
+        course_id=session.preview_course_id,
+    )
+
+
+def get_preview_course_id(preview: Annotated[Preview | None, Depends(get_preview)]) -> int | None:
+    """Знание о режиме, которое получает сценарий: какой курс предпросматривают."""
+    return preview.course_id if preview is not None else None
+
+
+def get_enrollments(
+    db: Annotated[DbSession, Depends(get_db)],
+    preview: Annotated[Preview | None, Depends(get_preview)],
+) -> EnrollmentRepo:
+    """Доступ к курсу подменяется в одном месте — здесь, а не проверками
+    в каждом сценарии (BACKEND_NOTES, раздел 12)."""
+    if preview is None:
+        return EnrollmentRepo(db)
+    return PreviewEnrollmentRepo(db, user_id=preview.user_id, course_id=preview.course_id)
+
+
+def get_visibility_repos(
+    db: Annotated[DbSession, Depends(get_db)],
+    preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
+) -> VisibilityRepos:
+    """Видимость курса подменяется там же, где доступ: в режиме сценариям
+    достаются репозитории, для которых предпросматриваемый курс существует
+    в любом статусе — иначе черновик отдавал бы 404 на каждом экране,
+    а смотреть админ приходит именно черновик (BACKEND_NOTES, раздел 12)."""
+    return visibility_repos(db, preview_course_id)
+
+
+def get_preview_attempts() -> PreviewAttemptStore:
+    return _preview_attempts
+
+
+def get_session_attempts(
+    preview: Annotated[Preview | None, Depends(get_preview)],
+    store: Annotated[PreviewAttemptStore, Depends(get_preview_attempts)],
+) -> SessionAttempts | None:
+    # Вне режима попытка в памяти не нужна вовсе: тесты идут через базу
+    if preview is None:
+        return None
+    return SessionAttempts(store, preview.session_id)
+
+
+def get_preview_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    store: Annotated[PreviewAttemptStore, Depends(get_preview_attempts)],
+) -> PreviewService:
+    return PreviewService(courses=CourseRepo(db), attempts=store)
 
 
 def get_auth_service(
@@ -99,35 +262,71 @@ def get_users_service(db: Annotated[DbSession, Depends(get_db)]) -> UsersService
     return UsersService(sessions=SessionRepo(db))
 
 
-def get_courses_service(db: Annotated[DbSession, Depends(get_db)]) -> CoursesService:
+def get_courses_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
+    preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
+    repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
+) -> CoursesService:
     return CoursesService(
-        courses=CourseRepo(db),
+        courses=repos.courses,
         reviews=ReviewRepo(db),
         leads=LeadRepo(db),
-        enrollments=EnrollmentRepo(db),
+        enrollments=enrollments,
         progress=ProgressRepo(db),
+        preview_course_id=preview_course_id,
     )
 
 
 def get_lessons_service(
     db: Annotated[DbSession, Depends(get_db)],
     playback_limiter: Annotated[SlidingWindowLimiter, Depends(get_playback_limiter)],
+    enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
+    preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
+    repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
 ) -> LessonsService:
     return LessonsService(
-        courses=CourseRepo(db),
-        lessons=LessonRepo(db),
-        enrollments=EnrollmentRepo(db),
+        courses=repos.courses,
+        lessons=repos.lessons,
+        enrollments=enrollments,
         progress=ProgressRepo(db),
         playback_limiter=playback_limiter,
+        preview_course_id=preview_course_id,
     )
 
 
-def get_quizzes_service(db: Annotated[DbSession, Depends(get_db)]) -> QuizzesService:
+def get_quizzes_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
+    preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
+    preview_attempts: Annotated[SessionAttempts | None, Depends(get_session_attempts)],
+    repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
+) -> QuizzesService:
     return QuizzesService(
-        quizzes=QuizRepo(db),
-        attempts=AttemptRepo(db),
-        enrollments=EnrollmentRepo(db),
+        quizzes=repos.quizzes,
+        attempts=repos.attempts,
+        enrollments=enrollments,
         certificates=CertificateRepo(db),
+        preview_course_id=preview_course_id,
+        preview_attempts=preview_attempts,
+    )
+
+
+def get_certificates_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    verify_limiter: Annotated[SlidingWindowLimiter, Depends(get_verify_limiter)],
+    enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
+    preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
+    repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
+) -> CertificatesService:
+    return CertificatesService(
+        certificates=CertificateRepo(db),
+        courses=repos.courses,
+        enrollments=enrollments,
+        progress=ProgressRepo(db),
+        notifications=NotificationRepo(db),
+        verify_limiter=verify_limiter,
+        preview_course_id=preview_course_id,
     )
 
 
@@ -135,15 +334,19 @@ def get_tasks_service(
     db: Annotated[DbSession, Depends(get_db)],
     storage: Annotated[StoragePort, Depends(get_storage)],
     telegram: Annotated[TelegramPort, Depends(get_telegram)],
+    enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
+    preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
+    repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
 ) -> TasksService:
     return TasksService(
-        tasks=TaskRepo(db),
+        tasks=repos.tasks,
         submissions=SubmissionRepo(db),
-        enrollments=EnrollmentRepo(db),
+        enrollments=enrollments,
         storage=storage,
         telegram=telegram,
         cfg=get_settings(),
         commit=db.commit,
+        preview_course_id=preview_course_id,
     )
 
 
@@ -160,78 +363,88 @@ def get_submissions_admin_service(
 
 
 def get_files_service(
-    db: Annotated[DbSession, Depends(get_db)],
     storage: Annotated[StoragePort, Depends(get_storage)],
+    enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
+    preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
+    repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
 ) -> FilesService:
     return FilesService(
-        lessons=LessonRepo(db),
-        enrollments=EnrollmentRepo(db),
+        lessons=repos.lessons,
+        enrollments=enrollments,
         storage=storage,
         cfg=get_settings(),
+        preview_course_id=preview_course_id,
+    )
+
+
+def get_notifications_service(
+    db: Annotated[DbSession, Depends(get_db)],
+) -> NotificationsService:
+    return NotificationsService(notifications=NotificationRepo(db))
+
+
+def get_questions_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    thread_limiter: Annotated[SlidingWindowLimiter, Depends(get_thread_limiter)],
+    enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
+    preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
+    repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
+) -> QuestionsService:
+    return QuestionsService(
+        courses=repos.courses,
+        lessons=repos.lessons,
+        enrollments=enrollments,
+        messages=ThreadMessageRepo(db),
+        notifications=NotificationRepo(db),
+        limiter=thread_limiter,
+        preview_course_id=preview_course_id,
     )
 
 
 def get_leads_service(
     db: Annotated[DbSession, Depends(get_db)],
     telegram: Annotated[TelegramPort, Depends(get_telegram)],
+    enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
+    preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
+    repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
 ) -> LeadsService:
     return LeadsService(
         users=UserRepo(db),
-        courses=CourseRepo(db),
+        courses=repos.courses,
         leads=LeadRepo(db),
-        enrollments=EnrollmentRepo(db),
+        enrollments=enrollments,
         notifications=NotificationRepo(db),
         telegram=telegram,
         commit=db.commit,
+        preview_course_id=preview_course_id,
     )
 
 
-def get_current_session(
-    request: Request, db: Annotated[DbSession, Depends(get_db)]
-) -> Session:
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
-        raise UnauthorizedError()
-    session = SessionRepo(db).by_token_hash(hash_token(token))
-    if session is None:
-        raise UnauthorizedError()
-    if now_utc() - session.last_seen_at > TOUCH_EVERY:
-        session.last_seen_at = now_utc()
-    return session
+def get_overview_service(db: Annotated[DbSession, Depends(get_db)]) -> OverviewService:
+    return OverviewService(
+        users=UserRepo(db),
+        courses=CourseRepo(db),
+        leads=LeadRepo(db),
+        submissions=SubmissionRepo(db),
+        messages=ThreadMessageRepo(db),
+        certificates=CertificateRepo(db),
+    )
 
 
-def get_current_user(
-    session: Annotated[Session, Depends(get_current_session)],
+def get_reports_service(
     db: Annotated[DbSession, Depends(get_db)],
-) -> User:
-    user = db.get(User, session.user_id)
-    if user is None:
-        raise UnauthorizedError()
-    if user.is_blocked:
-        # Блокировка действует сразу, не дожидаясь конца сессии
-        raise BlockedError()
-    return user
-
-
-def get_current_user_optional(
-    request: Request, db: Annotated[DbSession, Depends(get_db)]
-) -> User | None:
-    """Публичные экраны показывают состояние доступа, если человек вошёл.
-
-    Нет куки или сессия умерла — не ошибка, а анонимный просмотр.
-    Блокировка действует и здесь: залогиненный заблокированный получает 403.
-    """
-    try:
-        return get_current_user(get_current_session(request, db), db)
-    except UnauthorizedError:
-        return None
-
-
-def get_current_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
-    # Отдельного входа в админку нет: та же кука, проверка is_admin на сервере
-    if not user.is_admin:
-        raise ForbiddenError("Доступно только администратору")
-    return user
+    completion: Annotated[CertificatesService, Depends(get_certificates_service)],
+) -> ReportsService:
+    return ReportsService(
+        courses=CourseRepo(db),
+        # Отчёт админа читает настоящие доступы: синтетический участник
+        # предпросмотра не должен появиться в таблице участников курса
+        enrollments=EnrollmentRepo(db),
+        progress=ProgressRepo(db),
+        attempts=AttemptRepo(db),
+        certificates=CertificateRepo(db),
+        completion=completion,
+    )
 
 
 def set_session_cookie(response: Response, token: str, cfg: Settings) -> None:

@@ -1,0 +1,707 @@
+import re
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session as OrmSession
+
+from app.adapters.db.base import get_engine
+from app.adapters.db.models import QuizAttempt
+from app.adapters.db.repos import CertificateRepo, now_utc
+from tests.conftest import (
+    login,
+    login_named,
+    make_certificate,
+    make_course,
+    make_enrollment,
+    make_lesson,
+    make_module,
+    make_progress,
+    make_quiz,
+    make_submission,
+    make_task,
+    seed,
+    user_id,
+)
+
+# Номер печатается на бумаге и диктуется по телефону: формат проверяем целиком,
+# включая алфавит без похожих начертаний.
+NUMBER_RE = re.compile(r"^KZ-\d{4}-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$")
+
+
+def make_cert_course(uid=None, **course_kw):
+    """Курс из урока, задания, теста модуля и итогового теста.
+
+    Условия задаются флагами `cert_require_*`; по умолчанию включены уроки
+    и итоговый тест — набор с экрана курса. С `uid` доступ уже выдан.
+    Возвращает курс и четыре его элемента.
+    """
+    fields = {"cert_require_lessons": True, "cert_require_final_quiz": True}
+    fields.update(course_kw)
+    course = make_course(**fields)
+    module = make_module(course.id)
+    lesson = make_lesson(module.id, order_index=1)
+    task = make_task(module.id, order_index=2)
+    quiz = make_quiz(module.id, title="Тест модуля", order_index=3)
+    final = make_quiz(module.id, title="Итоговый тест", is_final=True, order_index=4)
+    if uid is not None:
+        make_enrollment(uid, course.id)
+    return course, lesson, task, quiz, final
+
+
+def pass_quiz(uid, quiz_id):
+    """Зачётная сданная попытка сырым объектом: проходить тест по HTTP ради
+    одной строки чек-листа — лишний шум."""
+    return seed(
+        QuizAttempt(
+            user_id=uid,
+            quiz_id=quiz_id,
+            question_order=[],
+            finished_at=now_utc(),
+            score=1,
+            passed=True,
+            is_counted=True,
+        )
+    )
+
+
+def start_attempt(uid, quiz_id):
+    """Незавершённая попытка: её finish ещё может изменить зачёт. Зачётной
+    не помечена — такой её и заводит пересдача поверх уже сданной."""
+    return seed(
+        QuizAttempt(user_id=uid, quiz_id=quiz_id, question_order=[], is_counted=False)
+    )
+
+
+def complete_everything(uid, lesson, task, quiz, final):
+    make_progress(uid, lesson.id)
+    make_submission(uid, task.id, status="accepted")
+    pass_quiz(uid, quiz.id)
+    pass_quiz(uid, final.id)
+
+
+def registry_certificate(owner, sms, **kw):
+    """Сертификат в реестре вместе с его учителем: проверяющий в это время
+    никуда не входил — на то она и публичная проверка."""
+    login_named(owner, sms)
+    return make_certificate(user_id(owner), make_course().id, **kw)
+
+
+def certificate_rows():
+    with get_engine().begin() as conn:
+        return conn.execute(
+            text("SELECT id, number, user_id, course_id FROM certificate ORDER BY id")
+        ).all()
+
+
+def notification_rows():
+    with get_engine().begin() as conn:
+        return conn.execute(text("SELECT type, params FROM notification ORDER BY id")).all()
+
+
+def completed_at(course_id):
+    with get_engine().begin() as conn:
+        return conn.execute(
+            text("SELECT completed_at FROM enrollment WHERE course_id = :c"), {"c": course_id}
+        ).scalar()
+
+
+def revoke(number):
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("UPDATE certificate SET revoked_at = now() WHERE number = :n"), {"n": number}
+        )
+
+
+def codes(body):
+    return [condition["code"] for condition in body["conditions"]]
+
+
+# -- чек-лист ----------------------------------------------------------
+
+
+def test_completion_public_without_counters(client):
+    course, *_ = make_cert_course()
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+
+    assert body == {
+        "conditions": [
+            {
+                "code": "lessons",
+                "label": "Пройти все уроки",
+                "status": "not_started",
+                "done_count": None,
+                "total_count": 1,
+            },
+            {
+                "code": "final_quiz",
+                "label": "Сдать итоговый тест",
+                "status": "not_started",
+                "done_count": None,
+                "total_count": 1,
+                "pass_score": 70,
+            },
+        ],
+        "can_issue": False,
+        "blocker": None,
+        "certificate": None,
+    }
+
+
+def test_completion_404_for_missing_and_invisible_course(client, sms):
+    draft, *_ = make_cert_course()
+    hidden, *_ = make_cert_course()
+    with get_engine().begin() as conn:
+        conn.execute(text("UPDATE course SET status = 'draft' WHERE id = :c"), {"c": draft.id})
+        conn.execute(
+            text("UPDATE course SET status = 'hidden' WHERE id = :c"), {"c": hidden.id}
+        )
+
+    login_named(client, sms)
+    make_enrollment(user_id(client), draft.id)
+
+    assert client.get("/courses/999999/completion").status_code == 404
+    # Доступ выдан, но версии курса для площадки не существует
+    assert client.get(f"/courses/{draft.id}/completion").status_code == 404
+    assert client.get(f"/courses/{hidden.id}/completion").status_code == 404
+
+
+def test_completion_without_enrollment_has_no_counters(client, sms):
+    login_named(client, sms)
+    course, lesson, *_ = make_cert_course()
+    # Отметка есть, а доступа нет: счётчики всё равно не показываются
+    make_progress(user_id(client), lesson.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+
+    assert [condition["done_count"] for condition in body["conditions"]] == [None, None]
+    assert body["can_issue"] is False
+
+
+def test_completion_counts_only_visible_items(client, sms):
+    login_named(client, sms)
+    uid = user_id(client)
+    course, lesson, task, quiz, final = make_cert_course(
+        uid, cert_require_tasks=True, cert_require_module_quizzes=True
+    )
+    module_id = lesson.module_id
+    make_lesson(module_id, title="Черновик урока", is_hidden=True)
+    make_progress(uid, lesson.id)
+    pass_quiz(uid, quiz.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+
+    assert codes(body) == ["lessons", "tasks", "module_quizzes", "final_quiz"]
+    assert body["conditions"][0] == {
+        "code": "lessons",
+        "label": "Пройти все уроки",
+        "status": "done",
+        # Скрытый урок не считается ни в done, ни в total — как везде в программе
+        "done_count": 1,
+        "total_count": 1,
+    }
+    assert body["conditions"][1]["status"] == "not_started"
+    assert body["conditions"][2] == {
+        "code": "module_quizzes",
+        "label": "Сдать все тесты модулей",
+        "status": "done",
+        "done_count": 1,
+        "total_count": 1,
+    }
+    assert body["can_issue"] is False
+    make_submission(uid, task.id, status="accepted")
+    pass_quiz(uid, final.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert [condition["status"] for condition in body["conditions"]] == ["done"] * 4
+    assert body["can_issue"] is True
+
+
+def test_completion_without_conditions_can_issue_at_once(client, sms):
+    login_named(client, sms)
+    course, *_ = make_cert_course(
+        user_id(client), cert_require_lessons=False, cert_require_final_quiz=False
+    )
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+
+    assert body == {
+        "conditions": [],
+        "can_issue": True,
+        "blocker": None,
+        "certificate": None,
+    }
+
+
+def test_completion_blocked_by_unfinished_attempt(client, sms):
+    login_named(client, sms)
+    uid = user_id(client)
+    course, lesson, task, quiz, final = make_cert_course(uid)
+    complete_everything(uid, lesson, task, quiz, final)
+    start_attempt(uid, quiz.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+
+    assert [condition["status"] for condition in body["conditions"]] == ["done", "done"]
+    assert body["can_issue"] is False
+    assert body["blocker"] == {
+        "code": "attempt_in_progress",
+        "message": "Завершите начатый тест — он ещё может изменить зачёт",
+    }
+
+
+def test_completion_shows_issued_certificate(client, sms):
+    login_named(client, sms)
+    uid = user_id(client)
+    course, lesson, task, quiz, final = make_cert_course(uid)
+    complete_everything(uid, lesson, task, quiz, final)
+    issued = client.post(f"/courses/{course.id}/certificate").json()
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+
+    assert body["certificate"] == {
+        "id": issued["id"],
+        "number": issued["number"],
+        "issued_at": issued["issued_at"],
+    }
+    # Документ уже на руках — кнопка выдачи больше не нужна
+    assert body["can_issue"] is False
+
+
+# -- выдача ------------------------------------------------------------
+
+
+def test_certificate_requires_auth(client):
+    course, *_ = make_cert_course()
+
+    assert client.post(f"/courses/{course.id}/certificate").status_code == 401
+    assert client.get("/me/certificates").status_code == 401
+
+
+def test_certificate_404_for_missing_and_invisible_course(client, sms):
+    draft, *_ = make_cert_course()
+    with get_engine().begin() as conn:
+        conn.execute(text("UPDATE course SET status = 'draft' WHERE id = :c"), {"c": draft.id})
+    login_named(client, sms)
+    make_enrollment(user_id(client), draft.id)
+
+    assert client.post("/courses/999999/certificate").status_code == 404
+    assert client.post(f"/courses/{draft.id}/certificate").status_code == 404
+
+
+def test_certificate_403_without_enrollment(client, sms):
+    login_named(client, sms)
+    # Курс без единого условия: отказ именно по доступу, а не по чек-листу
+    course, *_ = make_cert_course(cert_require_lessons=False, cert_require_final_quiz=False)
+
+    resp = client.post(f"/courses/{course.id}/certificate")
+
+    assert resp.status_code == 403
+    assert resp.json()["error"] == {
+        "code": "forbidden",
+        "message": "Доступ к курсу не открыт",
+    }
+    assert certificate_rows() == []
+
+
+def test_certificate_409_when_conditions_not_met(client, sms):
+    login_named(client, sms)
+    uid = user_id(client)
+    course, lesson, _, _, final = make_cert_course(uid)
+    pass_quiz(uid, final.id)
+
+    resp = client.post(f"/courses/{course.id}/certificate")
+
+    assert resp.status_code == 409
+    error = resp.json()["error"]
+    assert error["code"] == "conditions_not_met"
+    assert error["message"] == "Условия сертификата ещё не выполнены"
+    # В details тот же чек-лист, что отдаёт completion: экран показывает, чего нет
+    assert error["details"]["conditions"] == [
+        {
+            "code": "lessons",
+            "label": "Пройти все уроки",
+            "status": "not_started",
+            "done_count": 0,
+            "total_count": 1,
+        },
+        {
+            "code": "final_quiz",
+            "label": "Сдать итоговый тест",
+            "status": "done",
+            "done_count": 1,
+            "total_count": 1,
+            "pass_score": 70,
+        },
+    ]
+    assert certificate_rows() == []
+    make_progress(uid, lesson.id)
+    assert client.post(f"/courses/{course.id}/certificate").status_code == 200
+
+
+def test_certificate_409_while_attempt_in_progress(client, sms):
+    login_named(client, sms)
+    uid = user_id(client)
+    course, lesson, task, quiz, final = make_cert_course(uid)
+    complete_everything(uid, lesson, task, quiz, final)
+    start_attempt(uid, final.id)
+
+    resp = client.post(f"/courses/{course.id}/certificate")
+
+    assert resp.status_code == 409
+    assert resp.json()["error"] == {
+        "code": "attempt_in_progress",
+        "message": "Завершите начатый тест — он ещё может изменить зачёт",
+    }
+    assert certificate_rows() == []
+
+
+def test_issue_writes_snapshot_and_marks_course_completed(client, sms):
+    login_named(client, sms)
+    uid = user_id(client)
+    client.patch(
+        "/me",
+        json={
+            "last_name": "Смагулова",
+            "first_name": "Гульмира",
+            "middle_name": "Токтарбековна",
+        },
+    )
+    course, *_ = make_cert_course(
+        uid,
+        title="Критериальное оценивание в начальной школе",
+        hours=72,
+        cert_require_lessons=False,
+        cert_require_final_quiz=False,
+    )
+
+    resp = client.post(f"/courses/{course.id}/certificate")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert NUMBER_RE.match(body["number"]), body["number"]
+    assert body == {
+        "id": body["id"],
+        "number": body["number"],
+        "course_id": course.id,
+        "course_title": "Критериальное оценивание в начальной школе",
+        "holder_name": "Смагулова Гульмира Токтарбековна",
+        "hours": 72,
+        "lang": "ru",
+        "issued_at": body["issued_at"],
+        "revoked_at": None,
+    }
+    # «Курс пройден» и «сертификат получен» — одно событие
+    assert completed_at(course.id) is not None
+    assert notification_rows() == [
+        (
+            "certificate_issued",
+            {
+                "course_id": course.id,
+                "course_title": "Критериальное оценивание в начальной школе",
+                "certificate_id": body["id"],
+            },
+        )
+    ]
+
+
+def test_issue_twice_gives_one_document(client, sms):
+    login_named(client, sms)
+    uid = user_id(client)
+    course, lesson, task, quiz, final = make_cert_course(uid)
+    complete_everything(uid, lesson, task, quiz, final)
+
+    first = client.post(f"/courses/{course.id}/certificate")
+    second = client.post(f"/courses/{course.id}/certificate")
+
+    assert first.status_code == 200
+    # F5 на экране завершения курса — не отказ и не второй документ
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert len(certificate_rows()) == 1
+    assert len(notification_rows()) == 1
+
+
+def test_second_insert_is_stopped_by_the_index(client, sms):
+    """Единственность держит база, а не проверка в сценарии: сцену двойного
+    клика разыгрываем на репозитории, минуя идемпотентность выдачи."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course, *_ = make_cert_course(uid, cert_require_lessons=False, cert_require_final_quiz=False)
+    client.post(f"/courses/{course.id}/certificate")
+
+    with OrmSession(get_engine()) as db:
+        repo = CertificateRepo(db)
+        rejected = repo.create(
+            number="KZ-2026-XB7K2M",
+            user_id=uid,
+            course_id=course.id,
+            holder_name="Смагулова Гульмира Токтарбековна",
+            course_title="Курс",
+            hours=72,
+            lang="ru",
+        )
+        # Отбитая вставка не роняет транзакцию запроса: SAVEPOINT откатил её одну
+        found = repo.active_for(uid, course.id)
+        db.commit()
+
+    assert rejected is None
+    assert found is not None
+    assert len(certificate_rows()) == 1
+
+
+def test_issue_after_revocation_gives_new_document(client, sms):
+    login_named(client, sms)
+    uid = user_id(client)
+    course, *_ = make_cert_course(uid, cert_require_lessons=False, cert_require_final_quiz=False)
+    first = client.post(f"/courses/{course.id}/certificate").json()
+    revoke(first["number"])
+
+    second = client.post(f"/courses/{course.id}/certificate")
+
+    # Индекс сторожит только действующие: отозванный новой выдаче не мешает
+    assert second.status_code == 200
+    assert second.json()["number"] != first["number"]
+    assert len(certificate_rows()) == 2
+    assert [item["number"] for item in client.get("/me/certificates").json()["items"]] == [
+        second.json()["number"]
+    ]
+
+
+def test_issue_ignores_other_courses(client, sms):
+    login_named(client, sms)
+    uid = user_id(client)
+    mine, *_ = make_cert_course(uid, cert_require_lessons=False, cert_require_final_quiz=False)
+    other, *_ = make_cert_course(uid, cert_require_lessons=False, cert_require_final_quiz=False)
+
+    client.post(f"/courses/{mine.id}/certificate")
+    client.post(f"/courses/{other.id}/certificate")
+
+    numbers = {number for _, number, _, _ in certificate_rows()}
+    # Уникальность держится парой (user, course), а не одним сертификатом на человека
+    assert len(certificate_rows()) == 2
+    assert len(numbers) == 2
+
+
+# -- мои сертификаты ---------------------------------------------------
+
+
+def test_my_certificates_empty(client, sms):
+    login_named(client, sms)
+
+    assert client.get("/me/certificates").json() == {"items": []}
+
+
+def test_my_certificates_hides_revoked_and_foreign(client, sms, client2):
+    login_named(client, sms)
+    uid = user_id(client)
+    mine, *_ = make_cert_course(uid, cert_require_lessons=False, cert_require_final_quiz=False)
+    revoked, *_ = make_cert_course(
+        uid, cert_require_lessons=False, cert_require_final_quiz=False
+    )
+    client.post(f"/courses/{mine.id}/certificate")
+    dropped = client.post(f"/courses/{revoked.id}/certificate").json()
+    revoke(dropped["number"])
+    # Чужой сертификат в списке не появляется
+    login_named(client2, sms, phone="+7 (777) 555-44-33")
+    stranger, *_ = make_cert_course(user_id(client2))
+    make_certificate(user_id(client2), stranger.id, number="KZ-2026-XB7K2M")
+
+    items = client.get("/me/certificates").json()["items"]
+
+    assert len(items) == 1
+    assert items[0]["course_id"] == mine.id
+    # revoked_at в кабинете не печатается: отозванных здесь не бывает
+    assert set(items[0]) == {
+        "id",
+        "number",
+        "course_id",
+        "course_title",
+        "holder_name",
+        "hours",
+        "lang",
+        "issued_at",
+    }
+
+
+# -- публичная проверка ------------------------------------------------
+
+
+def test_verify_finds_by_dirty_number_without_login(client, client2, sms):
+    registry_certificate(client2, sms, number="KZ-2026-XB7K2M", hours=72)
+
+    for typed in ("KZ-2026-XB7K2M", "kz2026xb7k2m", " kz 2026 xb7k2m ", "KZ_2026_XB7K2M"):
+        body = client.get(f"/verify/{typed}").json()
+        assert body["status"] == "valid", typed
+        assert body["number"] == "KZ-2026-XB7K2M"
+
+
+def test_verify_shows_only_what_is_printed(client, client2, sms):
+    registry_certificate(
+        client2,
+        sms,
+        number="KZ-2026-XB7K2M",
+        course_title="Критериальное оценивание в начальной школе",
+        hours=72,
+    )
+
+    body = client.get("/verify/KZ-2026-XB7K2M").json()
+
+    # Ни user_id, ни course_id, ни id: страница публичная, и школа с телефоном
+    # к подлинности отношения не имеют
+    assert set(body) == {
+        "status",
+        "number",
+        "holder_name",
+        "course_title",
+        "hours",
+        "issued_at",
+        "revoked_at",
+    }
+    assert body["holder_name"] == "Смагулова Гульмира Токтарбековна"
+    assert body["course_title"] == "Критериальное оценивание в начальной школе"
+    assert body["revoked_at"] is None
+
+
+def test_verify_reports_revoked(client, client2, sms):
+    registry_certificate(client2, sms, number="KZ-2026-XB7K2M")
+    revoke("KZ-2026-XB7K2M")
+
+    body = client.get("/verify/kz-2026-xb7k2m").json()
+
+    # Запись в реестре есть, документ недействителен — это не 404
+    assert body["status"] == "revoked"
+    assert body["revoked_at"] is not None
+
+
+def test_verify_404_for_unknown_number(client, client2, sms):
+    registry_certificate(client2, sms, number="KZ-2026-XB7K2M")
+
+    for typed in ("KZ-2026-ZZZZZZ", "не номер", "KZ-2026-XB7K2"):
+        resp = client.get(f"/verify/{typed}")
+        assert resp.status_code == 404, typed
+        assert resp.json()["error"] == {
+            "code": "not_found",
+            "message": "Сертификат не найден",
+        }
+
+
+def test_verify_rate_limited_per_ip(client, client2, sms, verify_limiter_clock):
+    registry_certificate(client2, sms, number="KZ-2026-XB7K2M")
+
+    for _ in range(20):
+        assert client.get("/verify/KZ-2026-XB7K2M").status_code == 200
+
+    resp = client.get("/verify/KZ-2026-XB7K2M")
+    assert resp.status_code == 429
+    error = resp.json()["error"]
+    assert error["code"] == "rate_limited"
+    assert 0 < error["details"]["retry_after_sec"] <= 60
+    # Окно уехало — перебор снова разрешён
+    verify_limiter_clock.shift(61)
+    assert client.get("/verify/KZ-2026-XB7K2M").status_code == 200
+
+
+# -- находки адверсариальной проверки ----------------------------------
+
+
+def test_certificate_is_not_issued_without_a_name(client, sms):
+    """ФИО — снимок на бумаге, и поправить его постфактум нельзя: документ
+    с пустым именем пришлось бы отзывать и выдавать заново."""
+    login(client, sms)  # вход по SMS заводит человека без фамилии и имени
+    uid = user_id(client)
+    course, lesson, task, quiz, final = make_cert_course(uid)
+    complete_everything(uid, lesson, task, quiz, final)
+
+    resp = client.post(f"/courses/{course.id}/certificate")
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "profile_incomplete"
+    assert certificate_rows() == []
+
+    client.patch("/me", json={"last_name": "Нурланова", "first_name": "Айгуль"})
+    assert client.post(f"/courses/{course.id}/certificate").status_code == 200
+    assert certificate_rows()[0][2] == uid
+
+
+def test_enabled_condition_without_items_is_not_done(client, sms):
+    """Флаг, выставленный до наполнения курса, не должен раздать сертификаты:
+    условие без единого элемента не выполнено, а не выполнено само собой."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course = make_course(cert_require_lessons=True, cert_require_tasks=True)
+    make_module(course.id)  # ни уроков, ни заданий
+    make_enrollment(uid, course.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert [c["status"] for c in body["conditions"]] == ["not_started", "not_started"]
+    assert body["can_issue"] is False
+
+    resp = client.post(f"/courses/{course.id}/certificate")
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "conditions_not_met"
+    assert certificate_rows() == []
+
+
+def test_hidden_last_lesson_does_not_collapse_the_condition(client, sms):
+    """Урок с чужим прогрессом не удаляют, а скрывают. Если бы скрытие
+    схлопывало условие, сертификат выдался бы всем, кто до него не дошёл."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course = make_course(cert_require_lessons=True)
+    module = make_module(course.id)
+    make_lesson(module.id, order_index=1, is_hidden=True)
+    make_enrollment(uid, course.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert body["conditions"][0]["total_count"] == 0
+    assert body["can_issue"] is False
+
+
+def test_unfinished_attempt_does_not_hide_the_checklist(client, sms):
+    """Пока условия не выполнены, человеку надо показать чек-лист, а не
+    «завершите начатый тест»: он и так видит, чего не хватает."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course, lesson, task, quiz, final = make_cert_course(uid)
+    start_attempt(uid, final.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert body["blocker"] is None
+
+    resp = client.post(f"/courses/{course.id}/certificate")
+    assert resp.json()["error"]["code"] == "conditions_not_met"
+
+    # А когда чек-лист закрыт — блокер появляется, и он же приходит ошибкой
+    complete_everything(uid, lesson, task, quiz, final)
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert body["blocker"]["code"] == "attempt_in_progress"
+    assert body["can_issue"] is False
+    resp = client.post(f"/courses/{course.id}/certificate")
+    assert resp.json()["error"]["code"] == "attempt_in_progress"
+
+
+def test_race_leaves_one_certificate_and_one_notification(client, sms, monkeypatch):
+    """Проигравший гонку запрос отдаёт чужой документ — и не должен сверх него
+    писать второе уведомление и переставлять отметку о завершении."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course, lesson, task, quiz, final = make_cert_course(uid)
+    complete_everything(uid, lesson, task, quiz, final)
+
+    from app.adapters.db.repos import CertificateRepo, NotificationRepo
+
+    real_create = CertificateRepo.create
+
+    def create_after_a_neighbour(self, **kw):
+        # Соседний запрос успел вставить документ и записать своё уведомление
+        CertificateRepo.create = real_create
+        real_create(self, **kw)
+        NotificationRepo(self.db).create(uid, "certificate_issued", {})
+        self.db.flush()
+        return None
+
+    monkeypatch.setattr(CertificateRepo, "create", create_after_a_neighbour)
+    assert client.post(f"/courses/{course.id}/certificate").status_code == 200
+
+    assert len(certificate_rows()) == 1
+    issued = [row for row in notification_rows() if row[0] == "certificate_issued"]
+    assert len(issued) == 1

@@ -85,7 +85,12 @@ class SubmissionsAdminService:
         self.notifications.create(
             submission.user_id,
             "submission_reviewed",
-            {"task_id": task.id, "course_id": course.id, "verdict": verdict},
+            {
+                "task_id": task.id,
+                "task_title": task.title,
+                "course_id": course.id,
+                "verdict": verdict,
+            },
         )
         return self._card_out(*found)
 

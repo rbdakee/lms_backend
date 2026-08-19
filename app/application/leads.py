@@ -38,6 +38,7 @@ class LeadsService:
         notifications: NotificationRepo,
         telegram: TelegramPort,
         commit: Callable[[], None],
+        preview_course_id: int | None,
     ):
         self.users = users
         self.courses = courses
@@ -48,6 +49,8 @@ class LeadsService:
         # Коммит нужен сценарию точечно: заявка обязана быть в базе до того,
         # как уйдёт в Telegram, — бот недоступен, а заявка всё равно в админке.
         self.commit = commit
+        # Включённый режим предпросмотра, см. create_lead
+        self.preview_course_id = preview_course_id
 
     # -- заявка учителя -------------------------------------------------
 
@@ -55,6 +58,23 @@ class LeadsService:
         course = self.courses.visible_by_id(course_id)
         if course is None:
             raise NotFoundError("Курс не найден")
+        if self.preview_course_id is not None:
+            # Ранний выход: ни заявки в очереди админа, ни сообщения в бот
+            # (BACKEND_NOTES, раздел 12). Глушится заявка на любой курс, а не
+            # только на предпросматриваемый: заявку подаёт учитель, и другого
+            # пути её создать у админа нет — настоящую работу это не съедает,
+            # а мусорная заявка от самого админа пережила бы выход из режима.
+            # Объект создан в памяти и в сессию SQLAlchemy не добавлен
+            return self._lead_out(
+                Lead(
+                    id=0,
+                    user_id=user.id,
+                    course_id=course.id,
+                    price_snapshot=course.price,
+                    status="new",
+                    created_at=now_utc(),
+                )
+            )
         if self.enrollments.active_for(user.id, course.id) is not None:
             raise AlreadyEnrolledError()
         if course.status == "closed":
@@ -190,7 +210,11 @@ class LeadsService:
                 lead.note = f"{lead.note}\n{note}" if lead.note else note
 
         # Учителю — колокольчик; текст не хранится, соберётся на его языке
-        self.notifications.create(user_id, "access_granted", {"course_id": course_id})
+        self.notifications.create(
+            user_id,
+            "access_granted",
+            {"course_id": course_id, "course_title": course.title},
+        )
         return {
             "id": enrollment.id,
             "user_id": user_id,

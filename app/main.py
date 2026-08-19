@@ -7,12 +7,16 @@ from app.api.errors import register_error_handlers
 from app.api.routers import (
     admin,
     auth,
+    certificates,
     courses,
     dictionaries,
     files,
     health,
     lessons,
     me,
+    notifications,
+    preview,
+    questions,
     quizzes,
     tasks,
 )
@@ -41,12 +45,19 @@ def create_app() -> FastAPI:
     app.include_router(me.router)
     app.include_router(dictionaries.router)
     app.include_router(courses.router)
+    app.include_router(certificates.router)
+    app.include_router(certificates.me_router)
+    app.include_router(certificates.verify_router)
     app.include_router(lessons.router)
+    app.include_router(questions.router)
+    app.include_router(notifications.router)
     app.include_router(quizzes.router)
     app.include_router(quizzes.attempts_router)
     app.include_router(tasks.router)
     app.include_router(files.router)
     app.include_router(admin.router)
+    app.include_router(questions.admin_router)
+    app.include_router(preview.router)
     return app
 
 

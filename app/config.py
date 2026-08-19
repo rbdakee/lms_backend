@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     session_ttl_days: int = 180
 
+    # X-Forwarded-For подделывается кем угодно, а на нём держится лимит
+    # публичной проверки сертификата. Верим заголовку только там, где перед
+    # сервисом стоит наш прокси и он этот заголовок переписывает.
+    trust_forwarded_for: bool = False
+
     sms_provider: str = "log"
     telegram_provider: str = "log"
     storage_provider: str = "local"
@@ -45,6 +50,11 @@ class Settings(BaseSettings):
     # SMS стоит денег: потолки в сутки на номер и на IP.
     phone_codes_per_day: int = 10
     ip_codes_per_day: int = 30
+    # Проверка сертификата публична: без потолка на адрес номера перебираются
+    # скриптом, и реестр становится общим достоянием.
+    verify_per_min: int = 20
+    # Форма вопроса под уроком без капчи — потолок на пользователя.
+    thread_messages_per_min: int = 3
 
 
 @lru_cache

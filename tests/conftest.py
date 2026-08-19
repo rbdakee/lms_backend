@@ -17,21 +17,43 @@ from sqlalchemy.orm import Session as OrmSession
 from app.adapters.db.base import get_engine
 from app.adapters.db.models import (
     Base,
+    Certificate,
     Course,
     Enrollment,
+    Lead,
     Lesson,
     LessonProgress,
     Module,
+    Notification,
     Option,
     Question,
     Quiz,
     Submission,
     Task,
+    ThreadMessage,
+    User,
 )
-from app.api.deps import get_playback_limiter, get_sms, get_storage, get_telegram
+from app.api.deps import (
+    get_playback_limiter,
+    get_sms,
+    get_storage,
+    get_telegram,
+    get_thread_limiter,
+    get_verify_limiter,
+)
 from app.application.ratelimit import SlidingWindowLimiter
 from app.config import get_settings
 from app.main import app
+
+# Каждый тест начинается с TRUNCATE всех таблиц. Направить это на базу
+# разработки — значит стереть данные ручного QA владельца, поэтому имя базы
+# проверяется до того, как что-нибудь успеет выполниться.
+_DB_NAME = os.environ["DATABASE_URL"].rsplit("/", 1)[-1].split("?", 1)[0]
+if not _DB_NAME.endswith("_test"):
+    raise RuntimeError(
+        f"Тесты чистят базу целиком и запускаются только на тестовой: «{_DB_NAME}» "
+        "на неё не похожа. Проверьте DATABASE_URL и TEST_DATABASE_URL."
+    )
 
 PHONE = "+7 (707) 123-45-67"
 NORM = "+77071234567"
@@ -137,6 +159,28 @@ def limiter_clock():
     app.dependency_overrides.pop(get_playback_limiter, None)
 
 
+@pytest.fixture(autouse=True)
+def verify_limiter_clock():
+    """Лимитер публичной проверки сертификата тоже живёт в памяти процесса:
+    без своего на каждый тест счётчик течёт из одного теста в другой."""
+    clock = FakeClock()
+    limiter = SlidingWindowLimiter(get_settings().verify_per_min, 60, clock)
+    app.dependency_overrides[get_verify_limiter] = lambda: limiter
+    yield clock
+    app.dependency_overrides.pop(get_verify_limiter, None)
+
+
+@pytest.fixture(autouse=True)
+def thread_limiter_clock():
+    """Лимитер вопросов под уроком тоже в памяти процесса, а потолок низкий:
+    без своего на каждый тест счётчик течёт из одного теста в другой."""
+    clock = FakeClock()
+    limiter = SlidingWindowLimiter(get_settings().thread_messages_per_min, 60, clock)
+    app.dependency_overrides[get_thread_limiter] = lambda: limiter
+    yield clock
+    app.dependency_overrides.pop(get_thread_limiter, None)
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as c:
@@ -175,6 +219,19 @@ def login(client, sms, phone=PHONE):
     assert resp.status_code == 200, resp.text
     # Следующему входу в этом же тесте не должен мешать лимит повторной отправки
     age_codes(2)
+    return resp
+
+
+def login_named(client, sms, phone=PHONE, **profile):
+    """Вход и сразу заполненный профиль.
+
+    ФИО печатается на сертификате и остаётся снимком, поэтому выдача без имени
+    отбивается — а вход по SMS заводит человека с пустыми полями.
+    """
+    resp = login(client, sms, phone=phone)
+    fields = {"last_name": "Нурланова", "first_name": "Айгуль"}
+    fields.update(profile)
+    assert client.patch("/me", json=fields).status_code == 200
     return resp
 
 
@@ -266,9 +323,48 @@ def make_enrollment(user_id, course_id, **kw):
     return seed(Enrollment(**fields))
 
 
+def make_certificate(user_id, course_id, **kw):
+    fields = {"user_id": user_id, "course_id": course_id, "number": "KZ-2026-XB7K2M",
+              "holder_name": "Смагулова Гульмира Токтарбековна", "course_title": "Курс",
+              "hours": 72, "lang": "ru"}
+    fields.update(kw)
+    return seed(Certificate(**fields))
+
+
 def make_progress(user_id, lesson_id):
     return seed(LessonProgress(user_id=user_id, lesson_id=lesson_id))
 
 
 def user_id(client) -> int:
     return client.get("/me").json()["id"]
+
+
+def make_notification(user_id, **kw):
+    fields = {"user_id": user_id, "type": "access_granted",
+              "params": {"course_id": 1, "course_title": "Курс"}}
+    fields.update(kw)
+    return seed(Notification(**fields))
+
+
+def make_user(phone, **kw):
+    """Учитель мимо входа: дашборду и отчёту нужны десятки людей, и заводить
+    каждого через SMS — лишний шум. Номера вымышленные."""
+    fields = {"phone": phone, "last_name": "Смагулова", "first_name": "Гульмира",
+              "middle_name": "Токтарбековна", "school": "КГУ «Средняя школа №27»",
+              "region": "Алматы"}
+    fields.update(kw)
+    return seed(User(**fields))
+
+
+def make_lead(user_id, course_id, **kw):
+    fields = {"user_id": user_id, "course_id": course_id, "price_snapshot": 45000,
+              "status": "new"}
+    fields.update(kw)
+    return seed(Lead(**fields))
+
+
+def make_thread_message(lesson_id, course_id, user_id, **kw):
+    fields = {"lesson_id": lesson_id, "course_id": course_id, "user_id": user_id,
+              "text": "Вопрос по уроку"}
+    fields.update(kw)
+    return seed(ThreadMessage(**fields))

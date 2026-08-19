@@ -80,15 +80,24 @@ class FilesService:
         enrollments: EnrollmentRepo,
         storage: StoragePort,
         cfg: Settings,
+        preview_course_id: int | None,
     ):
         self.lessons = lessons
         self.enrollments = enrollments
         self.storage = storage
         self.cfg = cfg
+        # Включённый режим предпросмотра — курса у загрузки нет, см. upload
+        self.preview_course_id = preview_course_id
 
     def upload(self, filename: str, stream: BinaryIO) -> dict:
         """Загруженный файл ни к чему не привязан: привязка происходит в том
-        запросе, куда `key` передаётся дальше (сдача работы, материал урока)."""
+        запросе, куда `key` передаётся дальше (сдача работы, материал урока).
+
+        В режиме предпросмотра файл не ложится и в хранилище — байты
+        считаются и выбрасываются. Курса у загрузки нет вовсе, поэтому режим
+        глушит любую: положенный объект из хранилища уже не убрать, а сдача
+        работы в предпросмотре всё равно no-op (BACKEND_NOTES, раздел 12).
+        """
         name = safe_name(filename)
         chunks = _chunks(stream)
         first = next(chunks, b"")
@@ -96,13 +105,15 @@ class FilesService:
             raise NoFileError()
 
         key = _new_key(name)
-        size = self.storage.save(
-            key,
-            _capped(
-                chain([first], chunks),
-                self.cfg.upload_max_mb * 1024 * 1024,
-                self.cfg.upload_max_mb,
-            ),
+        capped = _capped(
+            chain([first], chunks),
+            self.cfg.upload_max_mb * 1024 * 1024,
+            self.cfg.upload_max_mb,
+        )
+        size = (
+            sum(len(chunk) for chunk in capped)
+            if self.preview_course_id is not None
+            else self.storage.save(key, capped)
         )
         return {
             "key": key,

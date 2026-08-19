@@ -33,8 +33,20 @@ class SlidingWindowLimiter:
         hits = self.hits.setdefault(key, deque())
         while hits and now - hits[0] >= self.window_sec:
             hits.popleft()
+        if not hits:
+            # Ключ публичного лимита задаёт клиент: остывшие адреса нужно
+            # выбрасывать, иначе словарь растёт до перезапуска сервиса.
+            # Текущий ключ не трогаем — в него сейчас пишется этот запрос
+            self._forget_cold(now, keep=key)
         if len(hits) >= self.limit:
             # Освободится, когда из окна выйдет самый старый запрос
             return max(1, ceil(self.window_sec - (now - hits[0])))
         hits.append(now)
         return 0
+
+    def _forget_cold(self, now: float, *, keep: str) -> None:
+        for key, hits in list(self.hits.items()):
+            if key == keep:
+                continue
+            if not hits or now - hits[-1] >= self.window_sec:
+                del self.hits[key]

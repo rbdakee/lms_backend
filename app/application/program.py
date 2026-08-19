@@ -69,19 +69,37 @@ def build_program(courses: CourseRepo, course_id: int) -> list[dict]:
 
 
 def with_statuses(
-    progress: ProgressRepo, course: Course, user_id: int, program: list[dict]
+    progress: ProgressRepo,
+    course: Course,
+    user_id: int,
+    program: list[dict],
+    *,
+    preview: bool = False,
 ) -> list[dict]:
-    """Та же программа глазами учителя: что пройдено, что закрыто."""
+    """Та же программа глазами учителя: что пройдено, что закрыто.
+
+    `preview` — явным параметром, а не подменой `course.strict_order`:
+    изменённое поле ORM-объекта уехало бы в базу на ближайшем flush,
+    и предпросмотр одного админа снял бы строгий порядок у всех.
+    """
     return apply_statuses(
         program,
         progress.done_keys(user_id, course.id),
         strict_order=course.strict_order,
+        unlock_all=preview,
     )
 
 
 def course_progress(
-    courses: CourseRepo, progress: ProgressRepo, course: Course, user_id: int
+    courses: CourseRepo,
+    progress: ProgressRepo,
+    course: Course,
+    user_id: int,
+    *,
+    preview: bool = False,
 ) -> dict:
     """Блок прогресса курса: агрегат по статусам той же программы."""
-    program = with_statuses(progress, course, user_id, build_program(courses, course.id))
+    program = with_statuses(
+        progress, course, user_id, build_program(courses, course.id), preview=preview
+    )
     return progress_of(program)

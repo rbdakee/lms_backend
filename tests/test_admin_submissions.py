@@ -234,7 +234,12 @@ def test_review_rework_writes_verdict_and_notification(client, client2, sms, sto
             text("SELECT type, params, user_id FROM notification")
         ).one()
     assert n_type == "submission_reviewed"
-    assert params == {"task_id": task.id, "course_id": course.id, "verdict": "rework"}
+    assert params == {
+        "task_id": task.id,
+        "task_title": task.title,
+        "course_id": course.id,
+        "verdict": "rework",
+    }
     assert n_user == uid
 
     # Учитель видит вердикт и может прислать доработку

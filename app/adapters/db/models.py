@@ -98,6 +98,22 @@ class Course(Base):
     starts_at: Mapped[datetime | None] = mapped_column(Date)
     # Строгий порядок прохождения: элемент открывается после предыдущего.
     strict_order: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Условия сертификата — настройка курса (DESIGN_BRIEF, редактор курса).
+    # Ни один флаг не включён — сертификат выдаётся сразу после выдачи доступа.
+    # Проходной балл сюда не переехал: он остаётся у теста (quiz.pass_score),
+    # иначе экран результата и чек-лист сертификата покажут разные числа.
+    cert_require_lessons: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    cert_require_tasks: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    cert_require_module_quizzes: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    cert_require_final_quiz: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (
@@ -356,8 +372,23 @@ class Certificate(Base):
     holder_name: Mapped[str] = mapped_column(Text)
     course_title: Mapped[str] = mapped_column(Text)
     hours: Mapped[int] = mapped_column(Integer)
+    # Язык тоже снимок: сертификат одноязычный, по языку версии курса (раздел 3).
+    lang: Mapped[str] = mapped_column(Text, default="ru", server_default="ru")
     issued_at: Mapped[datetime] = mapped_column(server_default=func.now())
     revoked_at: Mapped[datetime | None] = mapped_column()
+
+    __table_args__ = (
+        CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
+        # Двойной клик по «Получить сертификат» не должен выдавать два
+        # документа: единственность держит база, а не проверка в сценарии.
+        Index(
+            "uq_certificate_active",
+            "user_id",
+            "course_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
 
 
 class Session(Base):
@@ -372,6 +403,10 @@ class Session(Base):
     user_agent: Mapped[str] = mapped_column(Text, default="", server_default="")
     ip: Mapped[str | None] = mapped_column(Text)
     revoked_at: Mapped[datetime | None] = mapped_column()
+    # «Предпросмотр как учитель» — флаг сессии, а не кука: гарантия «ничего
+    # не записывается» серверная (раздел 12). Курс, а не весь кабинет: админ
+    # пришёл смотреть конкретный курс.
+    preview_course_id: Mapped[int | None] = mapped_column(ForeignKey("course.id"))
 
 
 class Notification(Base):
@@ -385,6 +420,9 @@ class Notification(Base):
     read_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
+    # Колокольчик всегда читается одним запросом: свои, свежие сверху.
+    __table_args__ = (Index("ix_notification_user_created", "user_id", "created_at"),)
+
 
 class ThreadMessage(Base):
     __tablename__ = "thread_message"
@@ -397,6 +435,10 @@ class ThreadMessage(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    # Ответы треда собираются по parent_id — без индекса это seq scan на каждый
+    # открытый урок.
+    __table_args__ = (Index("ix_thread_message_parent", "parent_id"),)
 
 
 class Review(Base):

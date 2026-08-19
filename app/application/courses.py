@@ -48,12 +48,15 @@ class CoursesService:
         leads: LeadRepo,
         enrollments: EnrollmentRepo,
         progress: ProgressRepo,
+        preview_course_id: int | None,
     ):
         self.courses = courses
         self.reviews = reviews
         self.leads = leads
         self.enrollments = enrollments
         self.progress = progress
+        # Курс, который админ смотрит «как учитель»: по нему ничего не пишется
+        self.preview_course_id = preview_course_id
 
     # -- каталог --------------------------------------------------------
 
@@ -153,7 +156,15 @@ class CoursesService:
         if self.enrollments.active_for(user.id, course.id) is None:
             raise ForbiddenError("Доступ к курсу не открыт")
         program = build_program(self.courses, course.id)
-        return {"program": with_statuses(self.progress, course, user.id, program)}
+        return {
+            "program": with_statuses(
+                self.progress,
+                course,
+                user.id,
+                program,
+                preview=course.id == self.preview_course_id,
+            )
+        }
 
     def _access(self, course: Course, user: User | None, program: list[dict]) -> dict:
         if user is None:
@@ -161,7 +172,15 @@ class CoursesService:
         if self.enrollments.active_for(user.id, course.id) is not None:
             return {
                 "state": "granted",
-                **progress_of(with_statuses(self.progress, course, user.id, program)),
+                **progress_of(
+                    with_statuses(
+                        self.progress,
+                        course,
+                        user.id,
+                        program,
+                        preview=course.id == self.preview_course_id,
+                    )
+                ),
             }
         lead = self.leads.open_for(user.id, course.id)
         if lead is not None:
@@ -196,6 +215,21 @@ class CoursesService:
         self._visible(course_id)
         if self.enrollments.active_for(user.id, course_id) is None:
             raise ForbiddenError("Отзыв может оставить только учитель с доступом к курсу")
+        if course_id == self.preview_course_id:
+            # Ранний выход: иначе на курсе появится отзыв от админа, а обещание
+            # режима — «вышел, и состояние как до входа» (BACKEND_NOTES, 12).
+            # Объект создан в памяти и в сессию SQLAlchemy не добавлен
+            return _review_out(
+                Review(
+                    id=0,
+                    course_id=course_id,
+                    user_id=user.id,
+                    rating=rating,
+                    text=text,
+                    created_at=now_utc(),
+                ),
+                user,
+            )
         # Премодерации нет: отзыв виден сразу, админ отвечает или удаляет постфактум
         review = self.reviews.create(course_id, user.id, rating, text)
         return _review_out(review, user)

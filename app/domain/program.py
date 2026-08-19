@@ -21,7 +21,11 @@ def item_key(item: dict) -> tuple[str, int]:
 
 
 def apply_statuses(
-    program: list[dict], done_keys: set[tuple[str, int]], *, strict_order: bool
+    program: list[dict],
+    done_keys: set[tuple[str, int]],
+    *,
+    strict_order: bool,
+    unlock_all: bool = False,
 ) -> list[dict]:
     """Копия программы, где у каждого элемента есть `status`.
 
@@ -29,9 +33,14 @@ def apply_statuses(
     курса, где статусов нет вовсе.
 
     Закрывают элемент два правила, и они складываются: строгий порядок курса
-    и итоговый тест, ждущий всех уроков.
+    и итоговый тест, ждущий всех уроков. `unlock_all` снимает оба сразу —
+    так смотрит курс админ в предпросмотре: прогресса у него нет, а пришёл
+    он на конкретный урок, и первым элементом дело не ограничится
+    (CONTRACT, сессия 6).
     """
-    lessons_left = any(
+    if unlock_all:
+        strict_order = False
+    lessons_left = not unlock_all and any(
         item_key(item) not in done_keys
         for module in program
         for item in module["items"]

@@ -21,6 +21,13 @@ class VerifyCodeIn(BaseModel):
     code: str = Field(max_length=10)
 
 
+class PreviewOut(BaseModel):
+    """Режим «Предпросмотр как учитель»: null — режим выключен. Клиентское
+    приложение узнаёт о режиме только отсюда (CONTRACT, сессия 6)."""
+
+    course_id: int
+
+
 class UserOut(BaseModel):
     id: int
     phone: str
@@ -39,9 +46,10 @@ class UserOut(BaseModel):
     is_admin: bool
     onboarding_done: bool
     created_at: datetime
+    preview: PreviewOut | None = None
 
     @classmethod
-    def from_user(cls, user: User) -> "UserOut":
+    def from_user(cls, user: User, preview_course_id: int | None = None) -> "UserOut":
         return cls(
             id=user.id,
             phone=user.phone,
@@ -60,6 +68,11 @@ class UserOut(BaseModel):
             is_admin=user.is_admin,
             onboarding_done=onboarding_done(user.first_name, user.last_name),
             created_at=user.created_at,
+            preview=(
+                PreviewOut(course_id=preview_course_id)
+                if preview_course_id is not None
+                else None
+            ),
         )
 
 
@@ -658,6 +671,12 @@ class LeadPatchIn(BaseModel):
     note: str | None = Field(None, max_length=2000)
 
 
+class PreviewEnterIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    course_id: int
+
+
 class EnrollmentIn(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -748,3 +767,343 @@ class SubmissionReviewIn(BaseModel):
     verdict: Literal["accepted", "rework"]
     # При rework обязателен — проверяет сценарий, текст отказа один на форму
     comment: str | None = Field(None, max_length=4000)
+
+
+# -- сертификаты -------------------------------------------------------
+
+
+ConditionStatus = Literal["not_started", "in_progress", "done"]
+
+
+class ConditionOut(BaseModel):
+    """Строка чек-листа. `done_count` — null, пока доступа к курсу нет:
+    до выдачи это просто список требований, живой прогресс появляется после."""
+
+    code: Literal["lessons", "tasks", "module_quizzes"]
+    label: str
+    status: ConditionStatus
+    done_count: int | None
+    # Считается по видимым элементам программы: скрытый урок в условие не входит
+    total_count: int
+
+
+class FinalQuizConditionOut(ConditionOut):
+    """У итогового теста в строке есть проходной балл; у тестов модулей его нет —
+    он свой у каждого теста (CONTRACT, сессия 6)."""
+
+    code: Literal["final_quiz"]
+    # null — условие включено, а самого итогового теста в программе ещё нет
+    pass_score: int | None
+
+
+CompletionConditionOut = Annotated[
+    ConditionOut | FinalQuizConditionOut, Field(discriminator="code")
+]
+
+
+class BlockerOut(BaseModel):
+    """Почему кнопка выдачи неактивна, хотя условия выполнены."""
+
+    code: Literal["attempt_in_progress"]
+    message: str
+
+
+class CertificateBriefOut(BaseModel):
+    """Уже выданный сертификат в чек-листе: ссылка на документ, не сам документ."""
+
+    id: int
+    number: str
+    issued_at: datetime
+
+
+class CompletionOut(BaseModel):
+    conditions: list[CompletionConditionOut]
+    can_issue: bool
+    # null — помех нет
+    blocker: BlockerOut | None
+    certificate: CertificateBriefOut | None
+
+
+class MyCertificateOut(BaseModel):
+    """Элемент списка `/certificates` — он же всё, что печатает `/certificates/{id}`:
+    отдельного эндпоинта за одним сертификатом нет."""
+
+    id: int
+    number: str
+    course_id: int
+    course_title: str
+    holder_name: str
+    hours: int
+    lang: str
+    issued_at: datetime
+
+
+class MyCertificatesOut(BaseModel):
+    items: list[MyCertificateOut]
+
+
+class CertificateOut(MyCertificateOut):
+    # Отозванный в кабинет не попадает, поэтому revoked_at есть только в ответе выдачи
+    revoked_at: datetime | None
+
+
+class VerifyOut(BaseModel):
+    """Публичная проверка: только то, что напечатано на бумаге — ни user_id,
+    ни course_id, ни id сертификата, ни ссылок в кабинет."""
+
+    status: Literal["valid", "revoked"]
+    number: str
+    holder_name: str
+    course_title: str
+    hours: int
+    issued_at: datetime
+    revoked_at: datetime | None
+
+
+# -- уведомления -------------------------------------------------------
+
+
+class NotificationOut(BaseModel):
+    id: int
+    type: Literal[
+        "access_granted", "submission_reviewed", "answer_posted", "certificate_issued"
+    ]
+    # Собран в момент чтения по языку учителя — в базе текста нет
+    text: str
+    # Отдаются рядом с текстом: из них фронт строит адрес перехода
+    params: dict
+    read_at: datetime | None
+    created_at: datetime
+
+
+class NotificationsPageOut(BaseModel):
+    items: list[NotificationOut]
+    # Сверх страницы: счётчик нужен шапке на каждом экране
+    unread_count: int
+    total: int
+    page: int
+    per_page: int
+
+
+class NotificationsReadIn(BaseModel):
+    """Ровно одно из двух полей: клик по уведомлению или «отметить все».
+    Что именно прислано — проверяет сценарий, ему же принадлежит текст отказа."""
+
+    model_config = {"extra": "forbid"}
+
+    # Потолок на список: экран отмечает то, что показал, а страница у него
+    # не длиннее сотни — миллион id в одном IN (...) сюда попасть не должен
+    ids: Annotated[list[int], Field(max_length=100)] | None = None
+    all: bool | None = None
+
+
+# -- вопросы под уроком ------------------------------------------------
+
+
+class ThreadReplyOut(BaseModel):
+    id: int
+    text: str
+    # «Фамилия Имя» собирает сервер; инициалы для аватара — забота фронта
+    author_name: str
+    # Синяя подпись и бейдж «Администратор»; берётся у автора при чтении
+    author_is_admin: bool
+    created_at: datetime
+
+
+class ThreadQuestionOut(ThreadReplyOut):
+    # Пустой список и есть признак «ждёт ответа»: отдельного статуса нет
+    replies: list[ThreadReplyOut]
+
+
+class QuestionsPageOut(BaseModel):
+    items: list[ThreadQuestionOut]
+    total: int
+    page: int
+    per_page: int
+
+
+class ThreadMessageIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    text: str = Field(max_length=2000)
+    # null — новый вопрос; id корня этого же урока — ответ в треде
+    parent_id: int | None = None
+
+
+# -- админка: очередь вопросов -----------------------------------------
+
+
+class QuestionTeacherOut(BaseModel):
+    id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+
+
+class QuestionCourseOut(BaseModel):
+    id: int
+    title: str
+
+
+class QuestionLessonOut(BaseModel):
+    id: int
+    # Сквозной номер урока среди видимых уроков курса: подпись «Урок 6 · …»
+    number: int
+    title: str
+
+
+class AdminQuestionOut(BaseModel):
+    id: int
+    text: str
+    created_at: datetime
+    teacher: QuestionTeacherOut
+    course: QuestionCourseOut
+    lesson: QuestionLessonOut
+    replies: list[ThreadReplyOut]
+
+
+class AdminQuestionsPageOut(BaseModel):
+    items: list[AdminQuestionOut]
+    total: int
+    page: int
+    per_page: int
+
+
+# -- админка: дашборд и отчёт по курсу ---------------------------------
+
+
+class OverviewTeacherOut(BaseModel):
+    """Учитель в списках дашборда: ни телефона, ни школы — за ними карточка
+    заявки. ФИО тремя полями, собирает его фронт."""
+
+    id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+
+
+class OverviewCourseOut(BaseModel):
+    id: int
+    title: str
+
+
+class OverviewLeadOut(BaseModel):
+    id: int
+    created_at: datetime
+    waiting_days: int
+    price_snapshot: int | None
+    teacher: OverviewTeacherOut
+    course: OverviewCourseOut
+
+
+class OverviewSubmissionOut(BaseModel):
+    id: int
+    created_at: datetime
+    waiting_days: int
+    teacher: OverviewTeacherOut
+    course: OverviewCourseOut
+    task: SubmissionTaskOut
+
+
+class OverviewQuestionOut(BaseModel):
+    id: int
+    text: str
+    created_at: datetime
+    teacher: OverviewTeacherOut
+    course: OverviewCourseOut
+    lesson: QuestionLessonOut
+
+
+class OverviewTotalsOut(BaseModel):
+    """Строка справочных чисел внизу экрана. Учителя — все, у кого не стоит
+    is_admin; курсы — версии, видимые в каталоге; сертификаты — действующие."""
+
+    teachers: int
+    courses_published: int
+    certificates: int
+
+
+class AdminOverviewOut(BaseModel):
+    # Полные счётчики плиток: их же показывают бейджи меню
+    leads_count: int
+    submissions_count: int
+    questions_count: int
+    # Списки — по 5 элементов, свежие сверху
+    leads: list[OverviewLeadOut]
+    submissions: list[OverviewSubmissionOut]
+    questions: list[OverviewQuestionOut]
+    totals: OverviewTotalsOut
+
+
+class ReportCourseOut(BaseModel):
+    id: int
+    lang: str
+    title: str
+
+
+class ReportSummaryOut(BaseModel):
+    """Средние — округлённые до целого; null, если считать не по кому."""
+
+    granted: int
+    started: int
+    completed: int
+    avg_progress_percent: int | None
+    avg_final_score: int | None
+    certificates: int
+    avg_days_to_complete: int | None
+
+
+class ReportFunnelItemOut(BaseModel):
+    # Все видимые элементы программы в сквозном порядке; какие показать —
+    # решает экран
+    kind: Literal["video", "text", "quiz", "task"]
+    id: int
+    number: int
+    title: str
+    # Сколько учителей этот элемент прошли
+    reached: int
+
+
+class ReportQuizScoreOut(BaseModel):
+    quiz_id: int
+    title: str
+    # null — не сдавал
+    score: int | None
+
+
+class ReportFinalQuizOut(BaseModel):
+    state: Literal["not_started", "in_progress", "passed", "failed"]
+    # Процент зачётной попытки
+    score: int | None
+
+
+class ReportParticipantOut(BaseModel):
+    user_id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+    school: str
+    region: str
+    progress_percent: int
+    # Баллы тестов модулей в порядке программы
+    module_quizzes: list[ReportQuizScoreOut]
+    final_quiz: ReportFinalQuizOut
+    # issued — выдан, ready — условия выполнены, in_progress — ещё нет
+    certificate: Literal["issued", "ready", "in_progress"]
+
+
+class ReportParticipantsPageOut(BaseModel):
+    items: list[ReportParticipantOut]
+    total: int
+    page: int
+    per_page: int
+
+
+class AdminReportOut(BaseModel):
+    course: ReportCourseOut
+    # Момент запроса: отчёт считается на лету и нигде не хранится
+    generated_at: datetime
+    summary: ReportSummaryOut
+    funnel: list[ReportFunnelItemOut]
+    # Участников на экране восемь сотен — они приходят страницами
+    participants: ReportParticipantsPageOut
