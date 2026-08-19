@@ -9,7 +9,11 @@ from app.config import get_settings
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: по умолчанию fileConfig гасит все уже
+    # заведённые логгеры, а миграции гоняются и внутри процесса приложения
+    # (в тестах — сессионной фикстурой). После такого выключения проверить,
+    # что персональных данных нет в логе, было бы нечем: лога нет вовсе.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # URL берём из настроек приложения: один источник и для сервиса, и для миграций
 config.set_main_option("sqlalchemy.url", get_settings().database_url)

@@ -1,3 +1,4 @@
+import secrets
 from datetime import timedelta
 from pathlib import Path
 from typing import Annotated
@@ -27,6 +28,7 @@ from app.adapters.db.repos import (
     QuizAdminRepo,
     ReviewRepo,
     SessionRepo,
+    SettingRepo,
     SubmissionRepo,
     TaskAdminRepo,
     TeacherAdminRepo,
@@ -36,9 +38,12 @@ from app.adapters.db.repos import (
 )
 from app.adapters.sms.log_sms import LogSms
 from app.adapters.storage.local_storage import LocalStorage
+from app.adapters.telegram.bot import TelegramBot
 from app.adapters.telegram.log_telegram import LogTelegram
+from app.application.admin_notify import AdminNotifier
 from app.application.auth import AuthService, hash_token
 from app.application.categories import CategoriesService
+from app.application.certificate_pdf import CertificatePdfService
 from app.application.certificates import CertificatesService
 from app.application.courses import CoursesService
 from app.application.courses_admin import CoursesAdminService
@@ -57,10 +62,12 @@ from app.application.quizzes_admin import QuizzesAdminService
 from app.application.ratelimit import SlidingWindowLimiter
 from app.application.reports import ReportsService
 from app.application.reviews_admin import ReviewsAdminService
+from app.application.settings import TELEGRAM_KEY, SettingsService
 from app.application.submissions_admin import SubmissionsAdminService
 from app.application.tasks import TasksService
 from app.application.tasks_admin import TasksAdminService
 from app.application.teachers_admin import TeachersAdminService
+from app.application.telegram_bind import TelegramBindService
 from app.application.users import UsersService
 from app.config import Settings, get_settings
 from app.domain.errors import BlockedError, ForbiddenError, UnauthorizedError
@@ -86,9 +93,30 @@ def get_sms() -> SmsPort:
     return LogSms()
 
 
-def get_telegram() -> TelegramPort:
-    # Провайдер пока один — заглушка; настоящий бот добавится строчкой конфигурации
-    return LogTelegram()
+def get_telegram(db: Annotated[DbSession, Depends(get_db)]) -> TelegramPort:
+    """Выбор адаптера — конфигурацией, а не `if` в месте вызова.
+
+    Настоящему боту нужен чат, куда слать «админам», а он лежит в настройках
+    площадки — отсюда зависимость от базы. Заглушке чат не нужен, и строку
+    настроек она не читает вовсе.
+    """
+    cfg = get_settings()
+    if cfg.telegram_provider == "log":
+        return LogTelegram()
+    if cfg.telegram_provider != "bot":
+        raise ValueError(f"Неизвестный провайдер Telegram: {cfg.telegram_provider}")
+    # chat_id приходит только от вебхука привязки: вписанный руками чужой чат —
+    # это заявки с телефонами учителей, ушедшие незнакомому человеку
+    return TelegramBot(cfg.telegram_bot_token, SettingRepo(db).get(TELEGRAM_KEY).get("chat_id"))
+
+
+def get_admin_notifier(
+    db: Annotated[DbSession, Depends(get_db)],
+    telegram: Annotated[TelegramPort, Depends(get_telegram)],
+) -> AdminNotifier:
+    """Уведомления админам идут через обёртку с флагами типов сообщений:
+    выключенный переключатель на экране обязан что-то значить."""
+    return AdminNotifier(telegram=telegram, settings=SettingRepo(db))
 
 
 def get_storage() -> StoragePort:
@@ -186,6 +214,22 @@ def get_current_admin(user: Annotated[User, Depends(get_current_user)]) -> User:
     if not user.is_admin:
         raise ForbiddenError("Доступно только администратору")
     return user
+
+
+def verify_telegram_secret(request: Request) -> None:
+    """Подлинность вебхука: заголовок сверяется с конфигурацией.
+
+    Пустой секрет в конфигурации означает «отвергать всё», а не «пускать
+    всех»: иначе привязка чужого чата открыта всему интернету, а вписать
+    туда свой chat_id — значит получать заявки с телефонами учителей.
+    Байты, а не строки: заголовок приходит снаружи и бывает не-ASCII.
+    """
+    cfg = get_settings()
+    header = request.headers.get("x-telegram-bot-api-secret-token") or ""
+    if not cfg.telegram_webhook_secret or not secrets.compare_digest(
+        header.encode(), cfg.telegram_webhook_secret.encode()
+    ):
+        raise ForbiddenError("Неверный секрет вебхука")
 
 
 def get_preview(
@@ -346,7 +390,7 @@ def get_certificates_service(
 def get_tasks_service(
     db: Annotated[DbSession, Depends(get_db)],
     storage: Annotated[StoragePort, Depends(get_storage)],
-    telegram: Annotated[TelegramPort, Depends(get_telegram)],
+    notifier: Annotated[AdminNotifier, Depends(get_admin_notifier)],
     enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
     preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
     repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
@@ -356,7 +400,7 @@ def get_tasks_service(
         submissions=SubmissionRepo(db),
         enrollments=enrollments,
         storage=storage,
-        telegram=telegram,
+        telegram=notifier,
         cfg=get_settings(),
         commit=db.commit,
         preview_course_id=preview_course_id,
@@ -416,7 +460,7 @@ def get_questions_service(
 
 def get_leads_service(
     db: Annotated[DbSession, Depends(get_db)],
-    telegram: Annotated[TelegramPort, Depends(get_telegram)],
+    notifier: Annotated[AdminNotifier, Depends(get_admin_notifier)],
     enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
     preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
     repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
@@ -427,7 +471,7 @@ def get_leads_service(
         leads=LeadRepo(db),
         enrollments=enrollments,
         notifications=NotificationRepo(db),
-        telegram=telegram,
+        telegram=notifier,
         commit=db.commit,
         preview_course_id=preview_course_id,
     )
@@ -499,6 +543,41 @@ def get_categories_service(db: Annotated[DbSession, Depends(get_db)]) -> Categor
     # Один сервис на публичный справочник и на его редактор: список категорий
     # у обоих один и тот же
     return CategoriesService(categories=CategoryRepo(db))
+
+
+def get_settings_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    storage: Annotated[StoragePort, Depends(get_storage)],
+) -> SettingsService:
+    # Хранилище нужно картинкам настроек: наличие объекта и его размер сервер
+    # берёт у него, а не у браузера
+    return SettingsService(settings=SettingRepo(db), storage=storage, cfg=get_settings())
+
+
+def get_certificate_pdf_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    storage: Annotated[StoragePort, Depends(get_storage)],
+    site: Annotated[SettingsService, Depends(get_settings_service)],
+) -> CertificatePdfService:
+    # Настоящий репозиторий, не подменённый предпросмотром: бумагой печатается
+    # выданный документ, а в режиме предпросмотра документов не заводится вовсе
+    return CertificatePdfService(
+        certificates=CertificateRepo(db),
+        settings=site,
+        storage=storage,
+        # Адрес страницы проверки для QR живёт в конфигурации, а не в настройках
+        # площадки: он про домен, а не про то, что правит админ
+        cfg=get_settings(),
+    )
+
+
+def get_telegram_bind_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    telegram: Annotated[TelegramPort, Depends(get_telegram)],
+) -> TelegramBindService:
+    # Порт напрямую, без флагов: привязка отвечает боту на его же команду,
+    # а тестовое сообщение админ послал сам — обоих переключатель не касается
+    return TelegramBindService(settings=SettingRepo(db), telegram=telegram, cfg=get_settings())
 
 
 def get_overview_service(db: Annotated[DbSession, Depends(get_db)]) -> OverviewService:

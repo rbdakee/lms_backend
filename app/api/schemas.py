@@ -1864,3 +1864,131 @@ class AdminCategoryIn(BaseModel):
     # Одно поле и на создание, и на переименование: order_index ставится
     # при создании, а courses_count считается, а не присылается
     title: str = Field(max_length=200)
+
+
+# -- настройки площадки ------------------------------------------------
+
+
+class SettingsImageOut(BaseModel):
+    """Картинка настроек: адрес публичной раздачи и имя файла. Ключ хранилища
+    наружу не уходит — как и у материалов урока."""
+
+    url: str
+    name: str
+
+
+class SettingsContactsOut(BaseModel):
+    """Контакты администратора: их подставляют в кнопку «Связаться
+    с администратором» и в подвал. Не заполняли — приходят пустые строки,
+    а не null: экран рисует поля всегда."""
+
+    name: str
+    phone: str
+    whatsapp: str
+    telegram: str
+    hours: str
+
+
+class AdminCertificateImagesOut(BaseModel):
+    # Слоты хранилища cert_logo | cert_sign | cert_stamp; null — не ставили
+    logo: SettingsImageOut | None
+    sign: SettingsImageOut | None
+    stamp: SettingsImageOut | None
+
+
+class AdminSettingsTelegramOut(BaseModel):
+    """Привязка бота. chat_id наружу не уходит — от него остаётся признак
+    connected и название чата, по которому админ узнаёт, куда идут заявки."""
+
+    connected: bool
+    chat_title: str | None
+    connected_at: datetime | None
+    notify_leads: bool
+    notify_submissions: bool
+
+
+class AdminSettingsOut(BaseModel):
+    """Настройки площадки одним ответом — все четыре вкладки экрана."""
+
+    platform_name: str
+    org_name: str
+    # Слот logo; null — логотип не ставили
+    logo: SettingsImageOut | None
+    contacts: SettingsContactsOut
+    certificate_images: AdminCertificateImagesOut
+    telegram: AdminSettingsTelegramOut
+
+
+class SettingsImageIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # key и name из ответа POST /files. Имя хранится рядом с ключом: ключи
+    # загрузки случайные нарочно, и админу досталось бы «9f3c1a7e.png»
+    key: str = Field(max_length=500)
+    name: str = Field(max_length=255)
+
+
+class SettingsContactsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Пустая строка стирает поле; null — то же, что поле не прислали
+    name: str | None = Field(None, max_length=200)
+    phone: str | None = Field(None, max_length=50)
+    whatsapp: str | None = Field(None, max_length=500)
+    telegram: str | None = Field(None, max_length=500)
+    hours: str | None = Field(None, max_length=200)
+
+
+class AdminCertificateImagesIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # null убирает картинку; поля, которого в запросе нет, правка не касается
+    logo: SettingsImageIn | None = None
+    sign: SettingsImageIn | None = None
+    stamp: SettingsImageIn | None = None
+
+
+class AdminSettingsTelegramIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Только флаги: chat_id этим PATCH не пишется никогда, привязку меняют
+    # своими ручками. Поля chat_id здесь нет вовсе, и extra: forbid отбивает
+    # попытку его прислать
+    notify_leads: bool | None = None
+    notify_submissions: bool | None = None
+
+
+class AdminSettingsPatchIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    platform_name: str | None = Field(None, max_length=200)
+    org_name: str | None = Field(None, max_length=300)
+    contacts: SettingsContactsIn | None = None
+    # null убирает логотип
+    logo: SettingsImageIn | None = None
+    certificate_images: AdminCertificateImagesIn | None = None
+    telegram: AdminSettingsTelegramIn | None = None
+
+
+class PublicSettingsOut(BaseModel):
+    """Публичный ответ без входа: только то, что лендинг и страница курса
+    показывают всем. Ни привязки бота, ни картинок сертификата, ни ключей
+    хранилища здесь нет — лишнее поле утекает наружу вместе с ответом."""
+
+    platform_name: str
+    org_name: str
+    # Адрес GET /branding/logo; null — логотип не ставили
+    logo_url: str | None
+    contacts: SettingsContactsOut
+
+
+class TelegramBindCodeOut(BaseModel):
+    """Код привязки и адрес бота. Админ отправляет боту `/start <код>`,
+    и chat_id записывает сервер, приняв сообщение: руками его не вписать
+    (CONTRACT, «Telegram-бот: привязка»)."""
+
+    code: str
+    bot_username: str
+    # Готовая ссылка «Открыть бота»: код в ней уже подставлен
+    deep_link: str
+    expires_at: datetime

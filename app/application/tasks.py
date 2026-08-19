@@ -26,8 +26,9 @@ from app.adapters.db.repos import (
     TaskRepo,
     now_utc,
 )
+from app.application.admin_notify import AdminNotifier
 from app.application.files import BAD_LINK, safe_name
-from app.application.ports import StoragePort, TelegramPort
+from app.application.ports import StoragePort
 from app.config import Settings
 from app.domain.errors import (
     FieldError,
@@ -116,7 +117,7 @@ class TasksService:
         submissions: SubmissionRepo,
         enrollments: EnrollmentRepo,
         storage: StoragePort,
-        telegram: TelegramPort,
+        telegram: AdminNotifier,
         cfg: Settings,
         commit: Callable[[], None],
         preview_course_id: int | None,
@@ -260,7 +261,8 @@ class TasksService:
             # Без ФИО и телефона: кто именно сдал, админ увидит в карточке
             self.telegram.notify_admins(
                 f"Работа №{submission.id} на проверку:"
-                f" задание „{task.title}“, курс „{course.title}“"
+                f" задание „{task.title}“, курс „{course.title}“",
+                kind="submission",
             )
         except Exception:
             log.exception("Telegram-уведомление о работе %s не ушло", submission.id)

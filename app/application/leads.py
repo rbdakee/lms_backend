@@ -16,7 +16,7 @@ from app.adapters.db.repos import (
     UserRepo,
     now_utc,
 )
-from app.application.ports import TelegramPort
+from app.application.admin_notify import AdminNotifier
 from app.domain.errors import (
     AlreadyEnrolledError,
     EnrollmentClosedError,
@@ -36,7 +36,7 @@ class LeadsService:
         leads: LeadRepo,
         enrollments: EnrollmentRepo,
         notifications: NotificationRepo,
-        telegram: TelegramPort,
+        telegram: AdminNotifier,
         commit: Callable[[], None],
         preview_course_id: int | None,
     ):
@@ -90,7 +90,9 @@ class LeadsService:
         self.commit()
         try:
             # Без ФИО и телефона: подробности админ откроет в админке
-            self.telegram.notify_admins(f"Новая заявка №{lead.id} на курс „{course.title}“")
+            self.telegram.notify_admins(
+                f"Новая заявка №{lead.id} на курс „{course.title}“", kind="lead"
+            )
         except Exception:
             log.exception("Telegram-уведомление о заявке %s не ушло", lead.id)
         return self._lead_out(lead)

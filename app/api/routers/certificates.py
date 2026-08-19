@@ -1,17 +1,22 @@
+import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 
 from app.adapters.db.models import User
+from app.adapters.pdf.certificate import render_certificate
 from app.api import deps
 from app.api.schemas import CertificateOut, CompletionOut, MyCertificatesOut, VerifyOut
+from app.application.certificate_pdf import CertificatePdfService
 from app.application.certificates import CertificatesService
 
 # Чек-лист и выдача висят на курсе, список — в кабинете учителя,
-# проверка подлинности живёт своим публичным адресом.
+# проверка подлинности живёт своим публичным адресом, а бумага — своим:
+# её открывает браузер, а не фронт.
 router = APIRouter(prefix="/courses")
 me_router = APIRouter(prefix="/me")
 verify_router = APIRouter(prefix="/verify")
+pdf_router = APIRouter(prefix="/certificates")
 
 
 @router.get("/{course_id}/completion")
@@ -50,3 +55,29 @@ def verify(
 ) -> VerifyOut:
     # Без входа: комиссия проверяет документ, не заводя аккаунта
     return VerifyOut(**svc.verify(number, deps.get_client_ip(request)))
+
+
+@pdf_router.get("/{certificate_id}/pdf")
+def certificate_pdf(
+    certificate_id: int,
+    user: Annotated[User, Depends(deps.get_current_user)],
+    svc: Annotated[CertificatePdfService, Depends(deps.get_certificate_pdf_service)],
+) -> Response:
+    # Сборка документа из данных сценария — это сериализация ответа, а не
+    # логика: свести снимок и картинки в байты роутеру можно
+    document, images, verify_url = svc.document(user, certificate_id)
+    return Response(
+        render_certificate(document, images, verify_url),
+        media_type="application/pdf",
+        headers={
+            # Номер только из ASCII (алфавит без похожих начертаний),
+            # поэтому filename* здесь не нужен. В кавычки уходят ровно те
+            # знаки, из которых номер и состоит: инвариант живёт в другом
+            # файле, и держать на нём разбор заголовка не стоит
+            "content-disposition": f'attachment; filename="{_file_name(document["number"])}.pdf"'
+        },
+    )
+
+
+def _file_name(number: str) -> str:
+    return re.sub(r"[^A-Za-z0-9-]", "", number) or "certificate"

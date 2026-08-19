@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import (
     ColumnElement,
+    Text,
     and_,
     delete,
     func,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     union_all,
     update,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
@@ -42,6 +44,7 @@ from app.adapters.db.models import (
     QuizAttempt,
     Review,
     Session,
+    Setting,
     Submission,
     Task,
     ThreadMessage,
@@ -930,6 +933,16 @@ class CertificateRepo:
         """Публичная проверка ищет по номеру и находит в том числе отозванный:
         запись в реестре есть, просто документ недействителен."""
         return self.db.scalar(select(Certificate).where(Certificate.number == number))
+
+    def by_id(self, certificate_id: int) -> Certificate | None:
+        """Документ по id — вместе с отозванным.
+
+        Печать отозванного запрещена, но отсеивает его сценарий, а не запрос:
+        отфильтруй `revoked_at` здесь — и 404 получался бы по случайности,
+        а не по решению, а чужой документ отвечал бы «не найден» вместо
+        отказа в праве.
+        """
+        return self.db.get(Certificate, certificate_id)
 
     def list_for_user(self, user_id: int) -> list[Certificate]:
         """Свои сертификаты, свежие сверху. Отозванные в кабинет не попадают."""
@@ -2769,3 +2782,70 @@ class CategoryRepo:
             .group_by(Course.category_id)
         )
         return dict(rows.all())
+
+
+class SettingRepo:
+    """Настройки площадки — таблица ключ-значение.
+
+    Колонок под настройки не заводим: их десяток, они разнородные и меняются
+    вместе с экраном (CONTRACT, GET /admin/settings). Значение строки —
+    словарь: `platform`, `contacts`, `branding`, `telegram`.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def get(self, key: str) -> dict:
+        """Значение по ключу; строки нет — пустой словарь. Отличать «не
+        настраивали» от «пусто» некому: экран рисует поля всегда."""
+        value = self.db.scalar(select(Setting.value).where(Setting.key == key))
+        # Копия, а не сама строка из базы: правку JSONB на месте SQLAlchemy
+        # не замечает, и такое изменение молча не сохранилось бы
+        return dict(value) if value else {}
+
+    def put(self, key: str, value: dict) -> None:
+        """Записать значение целиком. Upsert, а не «выбрать и обновить»:
+        первая же настройка приходит на несуществующую строку.
+
+        Годится там, где строку всегда пишут целиком — иначе `merge`: этот
+        затирает и те ключи, которых в `value` нет.
+        """
+        stmt = pg_insert(Setting).values(key=key, value=value)
+        self.db.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[Setting.key], set_={"value": stmt.excluded.value}
+            )
+        )
+
+    def merge(self, key: str, value: dict) -> None:
+        """Слить присланные ключи в значение строки, не трогая соседние.
+
+        Сливает сам Postgres (`||` у jsonb), а не «прочитать в питоне,
+        изменить, записать»: между чтением и записью влезает соседний
+        запрос, и «Отвязать» отменялось переключателем уведомлений с той же
+        вкладки — чат считался отвязанным, а `chat_id` оставался в базе.
+        Здесь каждый писатель трогает только свои ключи, и затереть чужие
+        нечем.
+        """
+        stmt = pg_insert(Setting).values(key=key, value=value)
+        self.db.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[Setting.key],
+                set_={"value": Setting.value.op("||", return_type=JSONB)(stmt.excluded.value)},
+            )
+        )
+
+    def unset(self, key: str, fields: tuple[str, ...]) -> None:
+        """Убрать перечисленные ключи из значения строки, не трогая соседние.
+
+        Обратная сторона `merge` и по той же причине: «Отвязать» и
+        переключатели уведомлений живут на одной вкладке экрана, а вычитание
+        (`-` у jsonb) делает сам Postgres.
+
+        Строки нет — убирать нечего: непривязанный бот отвязывается тем же
+        204, что и привязанный.
+        """
+        value: ColumnElement = Setting.value
+        for field in fields:
+            value = value.op("-", return_type=JSONB)(literal(field, Text))
+        self.db.execute(update(Setting).where(Setting.key == key).values(value=value))

@@ -122,9 +122,15 @@ def sms():
 class FakeTelegram:
     def __init__(self):
         self.sent: list[str] = []
+        # Ответы в конкретный чат: привязка бота отвечает туда, откуда пришла
+        # команда, — это не то же самое, что уведомление админам
+        self.to_chat: list[tuple[str, str]] = []
 
     def notify_admins(self, text: str) -> None:
         self.sent.append(text)
+
+    def send_to(self, chat_id: str, text: str) -> None:
+        self.to_chat.append((chat_id, text))
 
 
 @pytest.fixture
