@@ -2,6 +2,7 @@ from app.adapters.db.models import QuizAttempt, Submission
 from app.adapters.db.repos import now_utc
 from tests.conftest import (
     login,
+    login_admin,
     make_course,
     make_enrollment,
     make_lesson,
@@ -153,6 +154,72 @@ def test_program_hides_hidden_lesson(client, sms):
     access = client.get(f"/courses/{course.id}").json()["access"]
     assert access["total_count"] == 2
     assert access["done_count"] == 1
+
+
+def test_program_hides_hidden_quiz_and_task(client, sms):
+    course = make_course()
+    module = make_module(course.id)
+    make_lesson(module.id, title="Урок", order_index=1)
+    hidden_quiz = make_quiz(module.id, title="Скрытый тест", order_index=2, is_hidden=True)
+    hidden_task = make_task(module.id, title="Скрытое задание", order_index=3, is_hidden=True)
+
+    login(client, sms)
+    uid = user_id(client)
+    make_enrollment(uid, course.id)
+    # Скрытое человек успел пройти: правило одно на числитель и знаменатель —
+    # из обоих оно выпадает целиком, иначе проценты уедут
+    seed(QuizAttempt(user_id=uid, quiz_id=hidden_quiz.id, finished_at=now_utc(), passed=True))
+    seed(Submission(user_id=uid, task_id=hidden_task.id, status="accepted"))
+
+    program = client.get(f"/courses/{course.id}/program").json()["program"]
+    assert statuses(program) == [("Урок", "available")]
+
+    access = client.get(f"/courses/{course.id}").json()["access"]
+    assert access["total_count"] == 1
+    assert access["done_count"] == 0
+    assert access["progress_percent"] == 0
+
+
+def test_new_stub_does_not_show_up_in_an_open_course(client, client2, sms):
+    """Заготовка заводится скрытой. Курс, где уже учатся, правят на ходу,
+    и пустой урок появился бы у учителя в программе в ту же секунду:
+    открылся бы и не проигрался. Пустой тест хуже — он вошёл бы в условия
+    сертификата и отдавал бы 409 на попытку, то есть документ по курсу
+    перестал бы получать кто бы то ни было.
+    """
+    course = make_course(cert_require_lessons=True)
+    module = make_module(course.id)
+    lesson = make_lesson(module.id, title="Урок", order_index=1)
+    login(client, sms)
+    uid = user_id(client)
+    make_enrollment(uid, course.id)
+    make_progress(uid, lesson.id)
+
+    login_admin(client2, sms)
+    stub = client2.post(
+        f"/admin/modules/{module.id}/lessons",
+        json={"title": "Заготовка урока", "kind": "video", "time_required_min": 15},
+    ).json()
+    quiz_stub = client2.post(
+        f"/admin/modules/{module.id}/quizzes",
+        json={"title": "Заготовка теста", "time_required_min": 15,
+              "is_final": False, "pass_score": 70},
+    ).json()
+    task_stub = client2.post(
+        f"/admin/modules/{module.id}/tasks",
+        json={"title": "Заготовка задания", "time_required_min": 40},
+    ).json()
+    assert [item["is_hidden"] for item in (stub, quiz_stub, task_stub)] == [True] * 3
+
+    # У учителя программа не изменилась, и по прямой ссылке заготовки нет:
+    # скрытый элемент исчезает целиком, а не только из списка
+    program = client.get(f"/courses/{course.id}/program").json()["program"]
+    assert statuses(program) == [("Урок", "done")]
+    assert client.get(f"/lessons/{stub['id']}").status_code == 404
+    assert client.get(f"/quizzes/{quiz_stub['id']}").status_code == 404
+    assert client.get(f"/tasks/{task_stub['id']}").status_code == 404
+    # И условие сертификата пустая заготовка не ломает
+    assert client.get(f"/courses/{course.id}/completion").json()["can_issue"] is True
 
 
 def test_done_needs_counted_passed_attempt_and_accepted_task(client, sms):

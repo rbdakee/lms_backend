@@ -244,6 +244,24 @@ def test_playback_404_for_text_lesson(client, sms):
     assert client.get(f"/lessons/{text_lesson.id}/playback").status_code == 404
 
 
+def test_playback_404_for_text_lesson_with_leftover_link(client, sms):
+    """Редактор не стирает video_url при смене вида на текстовый, поэтому
+    ссылка от прежней жизни урока остаётся в базе. Плееру она не отдаётся:
+    playback пускает вид урока, а не наличие ссылки."""
+    course = make_course()
+    lesson = make_lesson(
+        make_module(course.id).id,
+        kind="text",
+        body={"html": "<p>Текст</p>"},
+        video_url="https://www.youtube.com/watch?v=kZ3vX1a9Qd0",
+    )
+    login(client, sms)
+    make_enrollment(user_id(client), course.id)
+
+    assert client.get(f"/lessons/{lesson.id}").status_code == 200
+    assert client.get(f"/lessons/{lesson.id}/playback").status_code == 404
+
+
 def test_playback_open_for_locked_lesson(client, sms):
     course = make_course(strict_order=True)
     module = make_module(course.id)

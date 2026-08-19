@@ -87,9 +87,12 @@ class LessonsService:
                 retry_after_sec=retry_after,
             )
         lesson, _ = self._accessible(user, lesson_id, denied=PLAYBACK_DENIED)
-        if lesson.video_url is None:
-            # Нет видео — нечего отдавать. Проверка после доступа: у чужого
-            # курса приходит 403, содержимое урока в отказ не просачивается
+        if lesson.kind != "video" or lesson.video_url is None:
+            # Нечего отдавать. Спрашиваем вид, а не одну ссылку: редактор
+            # не стирает video_url при смене вида на текстовый, и оставшаяся
+            # от прежней жизни ссылка не должна уходить в плеер.
+            # Проверка после доступа: у чужого курса приходит 403,
+            # содержимое урока в отказ не просачивается
             raise NotFoundError("Урок не найден")
         return {
             "provider": lesson.video_provider,

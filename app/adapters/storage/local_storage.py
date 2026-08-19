@@ -33,7 +33,14 @@ class LocalStorage:
         return size
 
     def size(self, key: str) -> int | None:
-        path = self._path(key)
+        # Сюда ключ приходит снаружи — из тела PATCH: «уводит за пределы
+        # каталога» для него значит «такого объекта нет», и сценарий отдаёт
+        # контрактное 404, а не 500. У save и read ключ наш собственный,
+        # и там выход за каталог остаётся исключением.
+        try:
+            path = self._path(key)
+        except ValueError:
+            return None
         return path.stat().st_size if path.is_file() else None
 
     def read(self, key: str) -> Iterator[bytes]:

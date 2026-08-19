@@ -11,6 +11,8 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pydantic-settings>=2.4",
     "python-multipart>=0.0.32",
+    "nh3>=0.3.6",
+    "fpdf2>=2.8.8",
 ]
 
 [dependency-groups]

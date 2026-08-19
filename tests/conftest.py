@@ -6,6 +6,8 @@ os.environ["DATABASE_URL"] = os.environ.get(
 )
 
 import itertools
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from alembic import command
@@ -17,6 +19,7 @@ from sqlalchemy.orm import Session as OrmSession
 from app.adapters.db.base import get_engine
 from app.adapters.db.models import (
     Base,
+    Category,
     Certificate,
     Course,
     Enrollment,
@@ -28,6 +31,7 @@ from app.adapters.db.models import (
     Option,
     Question,
     Quiz,
+    Review,
     Submission,
     Task,
     ThreadMessage,
@@ -66,11 +70,36 @@ def _migrated():
     command.upgrade(Config("alembic.ini"), "head")
 
 
+# Шесть категорий приезжают миграцией и в проде существуют всегда: на них
+# ссылается category_id у курса. TRUNCATE их сносит, поэтому каждый тест
+# начинается с них заново — иначе редактор курса отбивал бы category_id
+# у любой тестовой сцены, а GET /dictionaries отдавал пустой список.
+BASE_CATEGORIES = [
+    (1, "Цифровые навыки"),
+    (2, "Методика преподавания"),
+    (3, "Оценивание"),
+    (4, "Инклюзивное образование"),
+    (5, "Классное руководство"),
+    (6, "Предметные курсы"),
+]
+
+
 @pytest.fixture(autouse=True)
 def _clean_db(_migrated):
     tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
     with get_engine().begin() as conn:
         conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+        for number, (category_id, title) in enumerate(BASE_CATEGORIES, start=1):
+            conn.execute(
+                text(
+                    "INSERT INTO category (id, title, order_index)"
+                    " VALUES (:id, :title, :order_index)"
+                ),
+                {"id": category_id, "title": title, "order_index": number},
+            )
+        # Строки вставлены с явными id: без сдвига последовательности первая
+        # созданная в тесте категория упрётся в id = 1
+        conn.execute(text("SELECT setval('category_id_seq', (SELECT max(id) FROM category))"))
     yield
 
 
@@ -249,6 +278,33 @@ def login_admin(client, sms, phone=ADMIN_PHONE):
     return resp
 
 
+def meet_at(monkeypatch, cls, method):
+    """Сводит два запроса в одной точке: из `method` обе стороны выходят
+    одновременно, а дальше их разводит уже база.
+
+    Без этого гонку не воспроизвести: два запроса, пущенные просто рядом,
+    почти всегда успевают разойтись по времени, и тест ничего не ловит.
+    """
+    barrier = threading.Barrier(2, timeout=10)
+    real = getattr(cls, method)
+
+    def waiting(self, *args, **kw):
+        result = real(self, *args, **kw)
+        barrier.wait()
+        return result
+
+    monkeypatch.setattr(cls, method, waiting)
+
+
+def in_parallel(first, second):
+    """Два запроса в двух соединениях: каждый своим потоком, ответы —
+    в порядке аргументов. Соединение на запрос своё, потому что сессию БД
+    заводит get_db, а не тест."""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = [pool.submit(first), pool.submit(second)]
+        return [job.result() for job in jobs]
+
+
 def seed(obj):
     """Кладёт ORM-объект в базу напрямую: админских редакторов курсов ещё нет,
     тестовые данные готовятся мимо HTTP."""
@@ -361,6 +417,23 @@ def make_lead(user_id, course_id, **kw):
               "status": "new"}
     fields.update(kw)
     return seed(Lead(**fields))
+
+
+def make_review(user_id, course_id, **kw):
+    """Отзыв мимо HTTP: лента админа и модерация проверяют разбор отзыва,
+    а не право его оставить — доступ к курсу для этого не нужен."""
+    fields = {"user_id": user_id, "course_id": course_id, "rating": 5,
+              "text": "Наконец-то понятно, как объяснять оценки родителям."}
+    fields.update(kw)
+    return seed(Review(**fields))
+
+
+def make_category(title, **kw):
+    """Седьмая категория сверх базовых шести: нужна там, где проверяют
+    сам справочник, а не курс на нём."""
+    fields = {"title": title, "order_index": len(BASE_CATEGORIES) + 1}
+    fields.update(kw)
+    return seed(Category(**fields))
 
 
 def make_thread_message(lesson_id, course_id, user_id, **kw):

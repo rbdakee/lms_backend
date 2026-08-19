@@ -1,4 +1,12 @@
-from tests.conftest import login, make_course, make_enrollment, user_id
+from tests.conftest import (
+    login,
+    login_admin,
+    make_course,
+    make_enrollment,
+    make_review,
+    make_user,
+    user_id,
+)
 
 
 def test_reviews_empty(client):
@@ -79,3 +87,55 @@ def test_review_validates_rating(client, sms):
     resp = client.post(f"/courses/{course.id}/reviews", json={"rating": 6})
     assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "validation_error"
+
+
+def test_reply_comes_as_an_object(client, client2, sms):
+    """Ответ админа лежит у самого отзыва и приходит объектом
+    {text, created_at}: до сессии 7б в этом поле всегда стоял null,
+    потому что хранить ответ было негде. Имени отвечающего в нём нет —
+    на экране он подписан просто «Администратор»."""
+    course = make_course()
+    author = make_user(
+        "+77030000001",
+        last_name="Нурланова",
+        first_name="Айгуль",
+        middle_name="Сериковна",
+        school="КГУ «Школа-лицей №27»",
+        city="Алматы",
+    )
+    review = make_review(author.id, course.id, rating=5, text="Стало понятнее")
+    login_admin(client2, sms)
+    client2.post(f"/admin/reviews/{review.id}/reply", json={"text": "Спасибо!"})
+
+    body = client.get(f"/courses/{course.id}/reviews").json()
+    assert body["items"][0].pop("created_at")
+    assert body["items"][0]["reply"].pop("created_at")
+    assert body["items"][0] == {
+        "id": review.id,
+        "author_name": "Нурланова Айгуль Сериковна",
+        "school": "КГУ «Школа-лицей №27»",
+        "city": "Алматы",
+        "rating": 5,
+        "text": "Стало понятнее",
+        "reply": {"text": "Спасибо!"},
+    }
+
+
+def test_deleted_review_leaves_page_rating_and_breakdown(client, client2, sms):
+    """Удалённый админом отзыв не приходит наружу нигде: ни строкой, ни
+    в total, ни в средней, ни в разбивке по звёздам — числитель и знаменатель
+    считают по одним и тем же строкам."""
+    course = make_course()
+    first = make_user("+77030000002")
+    second = make_user("+77030000003")
+    make_review(first.id, course.id, rating=5)
+    removed = make_review(second.id, course.id, rating=1, text="Мало практики")
+
+    login_admin(client2, sms)
+    assert client2.delete(f"/admin/reviews/{removed.id}").status_code == 204
+
+    body = client.get(f"/courses/{course.id}/reviews").json()
+    assert [item["rating"] for item in body["items"]] == [5]
+    assert body["total"] == 1
+    assert body["rating"] == 5.0
+    assert body["breakdown"] == {"5": 1, "4": 0, "3": 0, "2": 0, "1": 0}

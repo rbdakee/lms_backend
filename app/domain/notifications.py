@@ -30,6 +30,12 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Сертификат по курсу «{course_title}» готов",
         "kz": "«{course_title}» курсы бойынша сертификат дайын",
     },
+    # Без этого письма человек не узнает, что тест снова открыт, и будет
+    # считать курс потерянным (CONTRACT, сессия 7б)
+    "retake_allowed": {
+        "ru": "Открыта пересдача теста «{quiz_title}»",
+        "kz": "«{quiz_title}» тестін қайта тапсыруға рұқсат берілді",
+    },
 }
 
 # Ключ params, ради которого в шаблоне стоят кавычки.
@@ -38,6 +44,7 @@ TITLE_PARAM: dict[str, str] = {
     "submission_reviewed": "task_title",
     "answer_posted": "lesson_title",
     "certificate_issued": "course_title",
+    "retake_allowed": "quiz_title",
 }
 
 # Запасные шаблоны — без названия. Уведомления, записанные до сессии 6,
@@ -59,6 +66,10 @@ TEXTS_WITHOUT_TITLE: dict[str, dict[str, str]] = {
     "certificate_issued": {
         "ru": "Сертификат по курсу готов",
         "kz": "Курс бойынша сертификат дайын",
+    },
+    "retake_allowed": {
+        "ru": "Открыта пересдача теста",
+        "kz": "Тестті қайта тапсыруға рұқсат берілді",
     },
 }
 

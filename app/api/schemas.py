@@ -552,6 +552,14 @@ class ReviewIn(BaseModel):
     text: str = Field("", max_length=2000)
 
 
+class ReviewReplyOut(BaseModel):
+    """Ответ администратора на отзыв. Имени отвечающего здесь нет —
+    на экране он подписан просто «Администратор»."""
+
+    text: str
+    created_at: datetime
+
+
 class ReviewOut(BaseModel):
     id: int
     author_name: str
@@ -560,8 +568,8 @@ class ReviewOut(BaseModel):
     rating: int
     text: str
     created_at: datetime
-    # Ответа админа в модели данных пока нет — поле всегда null (см. CONTRACT.md)
-    reply: None = None
+    # null — админ на отзыв не отвечал
+    reply: ReviewReplyOut | None = None
 
 
 class ReviewsPageOut(BaseModel):
@@ -865,8 +873,13 @@ class VerifyOut(BaseModel):
 
 class NotificationOut(BaseModel):
     id: int
+    # retake_allowed добавлен в сессии 7б — вместе с кнопкой «Разрешить пересдачу»
     type: Literal[
-        "access_granted", "submission_reviewed", "answer_posted", "certificate_issued"
+        "access_granted",
+        "submission_reviewed",
+        "answer_posted",
+        "certificate_issued",
+        "retake_allowed",
     ]
     # Собран в момент чтения по языку учителя — в базе текста нет
     text: str
@@ -1107,3 +1120,747 @@ class AdminReportOut(BaseModel):
     funnel: list[ReportFunnelItemOut]
     # Участников на экране восемь сотен — они приходят страницами
     participants: ReportParticipantsPageOut
+
+
+# -- админка: список курсов и редактор курса ---------------------------
+
+
+class AdminCourseVersionOut(BaseModel):
+    """Соседняя языковая версия той же группы: переключатель РУС|ҚАЗ ведёт
+    и на черновик, поэтому статус приходит вместе с языком."""
+
+    id: int
+    lang: str
+    status: str
+
+
+class AdminCourseOut(BaseModel):
+    """Строка списка курсов — версия, а не группа: редактируют версию."""
+
+    id: int
+    group_id: int
+    lang: str
+    title: str
+    cover: str | None
+    category_id: int
+    hours: int
+    # null — «Цена по запросу»
+    price: int | None
+    status: str
+    starts_at: date | None
+    modules_count: int
+    # Скрытые уроки тоже: админ считает то, что в курсе есть
+    lessons_count: int
+    # Заявки в работе: new | contacted | paid
+    open_leads_count: int
+    students_count: int
+    completed_count: int
+    # Двигает любая правка курса или его программы
+    updated_at: datetime
+    versions: list[AdminCourseVersionOut]
+
+
+class AdminCoursesPageOut(BaseModel):
+    items: list[AdminCourseOut]
+    total: int
+    page: int
+    per_page: int
+
+
+class AdminProgramLessonOut(ProgramLessonOut):
+    # Скрыт от учителей; is_ready — есть ли содержимое; has_data — есть ли
+    # чужой прогресс, попытки или сдачи: по нему меню показывает «Скрыть»
+    # вместо «Удалить», не дожидаясь ответа сервера
+    is_hidden: bool
+    is_ready: bool
+    has_data: bool
+
+
+class AdminProgramQuizOut(ProgramQuizOut):
+    # Скрытый тест исчезает у учителя целиком, а админу приходит с is_hidden:
+    # true — иначе спрятанное нечем достать обратно
+    is_hidden: bool
+    is_ready: bool
+    has_data: bool
+
+
+class AdminProgramTaskOut(ProgramTaskOut):
+    is_hidden: bool
+    is_ready: bool
+    has_data: bool
+
+
+AdminProgramItemOut = Annotated[
+    AdminProgramLessonOut | AdminProgramQuizOut | AdminProgramTaskOut,
+    Field(discriminator="kind"),
+]
+
+
+class AdminProgramModuleOut(BaseModel):
+    id: int
+    title: str
+    items: list[AdminProgramItemOut]
+
+
+class ReadinessCheckOut(BaseModel):
+    """Пункт чек-листа «Публикация»: `code` — для ветвления, `text` — готовая
+    строка по-русски, `items` — названия, которых не хватает."""
+
+    code: str
+    ok: bool
+    text: str
+    items: list[str]
+
+
+class ReadinessOut(BaseModel):
+    # Две кнопки вкладки «Публикация» с разными требованиями: набор открывают
+    # готовому курсу, а запланированный публикуют пустым — ему нужна только
+    # дата старта
+    can_open: bool
+    can_plan: bool
+    items: list[ReadinessCheckOut]
+
+
+class AdminCourseCardOut(BaseModel):
+    """Редактор курса целиком: четыре вкладки экрана живут этим ответом."""
+
+    id: int
+    group_id: int
+    lang: str
+    title: str
+    short: str
+    full: str
+    cover: str | None
+    category_id: int
+    hours: int
+    duration_text: str | None
+    price: int | None
+    status: str
+    starts_at: date | None
+    strict_order: bool
+    cert_require_lessons: bool
+    cert_require_tasks: bool
+    cert_require_module_quizzes: bool
+    cert_require_final_quiz: bool
+    created_at: datetime
+    updated_at: datetime
+    # Есть ли хоть один действующий доступ: по нему экран показывает
+    # предупреждение о правках курса, где уже учатся
+    has_students: bool
+    # Сумма time_required_min по видимым элементам
+    program_minutes: int
+    versions: list[AdminCourseVersionOut]
+    program: list[AdminProgramModuleOut]
+    readiness: ReadinessOut
+
+
+class AdminCourseIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Четыре поля, без которых курс нечем показать даже в списке. status
+    # не принимается: только что созданный курс — черновик
+    title: str = Field(max_length=200)
+    lang: Literal["ru", "kz"]
+    category_id: int
+    hours: int = Field(ge=1, le=999)
+
+
+class AdminCoursePatchIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    title: str | None = Field(None, max_length=200)
+    short: str | None = Field(None, max_length=500)
+    full: str | None = Field(None, max_length=20000)
+    # null — обложки нет
+    cover: str | None = Field(None, max_length=500)
+    category_id: int | None = None
+    hours: int | None = Field(None, ge=1, le=999)
+    duration_text: str | None = Field(None, max_length=100)
+    # null — «Цена по запросу»
+    price: int | None = Field(None, ge=0)
+    # Публикация — это тот же PATCH со сменой статуса, отдельной ручки нет
+    status: Literal["draft", "planned", "open", "closed", "hidden"] | None = None
+    # Дата без времени; у запланированного курса обязательна
+    starts_at: date | None = None
+    strict_order: bool | None = None
+    cert_require_lessons: bool | None = None
+    cert_require_tasks: bool | None = None
+    cert_require_module_quizzes: bool | None = None
+    cert_require_final_quiz: bool | None = None
+
+
+class CourseVersionIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    lang: Literal["ru", "kz"]
+    # Чекбокс «Скопировать структуру программы как заготовку»
+    copy_program: bool = False
+
+
+class ModuleIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    title: str = Field(max_length=200)
+
+
+class ProgramOrderItemIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # video и text оба означают урок, но приходят как есть: фронт шлёт обратно
+    # то, что получил
+    kind: Literal["video", "text", "quiz", "task"]
+    id: int
+
+
+class ProgramOrderModuleIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    id: int
+    items: list[ProgramOrderItemIn]
+
+
+class ProgramOrderIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Дерево приходит целиком: неполное отбивается, иначе перетаскивание
+    # потеряет элемент, о котором экран не знал
+    modules: list[ProgramOrderModuleIn]
+
+
+class AdminProgramOut(BaseModel):
+    program: list[AdminProgramModuleOut]
+    program_minutes: int
+
+
+# -- админка: редактор урока -------------------------------------------
+
+
+class AdminLessonCourseOut(BaseModel):
+    """Хлебная крошка шапки редактора: lang рисует метку языка курса —
+    переключателя языка в уроке нет."""
+
+    id: int
+    lang: str
+    title: str
+
+
+class AdminLessonModuleOut(BaseModel):
+    id: int
+    title: str
+
+
+class AdminLessonOut(BaseModel):
+    """Редактор урока. От учительского GET /lessons/{id} отличается тремя
+    вещами: приходит video_url, приходит скрытый урок и урок невидимого курса,
+    а вместо is_completed — админские признаки."""
+
+    id: int
+    module_id: int
+    course: AdminLessonCourseOut
+    module: AdminLessonModuleOut
+    title: str
+    kind: Literal["video", "text"]
+    # Разметка после чистки сервером; null — заметки под видео нет
+    body: dict | None
+    # Учителю ссылку не отдают никогда — только подписанный playback;
+    # null — заготовка, ссылку ещё не вписали
+    video_url: str | None
+    duration_label: str | None
+    time_required_min: int
+    is_hidden: bool
+    is_ready: bool
+    has_data: bool
+    # Материалы по order_index; ключа хранилища здесь нет, как и везде
+    files: list[LessonFileOut]
+
+
+class LessonBodyIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Объект с единственным ключом html: форма зафиксирована в CONTRACT.md.
+    # Лишние теги вырезаются молча — отбивать сохранение из-за вставки
+    # из Word бессмысленно
+    html: str = Field(max_length=100000)
+
+
+class AdminLessonIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Заготовка: название, вид и требуемое время. Содержимого нет — оно
+    # появится в редакторе, куда фронт уводит сразу после создания
+    title: str = Field(max_length=200)
+    kind: Literal["video", "text"]
+    time_required_min: int = Field(ge=0, le=600)
+
+
+class AdminLessonPatchIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    title: str | None = Field(None, max_length=200)
+    kind: Literal["video", "text"] | None = None
+    # null — стереть заметку под видео; у текстового урока пустой html — 422
+    body: LessonBodyIn | None = None
+    # Принимаются все обычные написания ссылки, сохраняется нормализованное
+    video_url: str | None = Field(None, max_length=500)
+    # Длительность вводится руками: по чужой ссылке она ненадёжна
+    duration_label: str | None = Field(None, max_length=20)
+    time_required_min: int | None = Field(None, ge=0, le=600)
+    is_hidden: bool | None = None
+
+
+class LessonFileIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # key из ответа POST /files и имя, которое увидит учитель. Размер сервер
+    # берёт из хранилища, mime — из имени
+    key: str = Field(max_length=500)
+    name: str = Field(max_length=255)
+
+
+# -- админка: редактор теста -------------------------------------------
+
+
+class AdminQuizCourseOut(BaseModel):
+    """Хлебная крошка шапки редактора: lang рисует метку языка курса —
+    переключателя языка в тесте нет."""
+
+    id: int
+    lang: str
+    title: str
+
+
+class AdminQuizModuleOut(BaseModel):
+    id: int
+    title: str
+
+
+class AdminQuizOptionOut(BaseModel):
+    id: int
+    text: str
+    # Верный ответ уходит наружу только здесь и в разборе своей попытки
+    is_correct: bool
+
+
+class AdminQuizQuestionOut(BaseModel):
+    id: int
+    type: QuestionType
+    text: str
+    # null — пояснения нет, блок на экране не рисуется
+    explanation: str | None
+    points: int
+    # Скрытый вопрос приходит как обычная строка: админ должен видеть,
+    # что он спрятал, — в max_score такой вопрос не считается
+    is_hidden: bool
+    # Попадал ли этот вопрос в состав хотя бы одной попытки: по нему экран
+    # рисует замок, не дожидаясь 409
+    has_attempts: bool
+    options: list[AdminQuizOptionOut]
+
+
+class AdminQuizOut(BaseModel):
+    """Редактор теста. От учительского GET /quizzes/{id} отличается тем, что
+    здесь приходят правильные ответы и пояснения, приходит скрытый тест
+    и тест невидимого курса, а вместо состояния попытки — админские признаки."""
+
+    id: int
+    module_id: int
+    course: AdminQuizCourseOut
+    module: AdminQuizModuleOut
+    title: str
+    is_final: bool
+    pass_score: int
+    # null — таймера нет, попытка не истекает
+    time_limit_min: int | None
+    shuffle: bool
+    show_review: bool
+    retakable: bool
+    time_required_min: int
+    is_hidden: bool
+    # Были ли по тесту попытки вообще: по ним запрещено удаление
+    has_attempts: bool
+    # Сумма баллов по нескрытым вопросам — то же число, что видит учитель
+    max_score: int
+    questions: list[AdminQuizQuestionOut]
+
+
+class AdminQuizIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Заготовка: название, время и то, без чего строки в базе не существует.
+    # Вопросы появятся в редакторе, куда фронт уводит сразу после создания
+    title: str = Field(max_length=200)
+    time_required_min: int = Field(ge=0, le=600)
+    # Итоговый в курсе один: заготовка с is_final отбивается так же, как PATCH
+    is_final: bool = False
+    pass_score: int = Field(ge=1, le=100)
+
+
+class AdminQuizPatchIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    title: str | None = Field(None, max_length=200)
+    is_final: bool | None = None
+    pass_score: int | None = Field(None, ge=1, le=100)
+    # null — таймера нет: переключатель «Таймер» и есть выбор между null и числом
+    time_limit_min: int | None = Field(None, ge=1, le=600)
+    shuffle: bool | None = None
+    show_review: bool | None = None
+    retakable: bool | None = None
+    time_required_min: int | None = Field(None, ge=0, le=600)
+    is_hidden: bool | None = None
+
+
+class QuizOptionIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    text: str = Field(max_length=500)
+    is_correct: bool = False
+
+
+class QuizQuestionIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    type: QuestionType
+    text: str = Field(max_length=2000)
+    explanation: str | None = Field(None, max_length=2000)
+    points: int = Field(1, ge=1, le=100)
+    # Варианты приходят вместе с вопросом: варианта без вопроса не бывает,
+    # а двумя запросами в базе оставались бы вопросы без ответов
+    options: list[QuizOptionIn]
+
+
+class QuizQuestionPatchIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    type: QuestionType | None = None
+    text: str | None = Field(None, max_length=2000)
+    # null — стереть пояснение
+    explanation: str | None = Field(None, max_length=2000)
+    points: int | None = Field(None, ge=1, le=100)
+    is_hidden: bool | None = None
+    # Полным списком, заменяют прежние: частичной правки одного варианта нет
+    options: list[QuizOptionIn] | None = None
+
+
+# -- админка: редактор задания -----------------------------------------
+
+
+class AdminTaskCourseOut(BaseModel):
+    id: int
+    lang: str
+    title: str
+
+
+class AdminTaskModuleOut(BaseModel):
+    id: int
+    title: str
+
+
+class AdminTaskOut(BaseModel):
+    """Редактор задания. От учительского GET /tasks/{id} отличается тем же,
+    чем редактор урока: приходит задание невидимого курса, а вместо истории
+    сдач — админские признаки."""
+
+    id: int
+    module_id: int
+    course: AdminTaskCourseOut
+    module: AdminTaskModuleOut
+    title: str
+    # Условие после чистки сервером; у заготовки — пустой html
+    statement: dict
+    # Так же, как учителю: имя, размер и тип, без ключа хранилища
+    template_file: TemplateFileOut | None
+    submit_format: Literal["text", "file", "both"]
+    # Пустой список — принимается любое расширение
+    allowed_ext: list[str]
+    max_size_mb: int
+    time_required_min: int
+    is_hidden: bool
+    is_ready: bool
+    has_data: bool
+
+
+class AdminTaskIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Заготовка: название и требуемое время. Условие появится в редакторе
+    title: str = Field(max_length=200)
+    time_required_min: int = Field(ge=0, le=600)
+
+
+class TaskStatementIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Объект с единственным ключом html, как у урока: форма зафиксирована
+    # в CONTRACT.md, а лишние теги вырезаются молча
+    html: str = Field(max_length=100000)
+
+
+class TaskTemplateIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # key из ответа POST /files. Имя приходит с экрана, но в базе у задания
+    # одна колонка — ключ хранилища, и наружу имя берётся из него же
+    key: str = Field(max_length=500)
+    name: str = Field(max_length=255)
+
+
+class AdminTaskPatchIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    title: str | None = Field(None, max_length=200)
+    # Колонка обязательная, поэтому null здесь — «не прислано», а не «стереть»:
+    # пустое условие присылают объектом с пустым html
+    statement: TaskStatementIn | None = None
+    # null — убрать шаблон у задания
+    template_file: TaskTemplateIn | None = None
+    submit_format: Literal["text", "file", "both"] | None = None
+    # Расширения без точки и в нижнем регистре; пустой список — ограничения нет
+    allowed_ext: list[str] | None = Field(None, max_length=20)
+    # Верхнюю границу проверяет сценарий: потолок у загрузки свой, и текст
+    # ошибки называет именно его
+    max_size_mb: int | None = Field(None, ge=1)
+    time_required_min: int | None = Field(None, ge=0, le=600)
+    is_hidden: bool | None = None
+
+
+# -- админка: учителя и карточка учителя -------------------------------
+
+
+class AdminTeacherOut(BaseModel):
+    """Строка списка учителей. Столбцов «последний вход» и «активность» здесь
+    нет: чтобы они были правдой, пришлось бы писать в базу на каждое движение
+    учителя (DESIGN_BRIEF, 5.22)."""
+
+    id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+    phone: str
+    school: str
+    region: str
+    city: str
+    subject: str
+    # Действующие доступы, завершённые курсы и документы на руках:
+    # отозванный сертификат в счёт не идёт
+    courses_count: int
+    completed_count: int
+    certificates_count: int
+    is_blocked: bool
+    created_at: datetime
+
+
+class AdminTeachersPageOut(BaseModel):
+    items: list[AdminTeacherOut]
+    total: int
+    page: int
+    per_page: int
+
+
+class AdminTeacherCourseOut(BaseModel):
+    id: int
+    lang: str
+    title: str
+
+
+class AdminTeacherEnrollmentOut(BaseModel):
+    """Строка вкладки «Курсы» — по строке на доступ, включая отозванные:
+    прогресс и результаты при закрытии доступа не удаляются."""
+
+    enrollment_id: int
+    course: AdminTeacherCourseOut
+    granted_at: datetime
+    granted_by_admin: bool
+    # Комментарий выдачи: сумма, способ, дата — для истории. null — оплату
+    # не отмечали
+    paid_note: str | None
+    # Заполнены — доступ закрыт / курс завершён
+    revoked_at: datetime | None
+    completed_at: datetime | None
+    # Счётчик именно уроков; процент считается по всем видимым элементам
+    # программы — так же, как в кабинете учителя и в отчёте по курсу
+    lessons_done: int
+    lessons_total: int
+    progress_percent: int
+
+
+class AdminTeacherAttemptOut(BaseModel):
+    id: int
+    started_at: datetime
+    # Пусто — попытка идёт прямо сейчас, балла у неё ещё нет
+    finished_at: datetime | None
+    score: int | None
+    passed: bool | None
+    is_counted: bool
+    # Заполнены у попытки, с которой сняли зачёт при выдаче пересдачи
+    uncounted_reason: str | None
+    uncounted_at: datetime | None
+
+
+class AdminTeacherQuizOut(BaseModel):
+    """Строка вкладки «Тесты»: тест и все попытки человека по нему.
+
+    `retake_blocker` объясняет отказ заранее, чтобы экран не показывал живую
+    кнопку, которая ответит 409; коды те же, что у ошибок пересдачи.
+    """
+
+    quiz_id: int
+    title: str
+    course_id: int
+    course_title: str
+    retakable: bool
+    pass_score: int
+    can_allow_retake: bool
+    retake_blocker: (
+        Literal["quiz_retakable", "no_attempt", "attempt_in_progress", "certificate_issued"]
+        | None
+    )
+    attempts: list[AdminTeacherAttemptOut]
+
+
+class AdminTeacherSubmissionOut(BaseModel):
+    id: int
+    task_id: int
+    task_title: str
+    course_id: int
+    status: Literal["pending", "accepted", "rework"]
+    created_at: datetime
+    # null — работа ещё в очереди
+    reviewed_at: datetime | None
+
+
+class AdminTeacherCertificateOut(BaseModel):
+    id: int
+    number: str
+    course_id: int
+    # Снимок на момент выдачи, а не текущее название курса
+    course_title: str
+    hours: int
+    issued_at: datetime
+    # Заполнено — документ отозван
+    revoked_at: datetime | None
+
+
+class AdminTeacherCardOut(BaseModel):
+    """Карточка учителя: профиль и четыре вкладки одним ответом. Пагинации
+    здесь нет — у одного человека курсов, тестов, работ и документов заведомо
+    немного, и экран её не рисует."""
+
+    id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+    phone: str
+    email: str
+    school: str
+    position: str
+    region: str
+    city: str
+    subject: str
+    # null — стаж не указан
+    experience: int | None
+    lang: str
+    is_admin: bool
+    is_blocked: bool
+    created_at: datetime
+    courses: list[AdminTeacherEnrollmentOut]
+    quizzes: list[AdminTeacherQuizOut]
+    submissions: list[AdminTeacherSubmissionOut]
+    certificates: list[AdminTeacherCertificateOut]
+
+
+class AdminTeacherPatchIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Два действия карточки: «Заблокировать» и «Изменить номер телефона».
+    # Номер нормализуется к +7XXXXXXXXXX, как при входе, и отзывает все
+    # сессии этого человека
+    is_blocked: bool | None = None
+    phone: str | None = Field(None, max_length=20)
+
+
+class TeacherRetakeIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    quiz_id: int
+    # Причина обязательна: она остаётся в истории попытки, и по ней потом
+    # разбирают, почему зачёт снят. Пустую строку отбивает сценарий
+    reason: str = Field(max_length=2000)
+
+
+# -- админка: отзывы и модерация ---------------------------------------
+
+
+class AdminReviewCourseOut(BaseModel):
+    id: int
+    lang: str
+    title: str
+
+
+class AdminReviewTeacherOut(BaseModel):
+    """Автор отзыва: ФИО тремя полями, как в заявках и очереди работ,
+    плюс школа и город — по ним админ узнаёт человека в ленте."""
+
+    id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+    school: str
+    city: str
+
+
+class AdminReviewOut(BaseModel):
+    """Строка ленты отзывов. Премодерации нет — отзыв виден на странице курса
+    сразу, поэтому «неопубликованных» здесь не бывает, а удалённые в ленту
+    не попадают вовсе."""
+
+    id: int
+    rating: int
+    text: str
+    created_at: datetime
+    # Правки отзыва учителем в продукте нет — поле остаётся null
+    updated_at: datetime | None
+    course: AdminReviewCourseOut
+    teacher: AdminReviewTeacherOut
+    # null — админ на отзыв не отвечал
+    reply: ReviewReplyOut | None
+
+
+class AdminReviewsPageOut(BaseModel):
+    items: list[AdminReviewOut]
+    total: int
+    page: int
+    per_page: int
+
+
+class ReviewReplyIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Повторный вызов меняет ответ — на экране это «Изменить ответ»,
+    # отдельной ручки правки нет. Пустую строку отбивает сценарий
+    text: str = Field(max_length=2000)
+
+
+# -- админка: категории курсов -----------------------------------------
+
+
+class AdminCategoryOut(BaseModel):
+    id: int
+    title: str
+    order_index: int
+    # Все версии курса, включая черновики: по этому числу решают,
+    # можно ли категорию удалить
+    courses_count: int
+
+
+class AdminCategoriesOut(BaseModel):
+    # Без пагинации: категорий единицы
+    items: list[AdminCategoryOut]
+
+
+class AdminCategoryIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Одно поле и на создание, и на переименование: order_index ставится
+    # при создании, а courses_count считается, а не присылается
+    title: str = Field(max_length=200)

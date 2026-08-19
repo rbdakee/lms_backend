@@ -115,6 +115,9 @@ class Course(Base):
         Boolean, default=False, server_default="false"
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Столбец «Изменён» в списке курсов. Двигают его и правки самого курса,
+    # и правки программы: для методиста курс — это дерево целиком.
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("group_id", "lang"),
@@ -141,7 +144,10 @@ class Lesson(Base):
     module_id: Mapped[int] = mapped_column(ForeignKey("module.id"), index=True)
     title: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(Text)  # video | text
-    body: Mapped[dict | None] = mapped_column(JSONB)
+    # none_as_null: «содержимого нет» в базе должно быть одним значением.
+    # По умолчанию None ложится JSON-ом null, и проверка kind_content отличает
+    # его от SQL NULL — заготовка урока перестала бы сохраняться.
+    body: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     video_url: Mapped[str | None] = mapped_column(Text)
     video_provider: Mapped[str] = mapped_column(Text, default="youtube", server_default="youtube")
     duration_label: Mapped[str | None] = mapped_column(Text)
@@ -153,8 +159,11 @@ class Lesson(Base):
     __table_args__ = (
         CheckConstraint("kind IN ('video', 'text')", name="kind"),
         # kind=video: video_url обязателен; kind=text: обязателен body.
+        # Третья ветка — заготовка из окна «Добавить в программу»: содержимого
+        # у неё нет вовсе, и появится оно в редакторе (CONTRACT, сессия 7а).
         CheckConstraint(
-            "(kind = 'video' AND video_url IS NOT NULL) OR (kind = 'text' AND body IS NOT NULL)",
+            "(kind = 'video' AND video_url IS NOT NULL) OR (kind = 'text' AND body IS NOT NULL)"
+            " OR (video_url IS NULL AND body IS NULL)",
             name="kind_content",
         ),
     )
@@ -189,6 +198,8 @@ class Quiz(Base):
     retakable: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     time_required_min: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     order_index: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Тест с попытками не удаляется, а скрывается (раздел 10).
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
 
 class Question(Base):
@@ -227,6 +238,9 @@ class Task(Base):
     title: Mapped[str] = mapped_column(Text)
     statement: Mapped[dict] = mapped_column(JSONB)
     template_file: Mapped[str | None] = mapped_column(Text)
+    # Имя, которое видит учитель. Из ключа его не вывести: ключи POST /files
+    # случайные нарочно, имя от человека в них не попадает (files.py).
+    template_file_name: Mapped[str | None] = mapped_column(Text)
     submit_format: Mapped[str] = mapped_column(Text, default="both", server_default="both")
     allowed_ext: Mapped[list[str]] = mapped_column(
         ARRAY(Text), default=list, server_default="{}"
@@ -234,6 +248,8 @@ class Task(Base):
     max_size_mb: Mapped[int] = mapped_column(Integer, default=20, server_default="20")
     time_required_min: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     order_index: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Задание со сдачами не удаляется, а скрывается (раздел 10).
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     __table_args__ = (
         CheckConstraint("submit_format IN ('text', 'file', 'both')", name="submit_format"),
@@ -293,6 +309,11 @@ class QuizAttempt(Base):
         ARRAY(BigInteger), default=list, server_default="{}"
     )
     is_counted: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # «Разрешить пересдачу» снимает зачёт с попытки, а не удаляет её: админу
+    # нужна история, и по правилу проекта у действия админа хранится actor_id.
+    uncounted_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
+    uncounted_reason: Mapped[str | None] = mapped_column(Text)
+    uncounted_at: Mapped[datetime | None] = mapped_column()
 
     # Одна зачётная попытка — гарантия базы, а не проверка в коде: двойной
     # клик по «Начать тест» упирается в этот индекс.
@@ -435,6 +456,10 @@ class ThreadMessage(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Админ может удалить любое сообщение (DESIGN_BRIEF, 5.24); мягко,
+    # по той же причине, что и отзыв.
+    deleted_at: Mapped[datetime | None] = mapped_column()
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
 
     # Ответы треда собираются по parent_id — без индекса это seq scan на каждый
     # открытый урок.
@@ -451,8 +476,27 @@ class Review(Base):
     text: Mapped[str] = mapped_column(Text, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column()
+    # Ответ админа лежит у самого отзыва: он один, и вторых уровней у него
+    # не бывает — в отличие от вопросов под уроком.
+    reply_text: Mapped[str | None] = mapped_column(Text)
+    reply_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
+    reply_at: Mapped[datetime | None] = mapped_column()
+    # Удаление мягкое: у действий админа хранится actor_id (backend/CLAUDE.md).
+    deleted_at: Mapped[datetime | None] = mapped_column()
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
 
     __table_args__ = (CheckConstraint("rating BETWEEN 1 AND 5", name="rating"),)
+
+
+class Category(Base):
+    """Категории курсов. До сессии 7б жили константами в domain/dictionaries.py —
+    редактора для них не было, а бриф (5.25) его обещает."""
+
+    __tablename__ = "category"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    title: Mapped[str] = mapped_column(Text, unique=True)
+    order_index: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class Setting(Base):

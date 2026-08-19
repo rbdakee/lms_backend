@@ -6,6 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.errors import register_error_handlers
 from app.api.routers import (
     admin,
+    admin_categories,
+    admin_courses,
+    admin_lessons,
+    admin_quizzes,
+    admin_reviews,
+    admin_tasks,
+    admin_teachers,
     auth,
     certificates,
     courses,
@@ -56,6 +63,13 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router)
     app.include_router(files.router)
     app.include_router(admin.router)
+    app.include_router(admin_courses.router)
+    app.include_router(admin_lessons.router)
+    app.include_router(admin_quizzes.router)
+    app.include_router(admin_tasks.router)
+    app.include_router(admin_teachers.router)
+    app.include_router(admin_reviews.router)
+    app.include_router(admin_categories.router)
     app.include_router(questions.admin_router)
     app.include_router(preview.router)
     return app

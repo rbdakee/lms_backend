@@ -6,6 +6,8 @@
 по-русски, `details` — данные для экрана (сколько попыток осталось и т.п.).
 """
 
+from app.domain.plural import plural
+
 
 class AppError(Exception):
     status = 400
@@ -106,8 +108,8 @@ class CertificateIssuedError(AppError):
     status = 409
     code = "certificate_issued"
 
-    def __init__(self):
-        super().__init__("Сертификат уже выдан — результаты теста изменить нельзя")
+    def __init__(self, message: str = "Сертификат уже выдан — результаты теста изменить нельзя"):
+        super().__init__(message)
 
 
 class QuizEmptyError(AppError):
@@ -268,8 +270,8 @@ class AttemptInProgressError(AppError):
     status = 409
     code = "attempt_in_progress"
 
-    def __init__(self):
-        super().__init__("Завершите начатый тест — он ещё может изменить зачёт")
+    def __init__(self, message: str = "Завершите начатый тест — он ещё может изменить зачёт"):
+        super().__init__(message)
 
 
 class ProfileIncompleteError(AppError):
@@ -281,3 +283,210 @@ class ProfileIncompleteError(AppError):
 
     def __init__(self):
         super().__init__("Заполните фамилию и имя — они печатаются на сертификате")
+
+
+# Правки курса, где уже учатся (BACKEND_NOTES, раздел 10). Все пятеро говорят
+# одно и то же разными словами: у этой строки есть чужие данные. Отдельные
+# коды нужны потому, что дальше экран предлагает разное — скрыть, создать
+# новый или не трогать вовсе.
+
+
+class HasProgressError(AppError):
+    """Урок с чьим-то прогрессом не удаляется, а скрывается: иначе «12 из 18»
+    превратится в «12 из 17», а условия сертификата выполнятся сами собой."""
+
+    status = 409
+    code = "has_progress"
+
+    def __init__(self, progress_count: int):
+        super().__init__(
+            f"Урок {plural(progress_count, 'прошёл', 'прошли', 'прошли')} "
+            f"{progress_count} {plural(progress_count, 'человек', 'человека', 'человек')}"
+            " — его можно скрыть, но не удалить",
+            details={"progress_count": progress_count},
+        )
+
+
+class HasAttemptsError(AppError):
+    """Вопрос, попавший в состав попытки, не редактируется: разбор ответов
+    покажет человеку то, чего он не видел. Тот же код — у теста с попытками,
+    там он запрещает удаление."""
+
+    status = 409
+    code = "has_attempts"
+
+    def __init__(self, message: str, attempts_count: int):
+        super().__init__(message, details={"attempts_count": attempts_count})
+
+
+class HasSubmissionsError(AppError):
+    """Задание со сдачами не удаляется: работы людей ссылались бы в пустоту."""
+
+    status = 409
+    code = "has_submissions"
+
+    def __init__(self, submissions_count: int):
+        super().__init__(
+            f"На задание сдали {submissions_count} "
+            f"{plural(submissions_count, 'работу', 'работы', 'работ')}"
+            " — удалить его нельзя",
+            details={"submissions_count": submissions_count},
+        )
+
+
+class CourseInUseError(AppError):
+    """Курс, которого кто-то коснулся, не удаляется: строка отчёта, ведущая
+    на несуществующий курс, дороже лишней кнопки в меню."""
+
+    status = 409
+    code = "course_in_use"
+
+    def __init__(self, *, enrollments: int, leads: int, certificates: int):
+        super().__init__(
+            "Курс нельзя удалить: "
+            f"{enrollments} {plural(enrollments, 'доступ', 'доступа', 'доступов')}, "
+            f"{leads} {plural(leads, 'заявка', 'заявки', 'заявок')}, "
+            f"{certificates} {plural(certificates, 'сертификат', 'сертификата', 'сертификатов')}",
+            details={
+                "enrollments": enrollments,
+                "leads": leads,
+                "certificates": certificates,
+            },
+        )
+
+
+class ModuleInUseError(AppError):
+    """Что именно держит модуль — уходит списком: иначе методист удаляет
+    элементы наугад, пока не угадает."""
+
+    status = 409
+    code = "module_in_use"
+
+    def __init__(self, items: list[dict]):
+        super().__init__(
+            "В модуле есть элементы с чужими данными — сначала разберитесь с ними",
+            details={"items": items},
+        )
+
+
+# Состояния редактора курса: вторая языковая версия и итоговый тест.
+
+
+class VersionExistsError(AppError):
+    """Версий на одном языке в группе не бывает — так устроен уникальный
+    индекс (group_id, lang), и переключатель РУС|ҚАЗ на этом держится."""
+
+    status = 409
+    code = "version_exists"
+
+    def __init__(self, message: str, course_id: int):
+        super().__init__(message, details={"course_id": course_id})
+
+
+class FinalQuizExistsError(AppError):
+    """Итоговый тест в курсе один: отчёт берёт первый попавшийся, а чек-лист
+    сертификата пишет «Сдать итоговый тест» в единственном числе."""
+
+    status = 409
+    code = "final_quiz_exists"
+
+    def __init__(self, title: str, quiz_id: int):
+        super().__init__(
+            f"Итоговый тест в курсе уже есть: «{title}»",
+            details={"quiz_id": quiz_id},
+        )
+
+
+# Карточка учителя: блокировка, смена номера, пересдача.
+
+
+class PhoneTakenError(AppError):
+    """Номер уникален: вход идёт по нему, и два человека на одном номере —
+    это два человека, входящих друг за друга."""
+
+    status = 409
+    code = "phone_taken"
+
+    def __init__(self, user_id: int):
+        super().__init__("Этот номер уже у другого учителя", details={"user_id": user_id})
+
+
+class SelfBlockError(AppError):
+    """Иначе платформа остаётся без администратора, а чинить это будет некому:
+    заблокированный не войдёт и снять блокировку с себя не сможет."""
+
+    status = 409
+    code = "self_block"
+
+    def __init__(self):
+        super().__init__("Нельзя заблокировать самого себя")
+
+
+class QuizRetakableError(AppError):
+    """У пересдаваемого теста попыток не ограничено — разрешать нечего."""
+
+    status = 409
+    code = "quiz_retakable"
+
+    def __init__(self):
+        super().__init__("Тест и так пересдаваемый — попыток не ограничено")
+
+
+class NoAttemptError(AppError):
+    status = 409
+    code = "no_attempt"
+
+    def __init__(self):
+        super().__init__("Человек ещё не проходил этот тест")
+
+
+# Настройки платформы: категории и бот.
+
+
+class CategoryInUseError(AppError):
+    """category_id у курса обязателен: осиротевший курс исчезнет из каталога."""
+
+    status = 409
+    code = "category_in_use"
+
+    def __init__(self, message: str, courses_count: int):
+        super().__init__(message, details={"courses_count": courses_count})
+
+
+class CategoryExistsError(AppError):
+    status = 409
+    code = "category_exists"
+
+    def __init__(self, category_id: int):
+        super().__init__("Такая категория уже есть", details={"category_id": category_id})
+
+
+class BotNotConfiguredError(AppError):
+    """Токен бота живёт в конфигурации сервиса, а не в настройках платформы:
+    это ключ доступа, и его место рядом с паролем базы, а не в админке."""
+
+    status = 409
+    code = "bot_not_configured"
+
+    def __init__(self):
+        super().__init__("Бот не настроен на сервере — задайте токен в конфигурации")
+
+
+class TelegramNotConnectedError(AppError):
+    status = 409
+    code = "telegram_not_connected"
+
+    def __init__(self):
+        super().__init__("Бот не подключён — сначала привяжите чат")
+
+
+class TelegramFailedError(AppError):
+    """Единственное место, где сбой доставки виден админу: он сам нажал
+    «отправить тестовое». Настоящие уведомления так себя не ведут — заявка
+    пишется в базу до отправки и недоступный бот ей не мешает."""
+
+    status = 502
+    code = "telegram_failed"
+
+    def __init__(self):
+        super().__init__("Telegram не принял сообщение — попробуйте позже")

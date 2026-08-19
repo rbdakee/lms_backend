@@ -15,15 +15,21 @@ from app.adapters.db.preview import (
 from app.adapters.db.repos import (
     AttemptRepo,
     AuthCodeRepo,
+    CategoryRepo,
     CertificateRepo,
+    CourseAdminRepo,
     CourseRepo,
     EnrollmentRepo,
     LeadRepo,
+    LessonAdminRepo,
     NotificationRepo,
     ProgressRepo,
+    QuizAdminRepo,
     ReviewRepo,
     SessionRepo,
     SubmissionRepo,
+    TaskAdminRepo,
+    TeacherAdminRepo,
     ThreadMessageRepo,
     UserRepo,
     now_utc,
@@ -32,11 +38,14 @@ from app.adapters.sms.log_sms import LogSms
 from app.adapters.storage.local_storage import LocalStorage
 from app.adapters.telegram.log_telegram import LogTelegram
 from app.application.auth import AuthService, hash_token
+from app.application.categories import CategoriesService
 from app.application.certificates import CertificatesService
 from app.application.courses import CoursesService
+from app.application.courses_admin import CoursesAdminService
 from app.application.files import FilesService
 from app.application.leads import LeadsService
 from app.application.lessons import LessonsService
+from app.application.lessons_admin import LessonsAdminService
 from app.application.notifications import NotificationsService
 from app.application.overview import OverviewService
 from app.application.ports import SmsPort, StoragePort, TelegramPort
@@ -44,10 +53,14 @@ from app.application.preview import Preview, PreviewService
 from app.application.preview_quiz import PreviewAttemptStore, SessionAttempts
 from app.application.questions import QuestionsService
 from app.application.quizzes import QuizzesService
+from app.application.quizzes_admin import QuizzesAdminService
 from app.application.ratelimit import SlidingWindowLimiter
 from app.application.reports import ReportsService
+from app.application.reviews_admin import ReviewsAdminService
 from app.application.submissions_admin import SubmissionsAdminService
 from app.application.tasks import TasksService
+from app.application.tasks_admin import TasksAdminService
+from app.application.teachers_admin import TeachersAdminService
 from app.application.users import UsersService
 from app.config import Settings, get_settings
 from app.domain.errors import BlockedError, ForbiddenError, UnauthorizedError
@@ -418,6 +431,74 @@ def get_leads_service(
         commit=db.commit,
         preview_course_id=preview_course_id,
     )
+
+
+def get_courses_admin_service(
+    db: Annotated[DbSession, Depends(get_db)],
+) -> CoursesAdminService:
+    # Настоящий репозиторий, а не подменённый предпросмотром: редактор
+    # показывает курс как он есть, в любом статусе
+    return CoursesAdminService(courses=CourseAdminRepo(db), categories=CategoryRepo(db))
+
+
+def get_lessons_admin_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    storage: Annotated[StoragePort, Depends(get_storage)],
+) -> LessonsAdminService:
+    # Настоящие репозитории, не подменённые предпросмотром: редактор правит
+    # урок в любом статусе курса, в том числе скрытый
+    return LessonsAdminService(
+        lessons=LessonAdminRepo(db), courses=CourseAdminRepo(db), storage=storage
+    )
+
+
+def get_quizzes_admin_service(
+    db: Annotated[DbSession, Depends(get_db)],
+) -> QuizzesAdminService:
+    # Настоящие репозитории, не подменённые предпросмотром: редактор правит
+    # тест в любом статусе курса, вместе со скрытыми вопросами
+    return QuizzesAdminService(quizzes=QuizAdminRepo(db), courses=CourseAdminRepo(db))
+
+
+def get_tasks_admin_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    storage: Annotated[StoragePort, Depends(get_storage)],
+) -> TasksAdminService:
+    # Хранилище нужно файлу-шаблону: размер и наличие объекта сервер берёт
+    # у него, а не у браузера
+    return TasksAdminService(
+        tasks=TaskAdminRepo(db),
+        courses=CourseAdminRepo(db),
+        storage=storage,
+        cfg=get_settings(),
+    )
+
+
+def get_teachers_admin_service(
+    db: Annotated[DbSession, Depends(get_db)],
+) -> TeachersAdminService:
+    # Настоящие репозитории, не подменённые предпросмотром: карточка учителя
+    # показывает его доступы и попытки как они есть, а не глазами режима
+    return TeachersAdminService(
+        users=UserRepo(db),
+        teachers=TeacherAdminRepo(db),
+        quizzes=QuizAdminRepo(db),
+        enrollments=EnrollmentRepo(db),
+        attempts=AttemptRepo(db),
+        certificates=CertificateRepo(db),
+        sessions=SessionRepo(db),
+        notifications=NotificationRepo(db),
+    )
+
+
+def get_reviews_admin_service(db: Annotated[DbSession, Depends(get_db)]) -> ReviewsAdminService:
+    return ReviewsAdminService(reviews=ReviewRepo(db))
+
+
+def get_categories_service(db: Annotated[DbSession, Depends(get_db)]) -> CategoriesService:
+    # Один сервис на публичный справочник и на его редактор: список категорий
+    # у обоих один и тот же
+    return CategoriesService(categories=CategoryRepo(db))
 
 
 def get_overview_service(db: Annotated[DbSession, Depends(get_db)]) -> OverviewService:

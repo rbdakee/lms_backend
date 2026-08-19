@@ -5,7 +5,19 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import ColumnElement, and_, func, literal, or_, select, tuple_, union, update
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    delete,
+    func,
+    literal,
+    or_,
+    select,
+    tuple_,
+    union,
+    union_all,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
@@ -14,6 +26,7 @@ from sqlalchemy.orm import aliased
 from app.adapters.db.models import (
     Answer,
     AuthCode,
+    Category,
     Certificate,
     Course,
     Enrollment,
@@ -180,6 +193,17 @@ class SessionRepo:
     def revoke(self, session: Session) -> None:
         session.revoked_at = now_utc()
 
+    def revoke_all(self, user_id: int) -> int:
+        """Все сессии человека разом — смена номера телефона в админке.
+        Старая симка у него уже не в руках, и живая сессия на ней чужая
+        (CONTRACT, сессия 7б)."""
+        result = self.db.execute(
+            update(Session)
+            .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+            .values(revoked_at=now_utc())
+        )
+        return result.rowcount
+
     def revoke_others(self, user_id: int, keep_id: uuid.UUID) -> int:
         result = self.db.execute(
             update(Session)
@@ -267,13 +291,15 @@ class CourseRepo(CourseVisibility):
         """Средняя и число оценок по языковой группе — {group_id: (avg, count)}.
 
         В расчёт идёт последний отзыв каждого автора (BACKEND_NOTES, раздел 13),
-        чтобы один человек не влиял на среднюю трижды.
+        чтобы один человек не влиял на среднюю трижды. Удалённый админом
+        отзыв не идёт ни в среднюю, ни в счётчик на карточке: наружу он
+        не приходит нигде, и число под звёздами обязано это повторять.
         """
         latest = (
             select(Course.group_id.label("group_id"), Review.rating.label("rating"))
             .select_from(Review)
             .join(Course, Course.id == Review.course_id)
-            .where(Course.group_id.in_(group_ids))
+            .where(Course.group_id.in_(group_ids), Review.deleted_at.is_(None))
             .distinct(Course.group_id, Review.user_id)
             .order_by(
                 Course.group_id, Review.user_id, Review.created_at.desc(), Review.id.desc()
@@ -296,32 +322,48 @@ class CourseRepo(CourseVisibility):
             )
         )
 
-    def lessons(self, course_id: int) -> list[Lesson]:
+    def lessons(self, course_id: int, *, include_hidden: bool = False) -> list[Lesson]:
+        """Уроки курса по порядку. По умолчанию видимые: скрытого урока
+        у учителя нет ни в программе, ни в процентах.
+
+        `include_hidden` — для чек-листа условий сертификата: он отбирает
+        скрытое по своему правилу, а не по одному только флагу, и решает это
+        сам (`application/certificates.py`). То же у `quizzes` и `tasks`.
+        """
+        conds = [Module.course_id == course_id]
+        if not include_hidden:
+            conds.append(Lesson.is_hidden.is_(False))
         return list(
             self.db.scalars(
                 select(Lesson)
                 .join(Module, Module.id == Lesson.module_id)
-                .where(Module.course_id == course_id, Lesson.is_hidden.is_(False))
+                .where(*conds)
                 .order_by(Lesson.order_index, Lesson.id)
             )
         )
 
-    def quizzes(self, course_id: int) -> list[Quiz]:
+    def quizzes(self, course_id: int, *, include_hidden: bool = False) -> list[Quiz]:
+        conds = [Module.course_id == course_id]
+        if not include_hidden:
+            conds.append(Quiz.is_hidden.is_(False))
         return list(
             self.db.scalars(
                 select(Quiz)
                 .join(Module, Module.id == Quiz.module_id)
-                .where(Module.course_id == course_id)
+                .where(*conds)
                 .order_by(Quiz.order_index, Quiz.id)
             )
         )
 
-    def tasks(self, course_id: int) -> list[Task]:
+    def tasks(self, course_id: int, *, include_hidden: bool = False) -> list[Task]:
+        conds = [Module.course_id == course_id]
+        if not include_hidden:
+            conds.append(Task.is_hidden.is_(False))
         return list(
             self.db.scalars(
                 select(Task)
                 .join(Module, Module.id == Task.module_id)
-                .where(Module.course_id == course_id)
+                .where(*conds)
                 .order_by(Task.order_index, Task.id)
             )
         )
@@ -418,13 +460,14 @@ class QuizRepo(CourseVisibility):
         self.db = db
 
     def visible_with_course(self, quiz_id: int) -> tuple[Quiz, Course] | None:
-        """Тест вместе с курсом: доступ проверяется по курсу. Своего is_hidden
-        у теста нет — прячет его только невидимый курс."""
+        """Тест вместе с курсом: доступ проверяется по курсу. Скрытый тест
+        и невидимый курс — как будто теста нет: спрятанный элемент исчезает
+        у учителя целиком, а не только из программы."""
         row = self.db.execute(
             select(Quiz, Course)
             .join(Module, Module.id == Quiz.module_id)
             .join(Course, Course.id == Module.course_id)
-            .where(Quiz.id == quiz_id, self.visible_course())
+            .where(Quiz.id == quiz_id, Quiz.is_hidden.is_(False), self.visible_course())
         ).first()
         return (row[0], row[1]) if row is not None else None
 
@@ -647,13 +690,14 @@ class TaskRepo(CourseVisibility):
         self.db = db
 
     def visible_with_course(self, task_id: int) -> tuple[Task, Course] | None:
-        """Задание вместе с курсом: доступ проверяется по курсу. Своего
-        is_hidden у задания нет — прячет его только невидимый курс."""
+        """Задание вместе с курсом: доступ проверяется по курсу. Скрытое
+        задание и невидимый курс — как будто задания нет: спрятанный элемент
+        исчезает у учителя целиком, а не только из программы."""
         row = self.db.execute(
             select(Task, Course)
             .join(Module, Module.id == Task.module_id)
             .join(Course, Course.id == Module.course_id)
-            .where(Task.id == task_id, self.visible_course())
+            .where(Task.id == task_id, Task.is_hidden.is_(False), self.visible_course())
         ).first()
         return (row[0], row[1]) if row is not None else None
 
@@ -960,7 +1004,12 @@ class CertificateRepo:
 
     def unfinished_attempt(self, user_id: int, course_id: int) -> bool:
         """Идёт ли по курсу незавершённая попытка теста: её finish ещё может
-        поменять зачёт, поэтому выдача ждёт (CONTRACT, сессия 6)."""
+        поменять зачёт, поэтому выдача ждёт (CONTRACT, сессия 6).
+
+        Попытка скрытого теста ждать не заставляет: её finish в чек-листе
+        уже ничего не поменяет, а брошенная попытка висит незавершённой
+        вечно — человек остался бы без документа навсегда.
+        """
         return (
             self.db.scalar(
                 select(QuizAttempt.id)
@@ -969,6 +1018,7 @@ class CertificateRepo:
                 .where(
                     Module.course_id == course_id,
                     QuizAttempt.user_id == user_id,
+                    Quiz.is_hidden.is_(False),
                     QuizAttempt.finished_at.is_(None),
                 )
                 .limit(1)
@@ -981,28 +1031,36 @@ class ProgressRepo:
     def __init__(self, db: DbSession):
         self.db = db
 
-    def done_keys(self, user_id: int, course_id: int) -> set[tuple[str, int]]:
+    def done_keys(
+        self, user_id: int, course_id: int, *, include_hidden: bool = False
+    ) -> set[tuple[str, int]]:
         """Пройденное в курсе — ключами («lesson» | «quiz» | «task», id):
         отмеченные уроки, тесты со сданной зачётной попыткой, зачтённые задания.
-        Скрытый урок выпадает и из done, и из total — проценты не ломаются.
+
+        По умолчанию только видимое: программа и проценты считаются по нему,
+        и скрытый элемент выпадает разом из done и из total. `include_hidden`
+        нужен чек-листу условий сертификата: пройденное скрытие не отбирает,
+        и решает это домен (`application/certificates.py`).
         """
+        lesson_conds = [Module.course_id == course_id, LessonProgress.user_id == user_id]
+        quiz_conds = [Module.course_id == course_id, QuizAttempt.user_id == user_id]
+        task_conds = [Module.course_id == course_id, Submission.user_id == user_id]
+        if not include_hidden:
+            lesson_conds.append(Lesson.is_hidden.is_(False))
+            quiz_conds.append(Quiz.is_hidden.is_(False))
+            task_conds.append(Task.is_hidden.is_(False))
         lessons = self.db.scalars(
             select(LessonProgress.lesson_id)
             .join(Lesson, Lesson.id == LessonProgress.lesson_id)
             .join(Module, Module.id == Lesson.module_id)
-            .where(
-                Module.course_id == course_id,
-                LessonProgress.user_id == user_id,
-                Lesson.is_hidden.is_(False),
-            )
+            .where(*lesson_conds)
         )
         quizzes = self.db.scalars(
             select(QuizAttempt.quiz_id)
             .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
             .join(Module, Module.id == Quiz.module_id)
             .where(
-                Module.course_id == course_id,
-                QuizAttempt.user_id == user_id,
+                *quiz_conds,
                 # Незавершённая и незачётная попытки тест не проходят
                 QuizAttempt.finished_at.is_not(None),
                 QuizAttempt.is_counted.is_(True),
@@ -1013,11 +1071,7 @@ class ProgressRepo:
             select(Submission.task_id)
             .join(Task, Task.id == Submission.task_id)
             .join(Module, Module.id == Task.module_id)
-            .where(
-                Module.course_id == course_id,
-                Submission.user_id == user_id,
-                Submission.status == SUBMISSION_ACCEPTED,
-            )
+            .where(*task_conds, Submission.status == SUBMISSION_ACCEPTED)
         )
         return (
             {("lesson", lesson_id) for lesson_id in lessons}
@@ -1027,12 +1081,16 @@ class ProgressRepo:
 
     def _course_done_rows(self, course_id: int):
         """Пройденное всеми действующими участниками курса — строки
-        (user_id, kind, item_id).
+        (user_id, kind, item_id, is_hidden).
 
         Правила ровно те же, что у `done_keys` одного учителя: отчёт админа
         и экран учителя обязаны показывать один и тот же процент, а два
         независимых подсчёта разошлись бы (CONTRACT, сессия 6). Отозванный
         доступ не считается — его нет и в `granted`.
+
+        Скрытость приходит колонкой, а не фильтром: проценты и воронка
+        считают по видимому, а чек-листу сертификата нужно и пройденное
+        скрытое, и добирать его вторым запросом на страницу отчёта незачем.
 
         UNION, а не UNION ALL: два зачтённых ответа по одному заданию — это
         всё равно одно пройденное задание, как и в множестве `done_keys`.
@@ -1042,6 +1100,7 @@ class ProgressRepo:
                 LessonProgress.user_id.label("user_id"),
                 literal("lesson").label("kind"),
                 LessonProgress.lesson_id.label("item_id"),
+                Lesson.is_hidden.label("is_hidden"),
             )
             .select_from(LessonProgress)
             .join(Lesson, Lesson.id == LessonProgress.lesson_id)
@@ -1054,13 +1113,14 @@ class ProgressRepo:
                     Enrollment.revoked_at.is_(None),
                 ),
             )
-            .where(Module.course_id == course_id, Lesson.is_hidden.is_(False))
+            .where(Module.course_id == course_id)
         )
         quizzes = (
             select(
                 QuizAttempt.user_id.label("user_id"),
                 literal("quiz").label("kind"),
                 QuizAttempt.quiz_id.label("item_id"),
+                Quiz.is_hidden.label("is_hidden"),
             )
             .select_from(QuizAttempt)
             .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
@@ -1085,6 +1145,7 @@ class ProgressRepo:
                 Submission.user_id.label("user_id"),
                 literal("task").label("kind"),
                 Submission.task_id.label("item_id"),
+                Task.is_hidden.label("is_hidden"),
             )
             .select_from(Submission)
             .join(Task, Task.id == Submission.task_id)
@@ -1105,7 +1166,8 @@ class ProgressRepo:
         return union(lessons, quizzes, tasks).subquery()
 
     def done_items_by_user(self, course_id: int) -> dict[int, set[tuple[str, int]]]:
-        """Что именно прошёл каждый участник — {user_id: {(kind, item_id)}}.
+        """Что именно прошёл каждый участник — {user_id: {(kind, item_id)}},
+        вместе со скрытым: это `done_keys(include_hidden=True)` на весь курс.
 
         Тот же формат, что у `done_keys` одного учителя, но на весь курс
         одним запросом: условия сертификата в отчёте считаются на каждую
@@ -1129,7 +1191,9 @@ class ProgressRepo:
         """
         done = self._course_done_rows(course_id)
         rows = self.db.execute(
-            select(done.c.user_id, func.count()).group_by(done.c.user_id)
+            select(done.c.user_id, func.count())
+            .where(done.c.is_hidden.is_(False))
+            .group_by(done.c.user_id)
         )
         return dict(rows.all())
 
@@ -1138,9 +1202,9 @@ class ProgressRepo:
         Это и есть воронка отчёта, один GROUP BY на весь курс."""
         done = self._course_done_rows(course_id)
         rows = self.db.execute(
-            select(done.c.kind, done.c.item_id, func.count()).group_by(
-                done.c.kind, done.c.item_id
-            )
+            select(done.c.kind, done.c.item_id, func.count())
+            .where(done.c.is_hidden.is_(False))
+            .group_by(done.c.kind, done.c.item_id)
         )
         return {(kind, item_id): count for kind, item_id, count in rows}
 
@@ -1161,14 +1225,35 @@ class ProgressRepo:
 
 
 class ReviewRepo:
+    """Отзывы. Удалённый админом отзыв не приходит наружу нигде и ни при
+    каких фильтрах, поэтому `deleted_at IS NULL` стоит в каждом чтении:
+    лента страницы курса, её `total`, разбивка по звёздам и лента админа
+    обязаны считать по одним и тем же строкам."""
+
     def __init__(self, db: DbSession):
         self.db = db
+
+    def by_id(self, review_id: int) -> Review | None:
+        # Без фильтра удалённого: повторное удаление обязано найти строку,
+        # чтобы ответить 204 и не двигать время первого
+        return self.db.get(Review, review_id)
+
+    def with_author_and_course(self, review_id: int) -> tuple[Review, User, Course] | None:
+        """Отзыв вместе с автором и курсом — в этой форме его показывает
+        лента админа, и ответ на отзыв возвращает её же элемент."""
+        row = self.db.execute(
+            select(Review, User, Course)
+            .join(User, User.id == Review.user_id)
+            .join(Course, Course.id == Review.course_id)
+            .where(Review.id == review_id)
+        ).first()
+        return (row[0], row[1], row[2]) if row is not None else None
 
     def page(self, course_id: int, offset: int, limit: int) -> list[tuple[Review, User]]:
         rows = self.db.execute(
             select(Review, User)
             .join(User, User.id == Review.user_id)
-            .where(Review.course_id == course_id)
+            .where(Review.course_id == course_id, Review.deleted_at.is_(None))
             .order_by(Review.created_at.desc(), Review.id.desc())
             .offset(offset)
             .limit(limit)
@@ -1178,7 +1263,9 @@ class ReviewRepo:
     def count(self, course_id: int) -> int:
         return (
             self.db.scalar(
-                select(func.count()).select_from(Review).where(Review.course_id == course_id)
+                select(func.count())
+                .select_from(Review)
+                .where(Review.course_id == course_id, Review.deleted_at.is_(None))
             )
             or 0
         )
@@ -1187,7 +1274,7 @@ class ReviewRepo:
         """Счётчики по звёздам {rating: count} — по последнему отзыву автора."""
         latest = (
             select(Review.rating.label("rating"))
-            .where(Review.course_id == course_id)
+            .where(Review.course_id == course_id, Review.deleted_at.is_(None))
             .distinct(Review.user_id)
             .order_by(Review.user_id, Review.created_at.desc(), Review.id.desc())
             .subquery()
@@ -1195,11 +1282,53 @@ class ReviewRepo:
         rows = self.db.execute(select(latest.c.rating, func.count()).group_by(latest.c.rating))
         return dict(rows.all())
 
+    def admin_page(
+        self, *, course_id: int | None, rating: int | None, offset: int, limit: int
+    ) -> tuple[list[tuple[Review, User, Course]], int]:
+        """Лента отзывов по всей платформе, свежие сверху. Видимость курса
+        здесь не проверяется: отзыв разбирают и по скрытому курсу."""
+        conds = [Review.deleted_at.is_(None)]
+        if course_id is not None:
+            conds.append(Review.course_id == course_id)
+        if rating is not None:
+            conds.append(Review.rating == rating)
+        total = self.db.scalar(select(func.count()).select_from(Review).where(*conds)) or 0
+        rows = self.db.execute(
+            select(Review, User, Course)
+            .join(User, User.id == Review.user_id)
+            .join(Course, Course.id == Review.course_id)
+            .where(*conds)
+            .order_by(Review.created_at.desc(), Review.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return [(review, author, course) for review, author, course in rows], total
+
     def create(self, course_id: int, user_id: int, rating: int, text: str) -> Review:
         review = Review(course_id=course_id, user_id=user_id, rating=rating, text=text)
         self.db.add(review)
         self.db.flush()
         return review
+
+
+def name_or_phone_filter(q: str):
+    """Поиск по ФИО и телефону. Цифры запроса нормализуются к хранимому
+    виду: «8 707 123…» находит +7707123…
+
+    Один на очередь заявок и на список учителей: там и там админ ищет человека
+    по тому, что у него записано на бумажке.
+    """
+    conds = [
+        func.concat_ws(" ", User.last_name, User.first_name, User.middle_name).ilike(
+            f"%{q.strip()}%"
+        )
+    ]
+    digits = re.sub(r"\D", "", q)
+    if digits:
+        if digits.startswith("8"):
+            digits = "7" + digits[1:]
+        conds.append(User.phone.like(f"%{digits}%"))
+    return or_(*conds)
 
 
 class LeadRepo:
@@ -1254,7 +1383,7 @@ class LeadRepo:
         if course_id is not None:
             conds.append(Lead.course_id == course_id)
         if q is not None and q.strip():
-            conds.append(self._q_filter(q))
+            conds.append(name_or_phone_filter(q))
 
         total = (
             self.db.scalar(
@@ -1276,26 +1405,13 @@ class LeadRepo:
         )
         return [(lead, teacher, course) for lead, teacher, course in rows], total
 
-    @staticmethod
-    def _q_filter(q: str):
-        """Поиск по ФИО и телефону. Цифры запроса нормализуются к хранимому
-        виду: «8 707 123…» находит +7707123…"""
-        conds = [
-            func.concat_ws(" ", User.last_name, User.first_name, User.middle_name).ilike(
-                f"%{q.strip()}%"
-            )
-        ]
-        digits = re.sub(r"\D", "", q)
-        if digits:
-            if digits.startswith("8"):
-                digits = "7" + digits[1:]
-            conds.append(User.phone.like(f"%{digits}%"))
-        return or_(*conds)
-
 
 class EnrollmentRepo:
     def __init__(self, db: DbSession):
         self.db = db
+
+    def by_id(self, enrollment_id: int) -> Enrollment | None:
+        return self.db.get(Enrollment, enrollment_id)
 
     def active_for(self, user_id: int, course_id: int) -> Enrollment | None:
         return self.db.scalar(
@@ -1450,10 +1566,18 @@ class NotificationRepo:
 
 
 class ThreadMessageRepo:
+    """Сообщения тредов под уроками. Удалённое админом не приходит наружу
+    нигде: ни в вопросах урока, ни в очереди админа, ни в счётчике дашборда,
+    — поэтому `deleted_at IS NULL` стоит в каждом чтении. Ответы под удалённым
+    вопросом уходят из выдачи вместе с ним: тред собирается от корня, а корня
+    в выдаче уже нет."""
+
     def __init__(self, db: DbSession):
         self.db = db
 
     def by_id(self, message_id: int) -> ThreadMessage | None:
+        # Без фильтра удалённого: повторное удаление обязано найти строку,
+        # чтобы ответить 204 и не двигать время первого
         return self.db.get(ThreadMessage, message_id)
 
     def roots_page(
@@ -1461,7 +1585,11 @@ class ThreadMessageRepo:
     ) -> tuple[list[tuple[ThreadMessage, User]], int]:
         """Вопросы урока, свежие сверху. Автор джойнится сразу: `author_name`
         и `author_is_admin` собираются в момент чтения."""
-        conds = (ThreadMessage.lesson_id == lesson_id, ThreadMessage.parent_id.is_(None))
+        conds = (
+            ThreadMessage.lesson_id == lesson_id,
+            ThreadMessage.parent_id.is_(None),
+            ThreadMessage.deleted_at.is_(None),
+        )
         total = (
             self.db.scalar(select(func.count()).select_from(ThreadMessage).where(*conds)) or 0
         )
@@ -1482,7 +1610,7 @@ class ThreadMessageRepo:
         rows = self.db.execute(
             select(ThreadMessage, User)
             .join(User, User.id == ThreadMessage.user_id)
-            .where(ThreadMessage.parent_id.in_(root_ids))
+            .where(ThreadMessage.parent_id.in_(root_ids), ThreadMessage.deleted_at.is_(None))
             .order_by(ThreadMessage.created_at, ThreadMessage.id)
         )
         by_root: dict[int, list[tuple[ThreadMessage, User]]] = {}
@@ -1525,10 +1653,13 @@ class ThreadMessageRepo:
             .where(
                 reply.parent_id == ThreadMessage.id,
                 reply.user_id != ThreadMessage.user_id,
+                # Удалённый ответ вопрос не закрывает: в выдаче его нет,
+                # и очередь показала бы вопрос отвеченным без ответа
+                reply.deleted_at.is_(None),
             )
             .exists()
         )
-        conds = [ThreadMessage.parent_id.is_(None)]
+        conds = [ThreadMessage.parent_id.is_(None), ThreadMessage.deleted_at.is_(None)]
         if answered is not None:
             conds.append(has_reply if answered else ~has_reply)
         if course_id is not None:
@@ -1566,3 +1697,1075 @@ class ThreadMessageRepo:
         return [
             (message, author, course, lesson) for message, author, course, lesson in rows
         ], total
+
+
+# Редакторы содержания (сессия 7а). Курс, урок, тест и задание админ правит
+# в любом статусе, поэтому CourseVisibility эти репозитории не наследуют:
+# фильтр каталога к админским спискам не применяется вовсе.
+
+# Модели элементов программы по тому же kind, что у item_key в domain/program.py.
+ITEM_MODELS = {"lesson": Lesson, "quiz": Quiz, "task": Task}
+
+
+class CourseAdminRepo:
+    """Курсы глазами админа: черновики и скрытые версии — обычные строки.
+
+    Программа читается своими методами, а не методами CourseRepo: тому
+    скрытый урок, тест и задание не существуют, а редактору они нужны —
+    их как раз и правят.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def by_id(self, course_id: int) -> Course | None:
+        return self.db.get(Course, course_id)
+
+    def page(
+        self,
+        *,
+        status: str | None,
+        lang: str | None,
+        q: str | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[Course], int]:
+        conds = []
+        if status is not None:
+            conds.append(Course.status == status)
+        if lang is not None:
+            conds.append(Course.lang == lang)
+        if q is not None and q.strip():
+            conds.append(Course.title.ilike(f"%{q.strip()}%"))
+
+        total = (
+            self.db.scalar(select(func.count()).select_from(Course).where(*conds)) or 0
+        )
+        rows = list(
+            self.db.scalars(
+                select(Course)
+                .where(*conds)
+                .order_by(Course.updated_at.desc(), Course.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        )
+        return rows, total
+
+    def group_versions(self, group_ids: list[int]) -> dict[int, list[Course]]:
+        """Версии по языковым группам — {group_id: [Course]}, включая черновики:
+        переключатель РУС|ҚАЗ в редакторе ведёт и на неопубликованную версию."""
+        if not group_ids:
+            return {}
+        versions: dict[int, list[Course]] = {}
+        for course in self.db.scalars(
+            select(Course).where(Course.group_id.in_(group_ids)).order_by(Course.id)
+        ):
+            versions.setdefault(course.group_id, []).append(course)
+        return versions
+
+    def version_in_group(self, group_id: int, lang: str) -> Course | None:
+        return self.db.scalar(
+            select(Course).where(Course.group_id == group_id, Course.lang == lang)
+        )
+
+    def next_group_id(self) -> int:
+        """Номер новой языковой группы. Своей последовательности у group_id нет:
+        это не ключ, а метка «тот же курс на другом языке»."""
+        return (self.db.scalar(select(func.max(Course.group_id))) or 0) + 1
+
+    def create(self, **fields) -> Course:
+        """Набор полей у создания разный: черновик заводится четырьмя,
+        языковая версия и дубликат — копией почти всех."""
+        course = Course(**fields)
+        self.db.add(course)
+        self.db.flush()
+        return course
+
+    def create_version(self, **fields) -> Course | None:
+        """Вторая языковая версия. None — уникальный индекс
+        (group_id, lang) не пустил вторую: гонку выиграл соседний запрос,
+        и сценарий отвечает 409 с его версией."""
+        course = Course(**fields)
+        try:
+            # SAVEPOINT: проигранная гонка не должна откатывать всю транзакцию
+            with self.db.begin_nested():
+                self.db.add(course)
+                self.db.flush()
+        except IntegrityError:
+            return None
+        return course
+
+    def lock(self, course_id: int) -> None:
+        """Берёт строку курса на запись до конца транзакции.
+
+        Так закрывается единственность итогового теста в курсе: частичным
+        уникальным индексом её не выразить — `course_id` у теста нет вовсе,
+        он в двух джойнах (quiz → module → course). Поэтому два одновременных
+        `PATCH {"is_final": true}` сводятся на строке курса: второй ждёт
+        первого и уже видит его тест.
+        """
+        self.db.execute(select(Course.id).where(Course.id == course_id).with_for_update())
+
+    def touch(self, course_id: int) -> None:
+        """Двигает `updated_at` курса.
+
+        Зовётся из любого редактора: правка урока, теста или задания — это
+        правка курса, и столбец «Изменён» в списке курсов без этого врал бы
+        (CONTRACT, сессия 7а).
+
+        Время берут часы базы, как и у created_at: два источника времени
+        на одну колонку дают курс, изменённый раньше, чем создан.
+        """
+        self.db.execute(
+            update(Course)
+            .where(Course.id == course_id)
+            .values(updated_at=func.now())
+            .execution_options(synchronize_session="fetch")
+        )
+
+    def course_of_item(self, kind: str, item_id: int) -> Course | None:
+        """Курс, которому принадлежит урок, тест или задание; `kind` — тот же,
+        что у `item_key` в domain/program.py: lesson | quiz | task.
+
+        Нужен редакторам урока, теста и задания: сохранив элемент, они зовут
+        `touch` по найденному курсу.
+        """
+        model = ITEM_MODELS[kind]
+        return self.db.scalar(
+            select(Course)
+            .join(Module, Module.course_id == Course.id)
+            .join(model, model.module_id == Module.id)
+            .where(model.id == item_id)
+        )
+
+    # -- программа целиком, вместе со скрытым ---------------------------
+
+    def modules(self, course_id: int) -> list[Module]:
+        return list(
+            self.db.scalars(
+                select(Module)
+                .where(Module.course_id == course_id)
+                .order_by(Module.order_index, Module.id)
+            )
+        )
+
+    def module_by_id(self, module_id: int) -> Module | None:
+        return self.db.get(Module, module_id)
+
+    def create_module(self, course_id: int, title: str) -> Module:
+        """Модуль встаёт последним — за самым большим order_index курса."""
+        last = self.db.scalar(
+            select(func.max(Module.order_index)).where(Module.course_id == course_id)
+        )
+        module = Module(course_id=course_id, title=title, order_index=(last or 0) + 1)
+        self.db.add(module)
+        self.db.flush()
+        return module
+
+    def next_order_index(self, module_id: int) -> int:
+        """Место нового элемента в модуле — за последним.
+
+        Считается по всем трём таблицам сразу: в дереве урок, тест и задание
+        стоят вперемешку и упорядочены общим order_index, а свой максимум
+        у каждой таблицы поставил бы новый урок в середину модуля.
+        """
+        last = max(
+            self.db.scalar(
+                select(func.max(model.order_index)).where(model.module_id == module_id)
+            )
+            or 0
+            for model in ITEM_MODELS.values()
+        )
+        return last + 1
+
+    def lessons(self, course_id: int) -> list[Lesson]:
+        """Все уроки курса, скрытые тоже: их админ и правит."""
+        return list(
+            self.db.scalars(
+                select(Lesson)
+                .join(Module, Module.id == Lesson.module_id)
+                .where(Module.course_id == course_id)
+                .order_by(Lesson.order_index, Lesson.id)
+            )
+        )
+
+    def quizzes(self, course_id: int) -> list[Quiz]:
+        return list(
+            self.db.scalars(
+                select(Quiz)
+                .join(Module, Module.id == Quiz.module_id)
+                .where(Module.course_id == course_id)
+                .order_by(Quiz.order_index, Quiz.id)
+            )
+        )
+
+    def tasks(self, course_id: int) -> list[Task]:
+        return list(
+            self.db.scalars(
+                select(Task)
+                .join(Module, Module.id == Task.module_id)
+                .where(Module.course_id == course_id)
+                .order_by(Task.order_index, Task.id)
+            )
+        )
+
+    def questions_count(self, quiz_ids: list[int]) -> dict[int, int]:
+        """Нескрытые вопросы по тестам — {quiz_id: count}. Скрытые не считаются
+        и здесь: в дереве стоит то же число, что видит учитель."""
+        if not quiz_ids:
+            return {}
+        rows = self.db.execute(
+            select(Question.quiz_id, func.count())
+            .where(Question.quiz_id.in_(quiz_ids), Question.is_hidden.is_(False))
+            .group_by(Question.quiz_id)
+        )
+        return dict(rows.all())
+
+    # -- чужие данные: что держит элемент от удаления -------------------
+
+    def progress_counts(self, lesson_ids: list[int]) -> dict[int, int]:
+        """Сколько человек прошли урок — {lesson_id: count}."""
+        if not lesson_ids:
+            return {}
+        rows = self.db.execute(
+            select(LessonProgress.lesson_id, func.count())
+            .where(LessonProgress.lesson_id.in_(lesson_ids))
+            .group_by(LessonProgress.lesson_id)
+        )
+        return dict(rows.all())
+
+    def attempt_counts(self, quiz_ids: list[int]) -> dict[int, int]:
+        """Попытки по тестам — {quiz_id: count}, считаются все, включая
+        незачётные: разбор покажет и их."""
+        if not quiz_ids:
+            return {}
+        rows = self.db.execute(
+            select(QuizAttempt.quiz_id, func.count())
+            .where(QuizAttempt.quiz_id.in_(quiz_ids))
+            .group_by(QuizAttempt.quiz_id)
+        )
+        return dict(rows.all())
+
+    def submission_counts(self, task_ids: list[int]) -> dict[int, int]:
+        """Сдачи по заданиям — {task_id: count}, включая доработки."""
+        if not task_ids:
+            return {}
+        rows = self.db.execute(
+            select(Submission.task_id, func.count())
+            .where(Submission.task_id.in_(task_ids))
+            .group_by(Submission.task_id)
+        )
+        return dict(rows.all())
+
+    def usage_counts(self, course_id: int) -> dict[str, int]:
+        """Всё, что держит курс от удаления. Считаются и отозванные доступы,
+        и закрытые заявки: строка отчёта, ссылающаяся на несуществующий курс,
+        дороже лишней кнопки в меню."""
+        return {
+            "enrollments": self.db.scalar(
+                select(func.count())
+                .select_from(Enrollment)
+                .where(Enrollment.course_id == course_id)
+            )
+            or 0,
+            "leads": self.db.scalar(
+                select(func.count()).select_from(Lead).where(Lead.course_id == course_id)
+            )
+            or 0,
+            "certificates": self.db.scalar(
+                select(func.count())
+                .select_from(Certificate)
+                .where(Certificate.course_id == course_id)
+            )
+            or 0,
+        }
+
+    # -- счётчики списка курсов -----------------------------------------
+
+    def modules_count(self, course_ids: list[int]) -> dict[int, int]:
+        rows = self.db.execute(
+            select(Module.course_id, func.count())
+            .where(Module.course_id.in_(course_ids))
+            .group_by(Module.course_id)
+        )
+        return dict(rows.all())
+
+    def lessons_count(self, course_ids: list[int]) -> dict[int, int]:
+        """Уроки курса — {course_id: count}. Скрытые входят в число: админ
+        считает то, что в курсе есть, а не то, что видно на площадке."""
+        rows = self.db.execute(
+            select(Module.course_id, func.count())
+            .select_from(Lesson)
+            .join(Module, Module.id == Lesson.module_id)
+            .where(Module.course_id.in_(course_ids))
+            .group_by(Module.course_id)
+        )
+        return dict(rows.all())
+
+    def open_leads_count(self, course_ids: list[int]) -> dict[int, int]:
+        """Заявки в работе — {course_id: count}."""
+        rows = self.db.execute(
+            select(Lead.course_id, func.count())
+            .where(Lead.course_id.in_(course_ids), Lead.status.in_(OPEN_LEAD_STATUSES))
+            .group_by(Lead.course_id)
+        )
+        return dict(rows.all())
+
+    def enrollment_counts(self, course_ids: list[int]) -> dict[int, tuple[int, int]]:
+        """Действующие доступы и завершившие курс — {course_id: (students,
+        completed)}. Одним запросом: столбцы стоят в списке рядом."""
+        rows = self.db.execute(
+            select(
+                Enrollment.course_id,
+                func.count().filter(Enrollment.revoked_at.is_(None)),
+                func.count().filter(Enrollment.completed_at.is_not(None)),
+            )
+            .where(Enrollment.course_id.in_(course_ids))
+            .group_by(Enrollment.course_id)
+        )
+        return {course_id: (students, completed) for course_id, students, completed in rows}
+
+    # -- копирование и удаление -----------------------------------------
+
+    def copy_program(self, source_id: int, target_id: int) -> None:
+        """Программа одного курса в другой: модули, уроки со всем текстом
+        и ссылками, тесты с настройками, вопросами и вариантами, задания
+        с условием.
+
+        Не копируется ничего чужого — ни доступов, ни прогресса — и не
+        копируются файлы: ключ в хранилище один на файл, и две строки на один
+        ключ означают, что удаление из одной версии ломает вторую.
+        """
+        modules: dict[int, int] = {}
+        for module in self.modules(source_id):
+            copy = Module(
+                course_id=target_id, title=module.title, order_index=module.order_index
+            )
+            self.db.add(copy)
+            self.db.flush()
+            modules[module.id] = copy.id
+
+        for lesson in self.lessons(source_id):
+            self.db.add(
+                Lesson(
+                    module_id=modules[lesson.module_id],
+                    title=lesson.title,
+                    kind=lesson.kind,
+                    # Своя копия JSON: общий словарь на две строки правится в обеих
+                    body=dict(lesson.body) if lesson.body is not None else None,
+                    video_url=lesson.video_url,
+                    video_provider=lesson.video_provider,
+                    duration_label=lesson.duration_label,
+                    time_required_min=lesson.time_required_min,
+                    order_index=lesson.order_index,
+                    is_hidden=lesson.is_hidden,
+                )
+            )
+        for quiz in self.quizzes(source_id):
+            copy = Quiz(
+                module_id=modules[quiz.module_id],
+                title=quiz.title,
+                is_final=quiz.is_final,
+                pass_score=quiz.pass_score,
+                time_limit_min=quiz.time_limit_min,
+                shuffle=quiz.shuffle,
+                show_review=quiz.show_review,
+                retakable=quiz.retakable,
+                time_required_min=quiz.time_required_min,
+                order_index=quiz.order_index,
+                is_hidden=quiz.is_hidden,
+            )
+            self.db.add(copy)
+            self.db.flush()
+            self._copy_questions(quiz.id, copy.id)
+        for task in self.tasks(source_id):
+            self.db.add(
+                Task(
+                    module_id=modules[task.module_id],
+                    title=task.title,
+                    statement=dict(task.statement),
+                    # template_file не копируется: это ключ в хранилище
+                    submit_format=task.submit_format,
+                    allowed_ext=list(task.allowed_ext),
+                    max_size_mb=task.max_size_mb,
+                    time_required_min=task.time_required_min,
+                    order_index=task.order_index,
+                    is_hidden=task.is_hidden,
+                )
+            )
+
+    def _copy_questions(self, source_quiz_id: int, target_quiz_id: int) -> None:
+        """Вопросы вместе с вариантами: вопрос без вариантов — это тест,
+        который не пройти."""
+        questions = self.db.scalars(
+            select(Question)
+            .where(Question.quiz_id == source_quiz_id)
+            .order_by(Question.order_index, Question.id)
+        )
+        for question in questions:
+            copy = Question(
+                quiz_id=target_quiz_id,
+                type=question.type,
+                text=question.text,
+                explanation=question.explanation,
+                points=question.points,
+                order_index=question.order_index,
+                is_hidden=question.is_hidden,
+            )
+            self.db.add(copy)
+            self.db.flush()
+            options = self.db.scalars(
+                select(Option)
+                .where(Option.question_id == question.id)
+                .order_by(Option.order_index, Option.id)
+            )
+            for option in options:
+                self.db.add(
+                    Option(
+                        question_id=copy.id,
+                        text=option.text,
+                        is_correct=option.is_correct,
+                        order_index=option.order_index,
+                    )
+                )
+
+    def delete_modules(self, module_ids: list[int]) -> None:
+        """Модули со всем содержимым: уроками, тестами, вопросами, вариантами
+        и заданиями. Материалы урока и варианты вопроса уносит каскад базы
+        (`ondelete=CASCADE` у lesson_file и option), а вопросы учителей под
+        уроками — как и в LessonAdminRepo.delete, руками: каскада у их
+        внешнего ключа нет, и без этого удаление модуля упирается в него.
+        """
+        if not module_ids:
+            return
+        quiz_ids = list(
+            self.db.scalars(select(Quiz.id).where(Quiz.module_id.in_(module_ids)))
+        )
+        if quiz_ids:
+            self.db.execute(delete(Question).where(Question.quiz_id.in_(quiz_ids)))
+        self.db.execute(delete(Quiz).where(Quiz.module_id.in_(module_ids)))
+        lesson_ids = list(
+            self.db.scalars(select(Lesson.id).where(Lesson.module_id.in_(module_ids)))
+        )
+        if lesson_ids:
+            self.db.execute(
+                delete(ThreadMessage).where(ThreadMessage.lesson_id.in_(lesson_ids))
+            )
+        self.db.execute(delete(Lesson).where(Lesson.module_id.in_(module_ids)))
+        self.db.execute(delete(Task).where(Task.module_id.in_(module_ids)))
+        self.db.execute(delete(Module).where(Module.id.in_(module_ids)))
+
+    def delete_course(self, course_id: int) -> None:
+        self.delete_modules([module.id for module in self.modules(course_id)])
+        # Режим предпросмотра держит курс ссылкой из строки сессии: не сняв
+        # её, удаление упёрлось бы во внешний ключ
+        self.db.execute(
+            update(Session)
+            .where(Session.preview_course_id == course_id)
+            .values(preview_course_id=None)
+        )
+        self.db.execute(delete(Course).where(Course.id == course_id))
+
+
+class LessonAdminRepo:
+    """Урок глазами админа: скрытый урок и урок невидимого курса — обычные
+    строки, их как раз и правят.
+
+    Видимость здесь не проверяется вовсе, поэтому это не LessonRepo: тому
+    урок черновика не существует, а редактор без него пуст.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def with_course_and_module(self, lesson_id: int) -> tuple[Lesson, Module, Course] | None:
+        """Урок вместе с модулем и курсом: и то и другое — хлебные крошки
+        шапки редактора, и брать их тремя запросами незачем."""
+        row = self.db.execute(
+            select(Lesson, Module, Course)
+            .join(Module, Module.id == Lesson.module_id)
+            .join(Course, Course.id == Module.course_id)
+            .where(Lesson.id == lesson_id)
+        ).first()
+        return (row[0], row[1], row[2]) if row is not None else None
+
+    def create(self, **fields) -> Lesson:
+        """Заготовка: ни ссылки, ни текста — они появятся в редакторе.
+        Единственное место, где урок сохраняется пустым."""
+        lesson = Lesson(**fields)
+        self.db.add(lesson)
+        self.db.flush()
+        return lesson
+
+    def delete(self, lesson_id: int) -> None:
+        """Урок со всем, что на него ссылается. Материалы уносит каскад базы
+        (`ondelete=CASCADE` у lesson_file), вопросы под уроком удаляем сами:
+        каскада у их внешнего ключа нет, а осиротевший вопрос очередь админа
+        всё равно не покажет — она джойнит урок. Прогресс сюда не доходит:
+        урок, который кто-то прошёл, не удаляется вовсе.
+        """
+        self.db.execute(delete(ThreadMessage).where(ThreadMessage.lesson_id == lesson_id))
+        self.db.execute(delete(Lesson).where(Lesson.id == lesson_id))
+
+    # -- материалы урока -------------------------------------------------
+
+    def files(self, lesson_id: int) -> list[LessonFile]:
+        return list(
+            self.db.scalars(
+                select(LessonFile)
+                .where(LessonFile.lesson_id == lesson_id)
+                .order_by(LessonFile.order_index, LessonFile.id)
+            )
+        )
+
+    def file_by_id(self, file_id: int) -> LessonFile | None:
+        return self.db.get(LessonFile, file_id)
+
+    def add_file(self, **fields) -> LessonFile:
+        """Материал встаёт последним в уроке."""
+        last = self.db.scalar(
+            select(func.max(LessonFile.order_index)).where(
+                LessonFile.lesson_id == fields["lesson_id"]
+            )
+        )
+        file = LessonFile(**fields, order_index=(last or 0) + 1)
+        self.db.add(file)
+        self.db.flush()
+        return file
+
+    def delete_file(self, file_id: int) -> None:
+        """Отвязывает материал от урока. Байты в хранилище остаются: порт
+        storage умеет писать, читать и мерить, но не удалять."""
+        self.db.execute(delete(LessonFile).where(LessonFile.id == file_id))
+
+
+class QuizAdminRepo:
+    """Тест глазами админа: скрытый тест, тест черновика и скрытые вопросы —
+    обычные строки, их как раз и правят.
+
+    Видимость здесь не проверяется вовсе, поэтому это не QuizRepo: тому
+    и скрытый тест, и скрытый вопрос не существуют, а редактору без них
+    нечего показать — спрятанное нечем достать обратно.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def with_course_and_module(self, quiz_id: int) -> tuple[Quiz, Module, Course] | None:
+        """Тест вместе с модулем и курсом: и то и другое — хлебные крошки
+        шапки редактора, и брать их тремя запросами незачем."""
+        row = self.db.execute(
+            select(Quiz, Module, Course)
+            .join(Module, Module.id == Quiz.module_id)
+            .join(Course, Course.id == Module.course_id)
+            .where(Quiz.id == quiz_id)
+        ).first()
+        return (row[0], row[1], row[2]) if row is not None else None
+
+    def create(self, **fields) -> Quiz:
+        """Заготовка: название, проходной балл и требуемое время. Вопросов
+        у неё нет, и дерево программы покажет её как «черновик»."""
+        quiz = Quiz(**fields)
+        self.db.add(quiz)
+        self.db.flush()
+        return quiz
+
+    def delete(self, quiz_id: int) -> None:
+        """Тест с вопросами и вариантами. Варианты уносит каскад базы
+        (`ondelete=CASCADE` у option), вопросы удаляем сами: каскада у их
+        внешнего ключа нет. Попытки сюда не доходят: тест, который кто-то
+        проходил, не удаляется вовсе.
+        """
+        self.db.execute(delete(Question).where(Question.quiz_id == quiz_id))
+        self.db.execute(delete(Quiz).where(Quiz.id == quiz_id))
+
+    def final_in_course(self, course_id: int, *, exclude_id: int | None = None) -> Quiz | None:
+        """Итоговый тест курса, если он есть. Скрытый считается тоже: спрятанный
+        итоговый остаётся итоговым, и второй рядом с ним — это уже два."""
+        conds = [Module.course_id == course_id, Quiz.is_final.is_(True)]
+        if exclude_id is not None:
+            conds.append(Quiz.id != exclude_id)
+        return self.db.scalar(
+            select(Quiz).join(Module, Module.id == Quiz.module_id).where(*conds)
+        )
+
+    # -- вопросы и варианты ----------------------------------------------
+
+    def questions(self, quiz_id: int) -> list[Question]:
+        """Все вопросы теста, скрытые тоже: их админ и достаёт обратно."""
+        return list(
+            self.db.scalars(
+                select(Question)
+                .where(Question.quiz_id == quiz_id)
+                .order_by(Question.order_index, Question.id)
+            )
+        )
+
+    def question_by_id(self, question_id: int) -> Question | None:
+        return self.db.get(Question, question_id)
+
+    def options(self, question_ids: list[int]) -> dict[int, list[Option]]:
+        """Варианты по вопросам — {question_id: [Option]}, своим порядком:
+        перемешивается порядок вопросов, не ответов."""
+        if not question_ids:
+            return {}
+        rows = self.db.scalars(
+            select(Option)
+            .where(Option.question_id.in_(question_ids))
+            .order_by(Option.question_id, Option.order_index, Option.id)
+        )
+        by_question: dict[int, list[Option]] = {}
+        for option in rows:
+            by_question.setdefault(option.question_id, []).append(option)
+        return by_question
+
+    def next_question_order(self, quiz_id: int) -> int:
+        """Место нового вопроса — за последним, включая скрытые: у скрытого
+        порядок остаётся за ним, и новый вопрос не должен встать на его место."""
+        last = self.db.scalar(
+            select(func.max(Question.order_index)).where(Question.quiz_id == quiz_id)
+        )
+        return (last or 0) + 1
+
+    def create_question(self, **fields) -> Question:
+        question = Question(**fields)
+        self.db.add(question)
+        self.db.flush()
+        return question
+
+    def replace_options(self, question_id: int, options: list[dict]) -> None:
+        """Варианты приходят полным списком и заменяют прежние: у вопроса их
+        два-три, а отдельные ручки на вариант — это ещё три эндпоинта ради
+        экономии килобайта.
+
+        Замена безопасна только потому, что вопрос с попытками не правится
+        вовсе: иначе она стёрла бы варианты, по которым посчитан чужой балл.
+        """
+        self.db.execute(delete(Option).where(Option.question_id == question_id))
+        for index, option in enumerate(options):
+            self.db.add(
+                Option(
+                    question_id=question_id,
+                    text=option["text"],
+                    is_correct=option["is_correct"],
+                    order_index=index,
+                )
+            )
+        self.db.flush()
+
+    def delete_question(self, question_id: int) -> None:
+        """Вопрос с вариантами: их уносит каскад базы (`ondelete=CASCADE`
+        у option). Ответы сюда не доходят — вопрос с попытками не удаляется."""
+        self.db.execute(delete(Question).where(Question.id == question_id))
+
+    # -- чужие данные: что запирает вопрос от правки ---------------------
+
+    def attempted_question_ids(self, quiz_id: int) -> set[int]:
+        """Вопросы теста, попавшие в состав хотя бы одной попытки.
+
+        Считается по question_order, а не по ответам: вопрос показан и тогда,
+        когда человек его пропустил, — разбор всё равно покажет то, чего он
+        не видел (BACKEND_NOTES, раздел 10).
+        """
+        return set(
+            self.db.scalars(
+                select(func.unnest(QuizAttempt.question_order)).where(
+                    QuizAttempt.quiz_id == quiz_id
+                )
+            )
+        )
+
+    def question_attempts_count(self, question_id: int) -> int:
+        """Сколько попыток показывали этот вопрос — число уходит в details
+        ошибки: «был в 34 попытках» объясняет отказ, а голое «нельзя» — нет."""
+        return (
+            self.db.scalar(
+                select(func.count())
+                .select_from(QuizAttempt)
+                .where(QuizAttempt.question_order.any(question_id))
+            )
+            or 0
+        )
+
+
+class TaskAdminRepo:
+    """Задание глазами админа: скрытое задание и задание невидимого курса —
+    обычные строки, их как раз и правят.
+
+    Видимость здесь не проверяется вовсе, поэтому это не TaskRepo: тому
+    задание черновика не существует, а редактор без него пуст.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def with_course_and_module(self, task_id: int) -> tuple[Task, Module, Course] | None:
+        """Задание вместе с модулем и курсом: и то и другое — хлебные крошки
+        шапки редактора, и брать их тремя запросами незачем."""
+        row = self.db.execute(
+            select(Task, Module, Course)
+            .join(Module, Module.id == Task.module_id)
+            .join(Course, Course.id == Module.course_id)
+            .where(Task.id == task_id)
+        ).first()
+        return (row[0], row[1], row[2]) if row is not None else None
+
+    def create(self, **fields) -> Task:
+        """Заготовка: название и требуемое время. Условие пустое — колонка
+        обязательная, а текст появится в редакторе."""
+        task = Task(**fields)
+        self.db.add(task)
+        self.db.flush()
+        return task
+
+    def delete(self, task_id: int) -> None:
+        """Задание со всем, что в нём. Сдачи сюда не доходят: задание, на которое
+        сдавали, не удаляется вовсе, а файл-шаблон остаётся в хранилище —
+        удалять порт storage не умеет."""
+        self.db.execute(delete(Task).where(Task.id == task_id))
+
+
+class TeacherAdminRepo:
+    """Учителя глазами админа: список с фильтрами и всё, что показывает карточка.
+
+    Отдельно от UserRepo потому, что тот отвечает на вопросы входа — «кто
+    записан на этот номер». Здесь вопрос другой: кого показать в таблице
+    и что у человека в четырёх вкладках карточки.
+
+    Каждый метод отвечает сразу на весь список — карточка не должна ходить
+    в базу за прогрессом каждого курса и за баллом каждой попытки.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    # -- список ----------------------------------------------------------
+
+    def page(
+        self,
+        *,
+        region: str | None,
+        school: str | None,
+        course_id: int | None,
+        q: str | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[User], int]:
+        """Страница списка учителей, свежие сверху.
+
+        Админов в списке нет: «учителя» здесь — те же люди, что в счётчике
+        дашборда (`UserRepo.teachers_count`), и два разных числа на двух
+        экранах читаются как ошибка. Карточка при этом открывается и у админа:
+        свой номер он меняет на том же экране.
+        """
+        conds = [User.is_admin.is_(False)]
+        if region:
+            conds.append(User.region == region)
+        if school:
+            conds.append(User.school == school)
+        if q is not None and q.strip():
+            conds.append(name_or_phone_filter(q))
+        if course_id is not None:
+            # Учителя этой версии курса — по действующему доступу: человек
+            # с отозванным доступом курс уже не проходит
+            conds.append(
+                User.id.in_(
+                    select(Enrollment.user_id).where(
+                        Enrollment.course_id == course_id,
+                        Enrollment.revoked_at.is_(None),
+                    )
+                )
+            )
+        total = self.db.scalar(select(func.count()).select_from(User).where(*conds)) or 0
+        users = list(
+            self.db.scalars(
+                select(User)
+                .where(*conds)
+                .order_by(User.created_at.desc(), User.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        )
+        return users, total
+
+    def enrollment_counts(self, user_ids: list[int]) -> dict[int, tuple[int, int]]:
+        """Действующие доступы и завершённые курсы — {user_id: (courses,
+        completed)}. Одним запросом: столбцы стоят в таблице рядом."""
+        if not user_ids:
+            return {}
+        rows = self.db.execute(
+            select(
+                Enrollment.user_id,
+                func.count().filter(Enrollment.revoked_at.is_(None)),
+                func.count().filter(Enrollment.completed_at.is_not(None)),
+            )
+            .where(Enrollment.user_id.in_(user_ids))
+            .group_by(Enrollment.user_id)
+        )
+        return {user_id: (courses, completed) for user_id, courses, completed in rows}
+
+    def certificate_counts(self, user_ids: list[int]) -> dict[int, int]:
+        """Действующие сертификаты — {user_id: count}. Отозванный документ
+        в счёт не идёт: у человека его на руках нет."""
+        if not user_ids:
+            return {}
+        rows = self.db.execute(
+            select(Certificate.user_id, func.count())
+            .where(Certificate.user_id.in_(user_ids), Certificate.revoked_at.is_(None))
+            .group_by(Certificate.user_id)
+        )
+        return dict(rows.all())
+
+    # -- карточка --------------------------------------------------------
+
+    def enrollments(self, user_id: int) -> list[tuple[Enrollment, Course]]:
+        """Все доступы человека вместе с курсами, включая отозванные: прогресс
+        и результаты при закрытии доступа не удаляются, и админ обязан их
+        видеть (CONTRACT, сессия 7б)."""
+        rows = self.db.execute(
+            select(Enrollment, Course)
+            .join(Course, Course.id == Enrollment.course_id)
+            .where(Enrollment.user_id == user_id)
+            .order_by(Enrollment.granted_at.desc(), Enrollment.id.desc())
+        )
+        return [(enrollment, course) for enrollment, course in rows]
+
+    def admins_among(self, user_ids: list[int]) -> set[int]:
+        """Кто из перечисленных — админ. Карточке нужен признак «доступ выдал
+        админ», а не имя выдавшего: лишним ФИО в ответе никто не пользуется."""
+        if not user_ids:
+            return set()
+        return set(
+            self.db.scalars(
+                select(User.id).where(User.id.in_(user_ids), User.is_admin.is_(True))
+            )
+        )
+
+    def item_counts(self, course_ids: list[int]) -> dict[int, tuple[int, int]]:
+        """Сколько в курсе видимых уроков и сколько элементов программы всего —
+        {course_id: (lessons, items)}.
+
+        Одним запросом на все курсы карточки: собирать программу каждого курса
+        ради двух чисел — это запрос на строку вкладки «Курсы».
+        """
+        if not course_ids:
+            return {}
+        items = self._program_items(course_ids)
+        rows = self.db.execute(
+            select(items.c.course_id, items.c.kind, func.count()).group_by(
+                items.c.course_id, items.c.kind
+            )
+        )
+        return self._by_course(rows.all())
+
+    def done_counts(self, user_id: int, course_ids: list[int]) -> dict[int, tuple[int, int]]:
+        """Сколько видимых уроков и элементов программы человек прошёл в каждом
+        курсе — {course_id: (lessons, items)}.
+
+        Правила пройденности те же, что у `ProgressRepo.done_keys`: отмеченный
+        урок, тест со сданной зачётной попыткой, зачтённое задание. Иначе
+        карточка админа и кабинет учителя показали бы разный процент.
+        """
+        if not course_ids:
+            return {}
+        done = self._done_items(user_id, course_ids)
+        rows = self.db.execute(
+            select(done.c.course_id, done.c.kind, func.count()).group_by(
+                done.c.course_id, done.c.kind
+            )
+        )
+        return self._by_course(rows.all())
+
+    @staticmethod
+    def _by_course(rows: list[tuple[int, str, int]]) -> dict[int, tuple[int, int]]:
+        """Строки (course_id, kind, count) в пару «уроков, элементов всего»."""
+        counts: dict[int, tuple[int, int]] = {}
+        for course_id, kind, count in rows:
+            lessons, items = counts.get(course_id, (0, 0))
+            counts[course_id] = (lessons + (count if kind == "lesson" else 0), items + count)
+        return counts
+
+    def _program_items(self, course_ids: list[int]):
+        """Видимые элементы программы курсов — строки (course_id, kind, item_id).
+
+        UNION ALL: id урока, теста и задания свои, одна и та же строка дважды
+        не придёт, и снимать повторы незачем.
+        """
+        lessons = (
+            select(
+                Module.course_id.label("course_id"),
+                literal("lesson").label("kind"),
+                Lesson.id.label("item_id"),
+            )
+            .select_from(Lesson)
+            .join(Module, Module.id == Lesson.module_id)
+            .where(Module.course_id.in_(course_ids), Lesson.is_hidden.is_(False))
+        )
+        quizzes = (
+            select(
+                Module.course_id.label("course_id"),
+                literal("quiz").label("kind"),
+                Quiz.id.label("item_id"),
+            )
+            .select_from(Quiz)
+            .join(Module, Module.id == Quiz.module_id)
+            .where(Module.course_id.in_(course_ids), Quiz.is_hidden.is_(False))
+        )
+        tasks = (
+            select(
+                Module.course_id.label("course_id"),
+                literal("task").label("kind"),
+                Task.id.label("item_id"),
+            )
+            .select_from(Task)
+            .join(Module, Module.id == Task.module_id)
+            .where(Module.course_id.in_(course_ids), Task.is_hidden.is_(False))
+        )
+        return union_all(lessons, quizzes, tasks).subquery()
+
+    def _done_items(self, user_id: int, course_ids: list[int]):
+        """Пройденное человеком в этих курсах — строки (course_id, kind, item_id).
+
+        UNION, а не UNION ALL: две зачтённые сдачи одного задания — это всё
+        равно одно пройденное задание, как и в множестве `done_keys`.
+        """
+        lessons = (
+            select(
+                Module.course_id.label("course_id"),
+                literal("lesson").label("kind"),
+                LessonProgress.lesson_id.label("item_id"),
+            )
+            .select_from(LessonProgress)
+            .join(Lesson, Lesson.id == LessonProgress.lesson_id)
+            .join(Module, Module.id == Lesson.module_id)
+            .where(
+                Module.course_id.in_(course_ids),
+                LessonProgress.user_id == user_id,
+                Lesson.is_hidden.is_(False),
+            )
+        )
+        quizzes = (
+            select(
+                Module.course_id.label("course_id"),
+                literal("quiz").label("kind"),
+                QuizAttempt.quiz_id.label("item_id"),
+            )
+            .select_from(QuizAttempt)
+            .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
+            .join(Module, Module.id == Quiz.module_id)
+            .where(
+                Module.course_id.in_(course_ids),
+                QuizAttempt.user_id == user_id,
+                Quiz.is_hidden.is_(False),
+                # Незавершённая и незачётная попытки тест не проходят
+                QuizAttempt.finished_at.is_not(None),
+                QuizAttempt.is_counted.is_(True),
+                QuizAttempt.passed.is_(True),
+            )
+        )
+        tasks = (
+            select(
+                Module.course_id.label("course_id"),
+                literal("task").label("kind"),
+                Submission.task_id.label("item_id"),
+            )
+            .select_from(Submission)
+            .join(Task, Task.id == Submission.task_id)
+            .join(Module, Module.id == Task.module_id)
+            .where(
+                Module.course_id.in_(course_ids),
+                Submission.user_id == user_id,
+                Task.is_hidden.is_(False),
+                Submission.status == SUBMISSION_ACCEPTED,
+            )
+        )
+        return union(lessons, quizzes, tasks).subquery()
+
+    def attempts(self, user_id: int) -> list[tuple[QuizAttempt, Quiz, Course]]:
+        """Все попытки человека вместе с тестом и курсом, старые сверху —
+        в этом порядке вкладка «Тесты» их и нумерует."""
+        rows = self.db.execute(
+            select(QuizAttempt, Quiz, Course)
+            .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
+            .join(Module, Module.id == Quiz.module_id)
+            .join(Course, Course.id == Module.course_id)
+            .where(QuizAttempt.user_id == user_id)
+            .order_by(QuizAttempt.started_at, QuizAttempt.id)
+        )
+        return [(attempt, quiz, course) for attempt, quiz, course in rows]
+
+    def submissions(self, user_id: int) -> list[tuple[Submission, Task, int]]:
+        """Сдачи человека вместе с заданием и курсом задания, свежие сверху."""
+        rows = self.db.execute(
+            select(Submission, Task, Module.course_id)
+            .join(Task, Task.id == Submission.task_id)
+            .join(Module, Module.id == Task.module_id)
+            .where(Submission.user_id == user_id)
+            .order_by(Submission.created_at.desc(), Submission.id.desc())
+        )
+        return [(submission, task, course_id) for submission, task, course_id in rows]
+
+    def certificates(self, user_id: int) -> list[Certificate]:
+        """Документы человека, свежие сверху. Отозванные приходят вместе
+        с остальными — с отметкой revoked_at."""
+        return list(
+            self.db.scalars(
+                select(Certificate)
+                .where(Certificate.user_id == user_id)
+                .order_by(Certificate.issued_at.desc(), Certificate.id.desc())
+            )
+        )
+
+
+# Настройки площадки (сессия 7б). Категории переехали сюда из констант
+# в domain/dictionaries.py: бриф (5.25) обещает их правку в админке.
+
+
+class CategoryRepo:
+    """Категории курсов — справочник, который правит админ.
+
+    Курс ссылается на категорию по `category_id`, и связь эта без FK:
+    строку категории удаляют только когда на ней не висит ни одного курса,
+    и проверяет это сценарий (`CategoryInUseError`).
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def all(self) -> list[Category]:
+        # Порядок задаёт админ; id — вторым ключом, чтобы список не прыгал
+        # при одинаковом order_index
+        return list(
+            self.db.scalars(select(Category).order_by(Category.order_index, Category.id))
+        )
+
+    def by_id(self, category_id: int) -> Category | None:
+        return self.db.get(Category, category_id)
+
+    def by_title(self, title: str) -> Category | None:
+        return self.db.scalar(select(Category).where(Category.title == title))
+
+    def create(self, title: str) -> Category:
+        # Новая категория встаёт в конец списка: ручки на правку порядка
+        # в контракте нет, и придумывать ей место посередине не из чего
+        last = self.db.scalar(select(func.max(Category.order_index))) or 0
+        category = Category(title=title, order_index=last + 1)
+        self.db.add(category)
+        self.db.flush()
+        return category
+
+    def delete(self, category: Category) -> None:
+        self.db.delete(category)
+
+    def courses_count(self, category_ids: list[int]) -> dict[int, int]:
+        """Сколько курсов в каждой категории — все версии, включая черновики:
+        по этому числу решают, можно ли категорию удалять."""
+        if not category_ids:
+            return {}
+        rows = self.db.execute(
+            select(Course.category_id, func.count())
+            .where(Course.category_id.in_(category_ids))
+            .group_by(Course.category_id)
+        )
+        return dict(rows.all())

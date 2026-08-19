@@ -177,19 +177,27 @@ def test_funnel_lists_every_visible_item_in_order(client, sms):
     hidden = make_lesson(
         lesson_one.module_id, title="Скрытый", order_index=5, is_hidden=True
     )
+    hidden_task = make_task(
+        lesson_one.module_id, title="Скрытое задание", order_index=6, is_hidden=True
+    )
+    hidden_quiz = make_quiz(
+        lesson_one.module_id, title="Скрытый тест", order_index=7, is_hidden=True
+    )
     first, second = teacher(1), teacher(2)
     for person in (first, second):
         make_enrollment(person.id, course.id)
         make_progress(person.id, lesson_one.id)
         make_progress(person.id, hidden.id)
+        make_submission(person.id, hidden_task.id, status="accepted")
     make_progress(first.id, lesson_two.id)
     make_submission(first.id, task.id, status="accepted")
     attempt(first.id, quiz, two_questions(quiz), score=2)
+    attempt(first.id, hidden_quiz, two_questions(hidden_quiz), score=2)
 
     body = client.get(f"/admin/reports/{course.id}").json()
 
-    # Скрытого урока в воронке нет, хотя отметки о нём в базе есть;
-    # номера сквозные — по всем элементам, а не по одним урокам
+    # Скрытых элементов в воронке нет, хотя отметки, сдачи и попытки по ним
+    # в базе есть; номера сквозные — по всем элементам, а не по одним урокам
     assert body["funnel"] == [
         {"kind": "video", "id": lesson_one.id, "number": 1, "title": "Урок 1", "reached": 2},
         {"kind": "video", "id": lesson_two.id, "number": 2, "title": "Урок 2", "reached": 1},
@@ -197,6 +205,10 @@ def test_funnel_lists_every_visible_item_in_order(client, sms):
         {"kind": "quiz", "id": quiz.id, "number": 4, "title": "Тест модуля", "reached": 1},
         {"kind": "quiz", "id": final.id, "number": 5, "title": "Итоговый тест", "reached": 0},
     ]
+    # Числитель и знаменатель сходятся: пройденное скрытое не идёт ни туда,
+    # ни сюда — иначе прогресс перевалил бы за сотню
+    assert by_user(body)[first.id]["progress_percent"] == 80
+    assert by_user(body)[second.id]["progress_percent"] == 20
 
 
 # -- сводка --------------------------------------------------------------
@@ -345,6 +357,26 @@ def test_certificate_state_repeats_the_checklist(client, sms):
     assert rows[issued.id]["certificate"] == "issued"
     assert rows[ready.id]["certificate"] == "ready"
     assert rows[in_progress.id]["certificate"] == "in_progress"
+
+
+def test_hidden_pass_keeps_the_report_row_ready(client, sms):
+    """Отчёт читает тот же чек-лист, что и учитель на экране завершения:
+    единственный урок курса прошли и потом сняли с программы — зачёт
+    остаётся, и «готов к выдаче» не гаснет. Второй копии правил быть
+    не должно: разойдётся — и админ прочитает это как ошибку."""
+    login_admin(client, sms)
+    course = make_course(title="Критериальное оценивание", cert_require_lessons=True)
+    module = make_module(course.id, title="Модуль 1", order_index=1)
+    removed = make_lesson(module.id, title="Снят с программы", order_index=1, is_hidden=True)
+    person = teacher(1)
+    make_enrollment(person.id, course.id)
+    make_progress(person.id, removed.id)
+
+    rows = by_user(client.get(f"/admin/reports/{course.id}").json())
+
+    assert rows[person.id]["certificate"] == "ready"
+    # Прогресс при этом считается по видимой программе, а в ней пусто
+    assert rows[person.id]["progress_percent"] == 0
 
 
 def test_report_page_does_not_scale_with_participants(client, sms):

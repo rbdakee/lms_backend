@@ -9,7 +9,7 @@ from app.domain.program import apply_statuses, progress_of
 
 def build_program(courses: CourseRepo, course_id: int) -> list[dict]:
     """Оглавление: уроки, тесты и задания модуля вперемешку по order_index.
-    Скрытые уроки и скрытые вопросы не показываются и не считаются."""
+    Скрытые элементы и скрытые вопросы не показываются и не считаются."""
     by_module: dict[int, list[tuple[int, dict]]] = {}
     for lesson in courses.lessons(course_id):
         by_module.setdefault(lesson.module_id, []).append(

@@ -24,6 +24,16 @@ class Settings(BaseSettings):
 
     sms_provider: str = "log"
     telegram_provider: str = "log"
+    # Токен бота — ключ доступа, и его место рядом с паролем базы, а не
+    # в настройках платформы: вписанный в админку, он утекает вместе с ней.
+    telegram_bot_token: str = ""
+    telegram_bot_username: str = ""
+    # Секрет вебхука: Telegram присылает его заголовком, и это единственное,
+    # что отличает настоящий запрос бота от чужого.
+    telegram_webhook_secret: str = ""
+    # Код привязки живёт 10 минут: за это время админ успевает дойти
+    # до телефона, а подобрать шесть знаков за столько — нет.
+    telegram_bind_code_min: int = 10
     storage_provider: str = "local"
 
     # Приватное хранилище файлов. Локально — каталог внутри backend, он же

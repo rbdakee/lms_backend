@@ -179,3 +179,24 @@ def test_totals_count_teachers_published_courses_and_certificates(client, sms):
     # Заблокированный учителем быть не перестал; отозванный сертификат
     # не считается; черновик и скрытый курс в каталоге не видны
     assert totals == {"teachers": 2, "courses_published": 2, "certificates": 1}
+
+
+def test_deleted_question_leaves_the_counter(client, sms):
+    """Удалённое сообщение не приходит наружу нигде: ни в очередь вопросов,
+    ни в плитку дашборда — иначе плитка зовёт разбирать то, чего в очереди
+    уже нет."""
+    login_admin(client, sms)
+    course = make_course()
+    lesson = make_lesson(make_module(course.id).id)
+    person = teacher(1)
+    removed = make_thread_message(lesson.id, course.id, person.id)
+    kept = make_thread_message(lesson.id, course.id, person.id, text="Второй вопрос")
+
+    assert client.delete(f"/admin/thread_messages/{removed.id}").status_code == 204
+
+    body = client.get("/admin/overview").json()
+    assert body["questions_count"] == 1
+    assert [item["id"] for item in body["questions"]] == [kept.id]
+    assert (
+        body["questions_count"] == client.get("/admin/questions?answered=false").json()["total"]
+    )

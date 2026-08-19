@@ -74,7 +74,10 @@ def template_file_out(storage: StoragePort, task: Task) -> dict | None:
     size = storage.size(task.template_file)
     if size is None:
         return None
-    name = PurePosixPath(task.template_file).name
+    # Имя из колонки, а не из ключа: ключ случайный, и до сессии 7а из него
+    # выходило «9f3c1a7e4b2d8c05.docx». У строк, заведённых раньше, колонку
+    # заполнила миграция — прежним именем, чтобы экран не изменился задним числом.
+    name = task.template_file_name or PurePosixPath(task.template_file).name
     return {"name": name, "size_bytes": size, "mime": mime_of(name)}
 
 

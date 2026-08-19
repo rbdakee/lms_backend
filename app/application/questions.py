@@ -166,6 +166,26 @@ class QuestionsService:
             "total": total,
         }
 
+    # -- DELETE /admin/thread_messages/{id} ------------------------------
+
+    def delete_message(self, admin: User, message_id: int) -> None:
+        """Админ убирает любое сообщение под уроком — и вопрос, и ответ
+        (DESIGN_BRIEF, 5.24). Удаление мягкое, по тому же правилу, что
+        у отзыва: у действий админа хранится actor_id (backend/CLAUDE.md).
+
+        Строки ответов под удалённым вопросом не трогаются: из выдачи они
+        уходят вместе с корнем, потому что тред собирается от него.
+        """
+        message = self.messages.by_id(message_id)
+        if message is None:
+            raise NotFoundError("Сообщение не найдено")
+        if message.deleted_at is not None:
+            # Повторный вызов ничего не меняет: время остаётся временем
+            # первого удаления
+            return
+        message.deleted_at = now_utc()
+        message.deleted_by = admin.id
+
     # -- общее -----------------------------------------------------------
 
     def _accessible(self, user: User, lesson_id: int) -> tuple[Lesson, Course]:
@@ -190,7 +210,14 @@ class QuestionsService:
         if parent_id is None:
             return None
         parent = self.messages.by_id(parent_id)
-        if parent is None or parent.parent_id is not None or parent.lesson_id != lesson_id:
+        if (
+            parent is None
+            or parent.parent_id is not None
+            or parent.lesson_id != lesson_id
+            # Удалённый вопрос отвечающему уже не показан: ответ под ним
+            # никуда бы не попал, тред собирается от корня
+            or parent.deleted_at is not None
+        ):
             raise FieldError("parent_id", "Отвечать можно только на вопрос")
         return parent
 

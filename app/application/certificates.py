@@ -46,6 +46,23 @@ def _attempt_blocker() -> dict:
     return {"code": error.code, "message": error.message}
 
 
+def _required(items: list, kind: str, done: set[tuple[str, int]] | None) -> list:
+    """Элементы, которые условие спрашивает с этого человека: видимые плюс
+    скрытые, которые он уже прошёл.
+
+    Скрытое несданное требованием быть перестаёт — курс правят на ходу,
+    а элемент с чужими данными не удаляют, а прячут. Но уже сданное скрытие
+    не отбирает: зачёт человек получил, когда элемент стоял в программе,
+    и снять его задним числом значит отобрать сертификат у того, кто всё
+    прошёл (решение владельца, 19.08.2026).
+    """
+    return [
+        item
+        for item in items
+        if not item.is_hidden or (done is not None and (kind, item.id) in done)
+    ]
+
+
 def course_conditions(
     course: Course,
     *,
@@ -61,10 +78,14 @@ def course_conditions(
     каждого — N+1 на самом тяжёлом экране. Правило при этом остаётся одно
     на всех: разойдётся — и админ прочитает расхождение как ошибку.
 
+    Списки приходят вместе со скрытым, а `done` — вместе с пройденным
+    скрытым: кого из них спрашивать с этого человека, решает `_required`.
     `done = None` — счётчиков нет: человек не вошёл или доступа к курсу нет.
     """
-    module_quizzes = [quiz for quiz in quizzes if not quiz.is_final]
-    final_quizzes = [quiz for quiz in quizzes if quiz.is_final]
+    lessons = _required(lessons, "lesson", done)
+    tasks = _required(tasks, "task", done)
+    module_quizzes = _required([quiz for quiz in quizzes if not quiz.is_final], "quiz", done)
+    final_quizzes = _required([quiz for quiz in quizzes if quiz.is_final], "quiz", done)
     totals = {
         "lessons": len(lessons),
         "tasks": len(tasks),
@@ -158,18 +179,24 @@ class CertificatesService:
         }
 
     def _conditions(self, course: Course, user: User | None) -> list[dict]:
-        """Счётчики по видимым элементам программы.
+        """Счётчики чек-листа: видимые элементы плюс скрытые, которые этот
+        человек уже прошёл.
 
-        Считаем теми же методами, что и прогресс курса: два независимых
-        подсчёта разошлись бы, а человек читает «12 из 18» в чек-листе
-        и в программе одного курса как одно число.
+        Прогресс курса считается иначе — по одному видимому, — и это не
+        рассинхрон: там счётчик программы, которую человек видит перед собой,
+        а здесь список требований к документу, и отнятый задним числом зачёт
+        означал бы отнятый сертификат.
         """
-        done = None if user is None else self.progress.done_keys(user.id, course.id)
+        done = (
+            None
+            if user is None
+            else self.progress.done_keys(user.id, course.id, include_hidden=True)
+        )
         return course_conditions(
             course,
-            lessons=self.courses.lessons(course.id),
-            tasks=self.courses.tasks(course.id),
-            quizzes=self.courses.quizzes(course.id),
+            lessons=self.courses.lessons(course.id, include_hidden=True),
+            tasks=self.courses.tasks(course.id, include_hidden=True),
+            quizzes=self.courses.quizzes(course.id, include_hidden=True),
             done=done,
         )
 

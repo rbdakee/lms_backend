@@ -86,6 +86,20 @@ def test_task_404_for_missing_and_invisible_course(client, sms):
     assert submit(client, hidden_task.id, text="x").status_code == 404
 
 
+def test_hidden_task_is_404(client, sms):
+    """Скрытое задание исчезает у учителя целиком: не открывается и по прямой
+    ссылке, даже когда доступ к курсу выдан (CONTRACT, сессия 7а)."""
+    course = make_course()
+    task = make_task(make_module(course.id).id, is_hidden=True)
+
+    login(client, sms)
+    make_enrollment(user_id(client), course.id)
+
+    assert client.get(f"/tasks/{task.id}").status_code == 404
+    assert client.get(f"/tasks/{task.id}/template_file").status_code == 404
+    assert submit(client, task.id, text="x").status_code == 404
+
+
 def test_task_403_without_enrollment_and_after_revoke(client, sms):
     stranger = make_task(make_module(make_course().id).id)
     revoked_course = make_course()
@@ -484,3 +498,30 @@ def test_second_pending_submission_blocked_by_index(client, sms):
             text("SELECT count(*) FROM submission WHERE task_id = :t"), {"t": task.id}
         ).scalar()
     assert count == 1
+
+
+def test_template_with_a_russian_name_still_downloads(client, client2, sms, storage):
+    """Имя шаблона задаёт админ, и с сессии 7а оно обычно русское, с пробелами.
+    Оно попадает в подписанную ссылку — значит подпись считается по одному
+    и тому же виду пути и на выдаче, и на раздаче, иначе учитель получит 403
+    на файл, который ему только что приложили."""
+    login(client, sms)
+    uid = user_id(client)
+    course, task = make_learning_task(uid)
+
+    login_admin(client2, sms)
+    key = upload(client2, "Шаблон дескрипторов.docx")
+    attached = client2.patch(
+        f"/admin/tasks/{task.id}",
+        json={"template_file": {"key": key, "name": "Шаблон дескрипторов.docx"}},
+    )
+    assert attached.status_code == 200
+    assert attached.json()["template_file"]["name"] == "Шаблон дескрипторов.docx"
+
+    assert client.get(f"/tasks/{task.id}").json()["template_file"]["name"] == (
+        "Шаблон дескрипторов.docx"
+    )
+    body = client.get(f"/tasks/{task.id}/template_file").json()
+    resp = client.get(body["url"].removeprefix(get_settings().public_base_url))
+    assert resp.status_code == 200
+    assert resp.content == PDF

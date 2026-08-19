@@ -34,9 +34,14 @@ def _review_out(review: Review, author: User) -> dict:
         "rating": review.rating,
         "text": review.text,
         "created_at": review.created_at,
-        # Ответ админа на отзыв в модели данных хранить пока негде — поле
-        # в контракте заранее, чтобы форма не поменялась, когда место найдут.
-        "reply": None,
+        # Ответ админа лежит колонками у самого отзыва: он один, вторых
+        # уровней у него не бывает. Имени отвечающего наружу нет — на экране
+        # он подписан просто «Администратор».
+        "reply": (
+            {"text": review.reply_text, "created_at": review.reply_at}
+            if review.reply_text is not None
+            else None
+        ),
     }
 
 

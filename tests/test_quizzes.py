@@ -111,6 +111,19 @@ def test_quiz_404_for_missing_and_invisible_course(client, sms):
     assert client.post(f"/quizzes/{draft_quiz.id}/quiz_attempts").status_code == 404
 
 
+def test_hidden_quiz_is_404(client, sms):
+    """Скрытый тест исчезает у учителя целиком: не открывается и по прямой
+    ссылке, даже когда доступ к курсу выдан (CONTRACT, сессия 7а)."""
+    course = make_course()
+    quiz = make_quiz(make_module(course.id).id, is_hidden=True)
+
+    login(client, sms)
+    make_enrollment(user_id(client), course.id)
+
+    assert client.get(f"/quizzes/{quiz.id}").status_code == 404
+    assert client.post(f"/quizzes/{quiz.id}/quiz_attempts").status_code == 404
+
+
 def test_quiz_403_without_enrollment(client, sms):
     stranger = make_course()
     stranger_quiz = make_quiz(make_module(stranger.id).id)

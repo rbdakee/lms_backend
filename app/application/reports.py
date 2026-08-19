@@ -76,11 +76,13 @@ class ReportsService:
         ]
         done_by_user = self.progress.done_by_user(course.id)
         # Условия сертификата считаются на каждую строку таблицы, а участников
-        # на странице до сотни: состав курса и пройденное грузим один раз
+        # на странице до сотни: состав курса и пройденное грузим один раз.
+        # Скрытое приходит вместе со всем — чек-лист оставит из него то,
+        # что человек успел пройти, и делает это без похода в базу на строку
         course_items = {
-            "lessons": self.courses.lessons(course.id),
-            "tasks": self.courses.tasks(course.id),
-            "quizzes": self.courses.quizzes(course.id),
+            "lessons": self.courses.lessons(course.id, include_hidden=True),
+            "tasks": self.courses.tasks(course.id, include_hidden=True),
+            "quizzes": self.courses.quizzes(course.id, include_hidden=True),
         }
         done_items = self.progress.done_items_by_user(course.id)
         return {

@@ -104,6 +104,15 @@ def completed_at(course_id):
         ).scalar()
 
 
+def hide(table, item_id):
+    """Прячет уже заведённый элемент. Так его убирает из программы админ,
+    когда элемент кто-то успел пройти и удалить его больше нельзя."""
+    with get_engine().begin() as conn:
+        conn.execute(
+            text(f"UPDATE {table} SET is_hidden = true WHERE id = :i"), {"i": item_id}
+        )
+
+
 def revoke(number):
     with get_engine().begin() as conn:
         conn.execute(
@@ -185,6 +194,8 @@ def test_completion_counts_only_visible_items(client, sms):
     )
     module_id = lesson.module_id
     make_lesson(module_id, title="Черновик урока", is_hidden=True)
+    make_quiz(module_id, title="Черновик теста", is_hidden=True)
+    make_task(module_id, title="Черновик задания", is_hidden=True)
     make_progress(uid, lesson.id)
     pass_quiz(uid, quiz.id)
 
@@ -195,7 +206,8 @@ def test_completion_counts_only_visible_items(client, sms):
         "code": "lessons",
         "label": "Пройти все уроки",
         "status": "done",
-        # Скрытый урок не считается ни в done, ни в total — как везде в программе
+        # Скрытое не считается ни в done, ни в total — как везде в программе,
+        # и правило одно на все три вида элемента
         "done_count": 1,
         "total_count": 1,
     }
@@ -654,6 +666,159 @@ def test_hidden_last_lesson_does_not_collapse_the_condition(client, sms):
     body = client.get(f"/courses/{course.id}/completion").json()
     assert body["conditions"][0]["total_count"] == 0
     assert body["can_issue"] is False
+
+
+def test_hidden_last_quiz_does_not_collapse_the_condition(client, sms):
+    """То же правило у теста: тест с попытками не удаляют, а скрывают. Скрытие
+    последнего несданного теста не выполняет условие само собой — и не отбирает
+    зачёт у того, кто уже прошёл видимый."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course = make_course(cert_require_module_quizzes=True)
+    module = make_module(course.id)
+    make_quiz(module.id, title="Скрытый тест", order_index=1, is_hidden=True)
+    make_enrollment(uid, course.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert body["conditions"][0]["total_count"] == 0
+    assert body["conditions"][0]["status"] == "not_started"
+    assert body["can_issue"] is False
+    resp = client.post(f"/courses/{course.id}/certificate")
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "conditions_not_met"
+
+    # Появился видимый тест и он сдан — условие закрыто, скрытый в счётчики
+    # не входит ни числителем, ни знаменателем
+    visible = make_quiz(module.id, title="Тест модуля", order_index=2)
+    pass_quiz(uid, visible.id)
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert body["conditions"][0]["done_count"] == 1
+    assert body["conditions"][0]["total_count"] == 1
+    assert body["can_issue"] is True
+
+
+def test_hiding_a_passed_quiz_does_not_take_the_pass_away(client, sms):
+    """Тест с попытками не удаляют, а скрывают — и тот, кто его уже сдал,
+    не должен от этого лишиться сертификата: скрытие снимает требование,
+    но не отбирает засчитанное (решение владельца).
+
+    До правки строка схлопывалась в «0 из 0 — не начато», и кнопка выдачи
+    гасла у человека, прошедшего курс целиком.
+    """
+    login_named(client, sms)
+    uid = user_id(client)
+    course = make_course(cert_require_module_quizzes=True)
+    module = make_module(course.id)
+    quiz = make_quiz(module.id, title="Тест модуля", order_index=1)
+    make_enrollment(uid, course.id)
+    pass_quiz(uid, quiz.id)
+
+    hide("quiz", quiz.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert body["conditions"][0] == {
+        "code": "module_quizzes",
+        "label": "Сдать все тесты модулей",
+        "status": "done",
+        # Сданное скрытое остаётся и в числителе, и в знаменателе
+        "done_count": 1,
+        "total_count": 1,
+    }
+    assert body["can_issue"] is True
+    assert client.post(f"/courses/{course.id}/certificate").status_code == 200
+
+
+def test_hiding_a_passed_lesson_and_task_keeps_them_counted(client, sms):
+    """То же правило у урока и у задания: скрыть их админ может ровно потому,
+    что кто-то их уже прошёл, — и это тот самый человек."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course = make_course(cert_require_lessons=True, cert_require_tasks=True)
+    module = make_module(course.id)
+    lesson = make_lesson(module.id, order_index=1)
+    task = make_task(module.id, order_index=2)
+    make_enrollment(uid, course.id)
+    make_progress(uid, lesson.id)
+    make_submission(uid, task.id, status="accepted")
+
+    hide("lesson", lesson.id)
+    hide("task", task.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert codes(body) == ["lessons", "tasks"]
+    assert [condition["status"] for condition in body["conditions"]] == ["done", "done"]
+    assert [
+        (condition["done_count"], condition["total_count"]) for condition in body["conditions"]
+    ] == [(1, 1), (1, 1)]
+    assert body["can_issue"] is True
+
+
+def test_hidden_unpassed_item_stops_being_a_requirement(client, sms):
+    """Обратная сторона того же решения, и это не дефект: скрытый элемент
+    перестаёт быть требованием. Из двух заданий одно сдано, второе сняли
+    с программы — условие закрыто «1 из 1», и документ выдаётся."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course = make_course(cert_require_tasks=True)
+    module = make_module(course.id)
+    submitted = make_task(module.id, title="Сдано", order_index=1)
+    removed = make_task(module.id, title="Снято с программы", order_index=2)
+    make_enrollment(uid, course.id)
+    make_submission(uid, submitted.id, status="accepted")
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert (body["conditions"][0]["done_count"], body["conditions"][0]["total_count"]) == (1, 2)
+    assert body["can_issue"] is False
+
+    hide("task", removed.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert (body["conditions"][0]["done_count"], body["conditions"][0]["total_count"]) == (1, 1)
+    assert body["can_issue"] is True
+
+
+def test_checklist_counts_the_hidden_pass_but_progress_does_not(client, sms):
+    """Два счётчика одного курса считают разное намеренно. Прогресс — это
+    программа, которую человек видит перед собой; чек-лист — требования
+    к документу, и уже полученный зачёт из него не пропадает."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course = make_course(cert_require_lessons=True)
+    module = make_module(course.id)
+    first = make_lesson(module.id, title="Урок 1", order_index=1)
+    second = make_lesson(module.id, title="Урок 2", order_index=2)
+    make_enrollment(uid, course.id)
+    make_progress(uid, first.id)
+    make_progress(uid, second.id)
+
+    hide("lesson", second.id)
+
+    access = client.get(f"/courses/{course.id}").json()["access"]
+    # В программе остался один урок, и он пройден
+    assert (access["done_count"], access["total_count"]) == (1, 1)
+    assert access["progress_percent"] == 100
+
+    condition = client.get(f"/courses/{course.id}/completion").json()["conditions"][0]
+    # А в чек-листе уроков по-прежнему два: снятый с программы человек прошёл
+    assert (condition["done_count"], condition["total_count"]) == (2, 2)
+    assert condition["status"] == "done"
+
+
+def test_unfinished_attempt_of_hidden_quiz_does_not_block_issue(client, sms):
+    """Попытка скрытого теста выдачу не задерживает: её finish в чек-листе
+    уже ничего не поменяет, а брошенная попытка висит незавершённой вечно —
+    человек остался бы без документа навсегда."""
+    login_named(client, sms)
+    uid = user_id(client)
+    course, lesson, task, quiz, final = make_cert_course(uid)
+    complete_everything(uid, lesson, task, quiz, final)
+    hidden = make_quiz(lesson.module_id, title="Скрытый тест", order_index=5, is_hidden=True)
+    start_attempt(uid, hidden.id)
+
+    body = client.get(f"/courses/{course.id}/completion").json()
+    assert body["blocker"] is None
+    assert body["can_issue"] is True
+    assert client.post(f"/courses/{course.id}/certificate").status_code == 200
 
 
 def test_unfinished_attempt_does_not_hide_the_checklist(client, sms):

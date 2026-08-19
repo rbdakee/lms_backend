@@ -320,3 +320,112 @@ def test_own_reply_does_not_clear_the_admin_queue(client, sms):
     make_admin()
     resp = client.get("/admin/questions", params={"answered": False})
     assert [item["id"] for item in resp.json()["items"]] == [question["id"]]
+
+
+# -- удаление сообщения админом ----------------------------------------
+
+
+def deleted_row(message_id: int):
+    """Отметка мягкого удаления: в ответах её нет, а проверить нужно и то,
+    кто удалил, и что повторный вызов не двигает время."""
+    with get_engine().begin() as conn:
+        return conn.execute(
+            text("SELECT deleted_at, deleted_by FROM thread_message WHERE id = :id"),
+            {"id": message_id},
+        ).one()
+
+
+def test_delete_message_requires_admin(client, sms):
+    login(client, sms)
+    uid = user_id(client)
+    course, lesson = make_question_scene(uid)
+    message = make_thread_message(lesson.id, course.id, uid)
+
+    resp = client.delete(f"/admin/thread_messages/{message.id}")
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "forbidden"
+
+
+def test_delete_message_requires_auth_and_404_for_unknown(client, sms):
+    assert client.delete("/admin/thread_messages/1").status_code == 401
+
+    login_admin(client, sms)
+    resp = client.delete("/admin/thread_messages/999999")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "not_found"
+
+
+def test_deleted_root_takes_its_replies_out_of_sight(client, client2, sms):
+    """Тред без вопроса нечитаем: удаление корня уносит из выдачи и ответы
+    под ним — и у учителя, и в очереди админа."""
+    login(client, sms)
+    uid = user_id(client)
+    course, lesson = make_question_scene(uid)
+    removed = make_thread_message(lesson.id, course.id, uid, text="Первый вопрос")
+    make_thread_message(lesson.id, course.id, uid, text="Ответ", parent_id=removed.id)
+    kept = make_thread_message(lesson.id, course.id, uid, text="Второй вопрос")
+
+    login_admin(client2, sms)
+    assert client2.delete(f"/admin/thread_messages/{removed.id}").status_code == 204
+
+    body = client.get(f"/lessons/{lesson.id}/questions").json()
+    assert [item["id"] for item in body["items"]] == [kept.id]
+    assert body["total"] == 1
+    queue = client2.get("/admin/questions").json()
+    assert [item["id"] for item in queue["items"]] == [kept.id]
+    assert queue["total"] == 1
+
+
+def test_deleted_reply_returns_the_question_to_the_queue(client, client2, sms):
+    """Удалённый ответ вопрос не закрывает: в выдаче его нет, и очередь
+    показала бы вопрос отвеченным без единого ответа."""
+    login(client, sms)
+    uid = user_id(client)
+    course, lesson = make_question_scene(uid)
+    question = ask(client, lesson.id).json()
+
+    login_admin(client2, sms)
+    reply = client2.post(
+        f"/lessons/{lesson.id}/questions",
+        json={"text": "Успеть — да, если писать на группу.", "parent_id": question["id"]},
+    ).json()
+    assert client2.get("/admin/questions", params={"answered": False}).json()["total"] == 0
+
+    assert client2.delete(f"/admin/thread_messages/{reply['id']}").status_code == 204
+
+    body = client.get(f"/lessons/{lesson.id}/questions").json()
+    # Сам вопрос остаётся на месте — удалён был только ответ
+    assert [item["id"] for item in body["items"]] == [question["id"]]
+    assert body["items"][0]["replies"] == []
+    unanswered = client2.get("/admin/questions", params={"answered": False}).json()
+    assert [item["id"] for item in unanswered["items"]] == [question["id"]]
+
+
+def test_repeated_delete_keeps_the_first_time(client, sms):
+    login_admin(client, sms)
+    uid = user_id(client)
+    course, lesson = make_question_scene(uid)
+    message = make_thread_message(lesson.id, course.id, uid)
+
+    assert client.delete(f"/admin/thread_messages/{message.id}").status_code == 204
+    first = deleted_row(message.id)
+    assert first.deleted_by == uid
+
+    assert client.delete(f"/admin/thread_messages/{message.id}").status_code == 204
+    assert deleted_row(message.id) == first
+
+
+def test_reply_to_a_deleted_question_is_rejected(client, client2, sms):
+    """Удалённый вопрос отвечающему уже не показан: ответ под ним никуда
+    бы не попал — тред собирается от корня."""
+    login(client, sms)
+    uid = user_id(client)
+    course, lesson = make_question_scene(uid)
+    question = make_thread_message(lesson.id, course.id, uid)
+
+    login_admin(client2, sms)
+    client2.delete(f"/admin/thread_messages/{question.id}")
+
+    resp = ask(client, lesson.id, "А если так?", parent_id=question.id)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0]["field"] == "parent_id"

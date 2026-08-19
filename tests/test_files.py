@@ -239,6 +239,14 @@ def test_local_storage_removes_partial_object(tmp_path):
     assert LocalStorage(tmp_path).size("uploads/big.bin") is None
 
 
-def test_local_storage_refuses_key_outside_root(tmp_path):
+def test_local_storage_key_outside_root(tmp_path):
+    """Ключ, уводящий за пределы каталога, приходит снаружи — из тела PATCH:
+    для `size` это «такого объекта нет», и сценарий отдаёт контрактное 404.
+    У `save` и `read` ключ наш собственный, и молчать там нельзя."""
+    storage = LocalStorage(tmp_path)
+
+    assert storage.size("../../etc/passwd") is None
     with pytest.raises(ValueError, match="хранилища"):
-        LocalStorage(tmp_path).size("../../etc/passwd")
+        storage.save("../../etc/passwd", [b"x"])
+    with pytest.raises(ValueError, match="хранилища"):
+        list(storage.read("../../etc/passwd"))

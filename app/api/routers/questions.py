@@ -58,3 +58,13 @@ def admin_questions(
         limit=params.per_page,
     )
     return AdminQuestionsPageOut(**page_out(data["items"], data["total"], params))
+
+
+@admin_router.delete("/thread_messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_thread_message(
+    message_id: int,
+    admin: Annotated[User, Depends(deps.get_current_admin)],
+    svc: Annotated[QuestionsService, Depends(deps.get_questions_service)],
+) -> None:
+    # И вопрос, и ответ: удаление корня уносит из выдачи весь тред
+    svc.delete_message(admin, message_id)
