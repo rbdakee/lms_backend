@@ -29,7 +29,10 @@ BRANDING_KEY = "branding"
 TELEGRAM_KEY = "telegram"
 
 PLATFORM_FIELDS = ("platform_name", "org_name")
-CONTACT_FIELDS = ("name", "phone", "whatsapp", "telegram", "hours")
+# Оба номера — именно номера, а не ссылки: ссылку wa.me собирает фронт.
+# Telegram-контакта учителю нет (решение владельца 20.08.2026); ключ telegram
+# в старых строках настройки просто перестаёт читаться — миграция не нужна
+CONTACT_FIELDS = ("name", "phone", "whatsapp", "hours")
 
 # Логотип платформы — свой слот хранилища; три картинки сертификата экран
 # показывает вложенным объектом, и имя поля там короче имени слота.

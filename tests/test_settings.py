@@ -15,15 +15,15 @@ SVG = (
 )
 BASE = get_settings().public_base_url
 
-# Контакты из примера контракта. Номер вымышленный.
+# Контакты из примера контракта. Номера вымышленные; whatsapp — номер,
+# а не ссылка: ссылку wa.me собирает фронт.
 CONTACTS = {
     "name": "Аскарова Бақыт",
     "phone": "+77010000000",
-    "whatsapp": "https://wa.me/77010000000",
-    "telegram": "https://t.me/lms_admin",
+    "whatsapp": "+77010000001",
     "hours": "Будни, 9:00–18:00",
 }
-EMPTY_CONTACTS = {"name": "", "phone": "", "whatsapp": "", "telegram": "", "hours": ""}
+EMPTY_CONTACTS = {"name": "", "phone": "", "whatsapp": "", "hours": ""}
 
 
 def upload(client, name, content=PNG):

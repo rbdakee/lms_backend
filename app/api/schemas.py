@@ -1941,12 +1941,14 @@ class SettingsImageOut(BaseModel):
 class SettingsContactsOut(BaseModel):
     """Контакты администратора: их подставляют в кнопку «Связаться
     с администратором» и в подвал. Не заполняли — приходят пустые строки,
-    а не null: экран рисует поля всегда."""
+    а не null: экран рисует поля всегда.
+
+    `phone` — для звонков, `whatsapp` — номер, а не ссылка: ссылку wa.me
+    фронт собирает сам."""
 
     name: str
     phone: str
     whatsapp: str
-    telegram: str
     hours: str
 
 
@@ -1992,11 +1994,11 @@ class SettingsImageIn(BaseModel):
 class SettingsContactsIn(BaseModel):
     model_config = {"extra": "forbid"}
 
-    # Пустая строка стирает поле; null — то же, что поле не прислали
+    # Пустая строка стирает поле; null — то же, что поле не прислали.
+    # whatsapp — номер, как и phone: ссылку собирает фронт
     name: str | None = Field(None, max_length=200)
     phone: str | None = Field(None, max_length=50)
-    whatsapp: str | None = Field(None, max_length=500)
-    telegram: str | None = Field(None, max_length=500)
+    whatsapp: str | None = Field(None, max_length=50)
     hours: str | None = Field(None, max_length=200)
 
 
