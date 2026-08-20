@@ -78,6 +78,18 @@ def test_the_number_is_off_without_the_pair(client, sms, monkeypatch):
     assert verify(client).status_code == 400
 
 
+def test_a_phone_without_a_code_still_makes_an_admin(sms, monkeypatch):
+    """Боевая настройка при работающем провайдере: админ заведён, а код
+    ему приходит обычный. Бэкдора при этом нет вовсе."""
+    monkeypatch.setattr(get_settings(), "auth_bootstrap_phone", PHONE)
+    monkeypatch.setattr("app.application.auth.secrets.choice", lambda alphabet: "7")
+
+    with TestClient(app) as client:
+        request_code(client, phone=PHONE)
+        assert sms.sent[-1][1] == "7777"
+        assert verify(client, code="7777").json()["is_admin"] is True
+
+
 # -- Общие правила входа на него распространяются -----------------------
 
 

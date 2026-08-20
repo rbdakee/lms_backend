@@ -6,10 +6,12 @@
 этого пара `AUTH_BOOTSTRAP_PHONE` + `AUTH_BOOTSTRAP_CODE` заводит его при
 старте и она же пускает его без SMS (`app/application/auth.py`, `_code_for`).
 
-Это бэкдор, и он назван бэкдором: пока настоящего SMS-провайдера нет, один
-номер входит известным кодом. Снимается снятием двух переменных, без релиза;
-`is_admin` у заведённого пользователя при этом остаётся — пропадает вход
-без SMS, а не сам админ.
+Половины две, и они не равны. `AUTH_BOOTSTRAP_PHONE` — обычная боевая
+настройка: заводит админа, входит он кодом от провайдера. А вот
+`AUTH_BOOTSTRAP_CODE` — бэкдор, и назван он бэкдором: тот же номер входит
+известным кодом, минуя провайдера. Нужен он ровно там, где кода взять
+неоткуда (`SMS_PROVIDER=log`), и снимается снятием переменной, без релиза;
+`is_admin` у заведённого пользователя при этом остаётся.
 """
 
 import logging
@@ -34,8 +36,10 @@ def ensure_bootstrap_admin(users: UserRepo, cfg: Settings, commit) -> None:
     if not user.is_admin:
         user.is_admin = True
     commit()
-    log.warning(
-        "AUTH_BOOTSTRAP_PHONE: один номер входит фиксированным кодом без SMS"
-        " и заведён админом. Снять — убрать AUTH_BOOTSTRAP_PHONE"
-        " и AUTH_BOOTSTRAP_CODE из окружения."
-    )
+    if cfg.auth_bootstrap_code:
+        log.warning(
+            "AUTH_BOOTSTRAP_CODE: один номер входит фиксированным кодом,"
+            " минуя провайдера. Снять — убрать переменную из окружения."
+        )
+    else:
+        log.info("AUTH_BOOTSTRAP_PHONE: номер заведён админом")

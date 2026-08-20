@@ -174,6 +174,15 @@ class AuthCodeRepo:
         self.db.flush()
         return code
 
+    def drop(self, code: AuthCode) -> None:
+        """Убрать строку кода, который не удалось отправить.
+
+        Не ушедший код не должен ни держать минуту до повтора, ни считаться
+        в суточном потолке: и то и другое считается по строкам этой таблицы,
+        а человек не получил ничего.
+        """
+        self.db.delete(code)
+
     def _advisory_lock(self, namespace: int, value: str) -> None:
         self.db.execute(
             select(

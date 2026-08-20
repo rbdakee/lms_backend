@@ -1,4 +1,7 @@
+from app.config import get_settings
 from tests.conftest import NORM, PHONE, age_codes, login, request_code
+
+CFG = get_settings()
 
 
 def test_request_code_sends_sms_and_normalizes(client, sms):
@@ -126,3 +129,56 @@ def test_blocked_user(client, sms):
     resp = request_code(client)
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "blocked"
+
+
+# -- Провайдер не принял код -------------------------------------------
+# Заглушка не отказывала никогда, настоящий провайдер отказывает: сеть,
+# протухший токен, снятый с публикации шаблон.
+
+
+def test_a_code_that_did_not_go_out_says_so(client, sms, monkeypatch):
+    """Отдельный код ошибки, а не `internal_error`: «что-то пошло не так»
+    человек читает как «сломалось насовсем», а здесь помогает вторая
+    попытка."""
+
+    def refuse(phone, code):
+        raise RuntimeError("провайдер недоступен")
+
+    monkeypatch.setattr(sms, "send_code", refuse)
+
+    resp = request_code(client)
+    assert resp.status_code == 502
+    assert resp.json()["error"]["code"] == "send_failed"
+
+
+def test_a_code_that_did_not_go_out_does_not_hold_up_the_next_try(client, sms, monkeypatch):
+    """Минуту до повтора держит строка кода в базе. Не ушедший код такой
+    строки не оставляет — иначе человек ждёт из-за сообщения, которого
+    не получал."""
+    attempts = []
+
+    def flaky(phone, code):
+        attempts.append(code)
+        if len(attempts) == 1:
+            raise RuntimeError("провайдер недоступен")
+        sms.sent.append((phone, code))
+
+    monkeypatch.setattr(sms, "send_code", flaky)
+
+    assert request_code(client).status_code == 502
+    assert request_code(client).status_code == 200
+    assert len(sms.sent) == 1
+
+
+def test_a_code_that_did_not_go_out_does_not_eat_the_daily_cap(client, sms, monkeypatch):
+    """Суточный потолок считается по строкам той же таблицы. Не ушедший код
+    в него попадать не должен: SMS не отправлена и денег не стоила,
+    а человек остался бы без входа на сутки."""
+
+    def refuse(phone, code):
+        raise RuntimeError("провайдер недоступен")
+
+    monkeypatch.setattr(sms, "send_code", refuse)
+
+    for attempt in range(CFG.phone_codes_per_day + 1):
+        assert request_code(client).status_code == 502, attempt

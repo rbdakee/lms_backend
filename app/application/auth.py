@@ -16,6 +16,7 @@ from app.domain.errors import (
     BlockedError,
     CodeExpiredError,
     RateLimitedError,
+    SendFailedError,
     TooManyAttemptsError,
     ValidationAppError,
     WrongCodeError,
@@ -111,17 +112,25 @@ class AuthService:
 
         self.codes.expire_active(phone)
         code = self._code_for(phone)
-        self.codes.create(phone, _hash_code(phone, code), ip, self.cfg.code_ttl_min)
+        row = self.codes.create(phone, _hash_code(phone, code), ip, self.cfg.code_ttl_min)
         # Коммит до отправки, а не после: он отпускает блокировки lock_sending,
         # которые иначе держались бы весь поход к SMS-шлюзу. Ключ адреса
         # за прокси один на всех, и вход всей площадки встал бы в очередь
         # со скоростью одной SMS за раз.
         #
-        # Плата за это известна: не ушедшая SMS оставляет строку кода
-        # в базе, и человек ждёт минуту до повторной отправки. Обратный
-        # порядок стоил бы дороже — очередь на входе для всех сразу.
+        # Обратный порядок стоил бы дороже — очередь на входе для всех сразу.
         self.commit()
-        self.sms.send_code(phone, code)
+        try:
+            self.sms.send_code(phone, code)
+        except Exception as failed:
+            # Не ушедший код строкой в базе не остаётся: иначе человек ждёт
+            # минуту до повтора из-за сообщения, которого не получал,
+            # а суточный потолок считает эту попытку отправкой. Удаление
+            # идёт отдельной транзакцией — предыдущая уже закрыта, и это
+            # то же самое, что закрыть её пораньше ради блокировок.
+            self.codes.drop(row)
+            self.commit()
+            raise SendFailedError() from failed
         return self.cfg.code_resend_sec
 
     def _code_for(self, phone: str) -> str:
@@ -135,9 +144,13 @@ class AuthService:
         номер на десять минут. Пара проверена при старте
         (`check_bootstrap_login`) и снимается снятием двух переменных.
         """
-        bootstrap = self.cfg.auth_bootstrap_phone
-        if bootstrap and phone == normalize_phone(bootstrap):
-            return self.cfg.auth_bootstrap_code
+        # Обе половины обязательны: номер задают и без кода — это боевая
+        # настройка «завести админа», и фиксированного кода там быть
+        # не должно. Одного номера хватило бы, чтобы выдать пустой код,
+        # которым не войти вовсе.
+        fixed, bootstrap = self.cfg.auth_bootstrap_code, self.cfg.auth_bootstrap_phone
+        if fixed and bootstrap and phone == normalize_phone(bootstrap):
+            return fixed
         return "".join(secrets.choice("0123456789") for _ in range(self.cfg.code_length))
 
     def verify_code(

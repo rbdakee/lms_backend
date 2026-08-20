@@ -37,6 +37,7 @@ from app.adapters.db.repos import (
     now_utc,
 )
 from app.adapters.sms.log_sms import LogSms
+from app.adapters.sms.whatsapp import WhatsAppSms
 from app.adapters.storage.local_storage import LocalStorage
 from app.adapters.storage.s3_storage import S3Storage, s3_client
 from app.adapters.telegram.bot import TelegramBot
@@ -90,11 +91,18 @@ _preview_attempts = PreviewAttemptStore()
 
 
 def get_sms() -> SmsPort:
-    # Провайдер пока один — заглушка; настоящий добавится строчкой
-    # конфигурации. Что в SMS_PROVIDER стоит именно `log`, проверено
-    # при старте (`check_providers`): иначе настройка обещала бы отправку,
-    # а код входа уходил бы в лог
-    return LogSms()
+    """Выбор адаптера — конфигурацией, а не `if` в месте вызова.
+
+    `log` — заглушка, она печатает код в лог и годится только для
+    разработки. `whatsapp` — бой: код уходит согласованным шаблоном через
+    Cloud API. Что в SMS_PROVIDER стоит одно из двух, проверено при старте
+    (`check_providers`), там же проверено, что у `whatsapp` есть номер
+    отправителя и токен.
+    """
+    cfg = get_settings()
+    if cfg.sms_provider == "log":
+        return LogSms()
+    return WhatsAppSms(cfg)
 
 
 def get_telegram(db: Annotated[DbSession, Depends(get_db)]) -> TelegramPort:

@@ -86,19 +86,40 @@ def test_s3_without_an_address_or_keys_stops_the_service_at_start(monkeypatch):
     check_providers(get_settings())
 
 
-# -- Вход без SMS: пара «номер + код» -----------------------------------
+def test_whatsapp_without_a_sender_or_token_stops_the_service_at_start(monkeypatch):
+    """Имя шаблона у провайдера своё, а без номера отправителя и токена
+    не уйдёт ни одно сообщение — и узнали бы мы об этом на первом входе
+    учителя, а не при старте."""
+    monkeypatch.setattr(get_settings(), "sms_provider", "whatsapp")
+    with pytest.raises(RuntimeError) as failed:
+        check_providers(get_settings())
+    message = str(failed.value)
+    assert "WHATSAPP_PHONE_NUMBER_ID" in message
+    assert "WHATSAPP_ACCESS_TOKEN" in message
+
+    monkeypatch.setattr(get_settings(), "whatsapp_phone_number_id", "1035760399630606")
+    monkeypatch.setattr(get_settings(), "whatsapp_access_token", "fake-token")
+    check_providers(get_settings())
 
 
-def test_half_of_the_bootstrap_pair_stops_the_service_at_start(monkeypatch):
-    """Номер без кода никогда не войдёт, код без номера никого не пускает.
-    Проверить это на живом сервере нечем: кода входа там неоткуда взять,
-    а отказа не будет — просто не пустит."""
-    for field in ("auth_bootstrap_phone", "auth_bootstrap_code"):
-        monkeypatch.setattr(get_settings(), field, "0909" if "code" in field else "+77000000077")
-        with pytest.raises(RuntimeError) as failed:
-            check_providers(get_settings())
-        assert "AUTH_BOOTSTRAP_PHONE" in str(failed.value)
-        monkeypatch.undo()
+# -- Первый админ и вход без провайдера ---------------------------------
+
+
+def test_a_bootstrap_code_without_a_phone_stops_the_service_at_start(monkeypatch):
+    """Код без номера не пускает никого и значит только опечатку. Проверить
+    это на живом сервере нечем: отказа не будет — просто не пустит."""
+    monkeypatch.setattr(get_settings(), "auth_bootstrap_code", "0909")
+    with pytest.raises(RuntimeError) as failed:
+        check_providers(get_settings())
+    assert "AUTH_BOOTSTRAP_PHONE" in str(failed.value)
+
+
+def test_a_bootstrap_phone_without_a_code_is_the_normal_production_setting(monkeypatch):
+    """А номер без кода — обычная боевая настройка: админ заведён, входит
+    он кодом от провайдера. Фиксированный код нужен только там, где кода
+    взять неоткуда."""
+    monkeypatch.setattr(get_settings(), "auth_bootstrap_phone", "+77000000077")
+    check_providers(get_settings())
 
 
 def test_a_bootstrap_phone_that_is_not_a_phone_stops_the_service_at_start(monkeypatch):

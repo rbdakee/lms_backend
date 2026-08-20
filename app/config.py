@@ -28,6 +28,22 @@ class Settings(BaseSettings):
     trust_real_ip: bool = False
 
     sms_provider: str = "log"
+    # WhatsApp Cloud API (SMS_PROVIDER=whatsapp). Код входа уходит
+    # согласованным шаблоном категории Authentication: свободное сообщение
+    # WhatsApp примет только внутри 24-часового окна, а на входе его нет
+    # никогда (`app/adapters/sms/whatsapp.py`).
+    whatsapp_phone_number_id: str = ""
+    # Постоянный токен системного пользователя. Место ему рядом с паролем
+    # базы: вписанный в настройки площадки, он утекает вместе с ней.
+    whatsapp_access_token: str = ""
+    whatsapp_api_version: str = "v21.0"
+    # Имя и язык шаблона — как они заведены в Meta Business Manager.
+    whatsapp_template_name: str = "otp_ru"
+    whatsapp_template_language: str = "ru"
+    # Шаблон Authentication по умолчанию идёт с кнопкой «Скопировать код»,
+    # и тогда код передаётся дважды — в теле и в кнопке. Шаблон без кнопки
+    # существует, поэтому переключатель, а не константа.
+    whatsapp_template_has_button: bool = True
     telegram_provider: str = "log"
     # Токен бота — ключ доступа, и его место рядом с паролем базы, а не
     # в настройках платформы: вписанный в админку, он утекает вместе с ней.
@@ -97,14 +113,14 @@ class Settings(BaseSettings):
     # Форма вопроса под уроком без капчи — потолок на пользователя.
     thread_messages_per_min: int = 3
 
-    # Вход без SMS для одного номера. Настоящего SMS-провайдера нет
-    # (SMS_PROVIDER=log печатает код в лог), и в бою войти может только тот,
-    # кто читает логи сервиса. Пара «номер + код» держит вход первого админа,
-    # пока провайдера нет; она же заводит его при старте
-    # (`app/application/bootstrap.py`). Это бэкдор, и снимается он снятием
-    # двух переменных, без релиза. Код здесь не лежит нарочно: пустое
-    # умолчание значит «выключено», а значение живёт в окружении.
+    # Первый админ на чистой базе: номер заводится админом при старте
+    # (`app/application/bootstrap.py`). Прод поднимается пустым, и без этого
+    # некому выдать первый доступ и завести курс.
     auth_bootstrap_phone: str = ""
+    # Необязательная вторая половина: с ней тот же номер входит фиксированным
+    # кодом, минуя провайдера. Это бэкдор, и нужен он ровно там, где кода
+    # взять неоткуда, — при SMS_PROVIDER=log. С работающим WhatsApp
+    # оставлять его незачем: пустое значение выключает.
     auth_bootstrap_code: str = ""
 
 
@@ -114,7 +130,7 @@ class Settings(BaseSettings):
 # а неизвестный SMS_PROVIDER без этой проверки не значит вообще ничего —
 # код входа продолжает уходить в лог заглушкой.
 PROVIDERS = {
-    "sms_provider": ("log",),
+    "sms_provider": ("log", "whatsapp"),
     "telegram_provider": ("log", "bot"),
     "storage_provider": ("local", "s3"),
 }
@@ -142,6 +158,20 @@ def check_providers(cfg: Settings) -> None:
     # что осмысленный отказ Telegram не повторяют. Это ровно тот случай,
     # ради которого проверка и заведена: сервис выглядит здоровым,
     # а ломается на заявке учителя.
+    # Имя шаблона у провайдера своё, а вот без номера отправителя и токена
+    # не уйдёт ни одно сообщение — и узнали бы мы об этом на первом входе
+    # учителя, а не при старте.
+    if cfg.sms_provider == "whatsapp":
+        empty = [
+            name.upper()
+            for name in ("whatsapp_phone_number_id", "whatsapp_access_token")
+            if not getattr(cfg, name)
+        ]
+        if empty:
+            raise RuntimeError(
+                f"SMS_PROVIDER=whatsapp, но пусты: {', '.join(empty)} —"
+                " код входа уходил бы в никуда"
+            )
     if cfg.telegram_provider == "bot" and not cfg.telegram_bot_token:
         raise RuntimeError(
             "TELEGRAM_PROVIDER=bot, но TELEGRAM_BOT_TOKEN пуст —"
@@ -169,14 +199,18 @@ def check_providers(cfg: Settings) -> None:
 
 
 def check_bootstrap_login(cfg: Settings) -> None:
-    """Вход без SMS проверяется при старте целиком: неверная пара «номер +
-    код» не даёт ни отказа, ни ошибки — она просто не пускает, и разбираться
-    с этим пришлось бы на живом сервере, где кода входа неоткуда взять.
+    """Первый админ и вход без провайдера проверяются при старте целиком:
+    неверный номер или код не дают ни отказа, ни ошибки — они просто
+    не пускают, и разбираться с этим пришлось бы на живом сервере.
+
+    Номер без кода — обычная боевая настройка: админ заведён, а входит он
+    кодом от провайдера. А вот код без номера не пускает никого и значит
+    только опечатку.
     """
-    if bool(cfg.auth_bootstrap_phone) != bool(cfg.auth_bootstrap_code):
+    if cfg.auth_bootstrap_code and not cfg.auth_bootstrap_phone:
         raise RuntimeError(
-            "AUTH_BOOTSTRAP_PHONE и AUTH_BOOTSTRAP_CODE задаются только вместе:"
-            " номер без кода никогда не войдёт, код без номера никого не пускает"
+            "AUTH_BOOTSTRAP_CODE задан без AUTH_BOOTSTRAP_PHONE —"
+            " фиксированный код без номера не пускает никого"
         )
     if not cfg.auth_bootstrap_phone:
         return
@@ -185,6 +219,8 @@ def check_bootstrap_login(cfg: Settings) -> None:
             f"AUTH_BOOTSTRAP_PHONE={cfg.auth_bootstrap_phone!r} — не казахстанский номер:"
             " нужен +7 и 10 цифр"
         )
+    if not cfg.auth_bootstrap_code:
+        return
     if not cfg.auth_bootstrap_code.isdigit() or len(cfg.auth_bootstrap_code) != cfg.code_length:
         raise RuntimeError(
             f"AUTH_BOOTSTRAP_CODE — ровно {cfg.code_length} цифр:"
