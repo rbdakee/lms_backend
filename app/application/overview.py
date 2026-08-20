@@ -70,7 +70,7 @@ class OverviewService:
         """Один ответ на весь экран: два запроса, которыми шапка админки
         тянула `total` у заявок и работ, этим и закрываются."""
         leads, leads_count = self.leads.admin_page(
-            status=NEW_LEAD_STATUS, course_id=None, q=None, offset=0, limit=LIST_LIMIT
+            statuses=[NEW_LEAD_STATUS], course_ids=None, q=None, offset=0, limit=LIST_LIMIT
         )
         submissions, submissions_count = self.submissions.pending_head(LIST_LIMIT)
         questions, questions_count = self.messages.admin_page(

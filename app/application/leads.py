@@ -111,14 +111,14 @@ class LeadsService:
     def admin_list(
         self,
         *,
-        status: str | None,
-        course_id: int | None,
+        statuses: list[str] | None,
+        course_ids: list[int] | None,
         q: str | None,
         offset: int,
         limit: int,
     ) -> dict:
         rows, total = self.leads.admin_page(
-            status=status, course_id=course_id, q=q, offset=offset, limit=limit
+            statuses=statuses, course_ids=course_ids, q=q, offset=offset, limit=limit
         )
         return {
             "items": [

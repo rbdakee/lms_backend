@@ -1454,20 +1454,25 @@ class LeadRepo:
     def admin_page(
         self,
         *,
-        status: str | None,
-        course_id: int | None,
+        statuses: list[str] | None,
+        course_ids: list[int] | None,
         q: str | None,
         offset: int,
         limit: int,
     ) -> tuple[list[tuple[Lead, User, Course]], int]:
         conds = []
-        if status == "open":
-            # Псевдостатус «в работе»: всё, что ещё ждёт решения админа
-            conds.append(Lead.status.in_(OPEN_LEAD_STATUSES))
-        elif status is not None:
-            conds.append(Lead.status == status)
-        if course_id is not None:
-            conds.append(Lead.course_id == course_id)
+        if statuses:
+            # Фильтр — объединение выбранного; псевдостатус «в работе»
+            # разворачивается в свои три статуса
+            expanded: set[str] = set()
+            for status in statuses:
+                if status == "open":
+                    expanded.update(OPEN_LEAD_STATUSES)
+                else:
+                    expanded.add(status)
+            conds.append(Lead.status.in_(expanded))
+        if course_ids:
+            conds.append(Lead.course_id.in_(course_ids))
         if q is not None and q.strip():
             conds.append(name_or_phone_filter(q))
 

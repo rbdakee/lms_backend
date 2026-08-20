@@ -65,6 +65,18 @@ def test_admin_leads_list_and_filters(client, client2, sms):
     assert client2.get("/admin/leads?q=8 (707) 123").json()["total"] == 2
     assert client2.get("/admin/leads?q=Иванов").json()["total"] == 0
 
+    # Мультивыбор: оба фильтра принимают список через запятую, объединением.
+    # open в списке разворачивается в свои три статуса
+    both = f"{course.id},{other.id}"
+    assert client2.get(f"/admin/leads?course_id={both}").json()["total"] == 2
+    assert client2.get("/admin/leads?status=new,declined").json()["total"] == 2
+    assert client2.get("/admin/leads?status=declined,open").json()["total"] == 2
+    # Пустой параметр — то же, что без него
+    assert client2.get("/admin/leads?status=").json()["total"] == 2
+    # Неизвестный статус и нечисловой course_id — внятная ошибка, а не 500
+    assert client2.get("/admin/leads?status=paid,foo").status_code == 422
+    assert client2.get("/admin/leads?course_id=abc").status_code == 422
+
 
 def test_admin_patch_lead(client, client2, sms):
     course = make_course()

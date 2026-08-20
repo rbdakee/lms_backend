@@ -21,8 +21,37 @@ from app.application.leads import LeadsService
 from app.application.overview import OverviewService
 from app.application.reports import ReportsService
 from app.application.submissions_admin import SubmissionsAdminService
+from app.domain.errors import ValidationAppError
 
 router = APIRouter(prefix="/admin")
+
+LEAD_FILTER_STATUSES = {"new", "contacted", "paid", "granted", "declined", "open"}
+
+
+def _csv(raw: str | None) -> list[str] | None:
+    """Значения фильтра через запятую; пустой параметр — то же, что без него."""
+    if raw is None:
+        return None
+    values = [v.strip() for v in raw.split(",") if v.strip()]
+    return values or None
+
+
+def _statuses(raw: str | None) -> list[str] | None:
+    values = _csv(raw)
+    for v in values or []:
+        if v not in LEAD_FILTER_STATUSES:
+            raise ValidationAppError(f"Неизвестный статус заявки: {v}")
+    return values
+
+
+def _course_ids(raw: str | None) -> list[int] | None:
+    values = _csv(raw)
+    if values is None:
+        return None
+    try:
+        return [int(v) for v in values]
+    except ValueError:
+        raise ValidationAppError("course_id — числа через запятую") from None
 
 
 @router.get("/leads")
@@ -30,15 +59,20 @@ def admin_leads(
     admin: Annotated[User, Depends(deps.get_current_admin)],
     params: Annotated[PageParams, Depends()],
     svc: Annotated[LeadsService, Depends(deps.get_leads_service)],
-    # open — псевдостатус «в работе»: new | contacted | paid
-    status: Annotated[
-        Literal["new", "contacted", "paid", "granted", "declined", "open"] | None, Query()
-    ] = None,
-    course_id: Annotated[int | None, Query()] = None,
+    # Оба фильтра принимают и одно значение, и список через запятую:
+    # status=new,contacted — мультивыбор на экране заявок.
+    # open — псевдостатус «в работе» (new | contacted | paid), сочетается
+    # с остальными объединением
+    status: Annotated[str | None, Query()] = None,
+    course_id: Annotated[str | None, Query()] = None,
     q: Annotated[str | None, Query(max_length=100)] = None,
 ) -> AdminLeadsPageOut:
     data = svc.admin_list(
-        status=status, course_id=course_id, q=q, offset=params.offset, limit=params.per_page
+        statuses=_statuses(status),
+        course_ids=_course_ids(course_id),
+        q=q,
+        offset=params.offset,
+        limit=params.per_page,
     )
     return AdminLeadsPageOut(**page_out(data["items"], data["total"], params))
 
