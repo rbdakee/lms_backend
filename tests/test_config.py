@@ -70,6 +70,9 @@ def test_s3_without_an_address_or_keys_stops_the_service_at_start(monkeypatch):
     """То же и у бакета: `s3` с пустым адресом проверку проходил бы, а падало
     бы это на первой загрузке материала — у методиста, а не у нас."""
     monkeypatch.setattr(get_settings(), "storage_provider", "s3")
+    # По той же причине, что у whatsapp: тест не должен зависеть от .env
+    for name in ("s3_endpoint_url", "s3_bucket", "s3_access_key", "s3_secret_key"):
+        monkeypatch.setattr(get_settings(), name, "")
     with pytest.raises(RuntimeError) as failed:
         check_providers(get_settings())
     message = str(failed.value)
@@ -91,6 +94,10 @@ def test_whatsapp_without_a_sender_or_token_stops_the_service_at_start(monkeypat
     не уйдёт ни одно сообщение — и узнали бы мы об этом на первом входе
     учителя, а не при старте."""
     monkeypatch.setattr(get_settings(), "sms_provider", "whatsapp")
+    # Поля чистим явно: у разработчика в .env может стоять рабочая связка,
+    # и тогда проверка «пустое роняет сервис» проверяла бы не то
+    monkeypatch.setattr(get_settings(), "whatsapp_phone_number_id", "")
+    monkeypatch.setattr(get_settings(), "whatsapp_access_token", "")
     with pytest.raises(RuntimeError) as failed:
         check_providers(get_settings())
     message = str(failed.value)
