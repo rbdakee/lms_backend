@@ -2,6 +2,8 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.phone import normalize_phone
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -17,10 +19,13 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     session_ttl_days: int = 180
 
-    # X-Forwarded-For подделывается кем угодно, а на нём держится лимит
-    # публичной проверки сертификата. Верим заголовку только там, где перед
-    # сервисом стоит наш прокси и он этот заголовок переписывает.
-    trust_forwarded_for: bool = False
+    # Адрес клиента для лимитов. X-Forwarded-For не читается вовсе: канонический
+    # прокси свой адрес в него дописывает, а клиентское значение оставляет
+    # первым — то есть ведро лимита выбирал бы себе сам клиент. Читается
+    # X-Real-IP, который наш прокси переписывает целиком, и тогда число прокси
+    # перед сервисом перестаёт иметь значение. Включать только там, где до
+    # сервиса нельзя достучаться мимо прокси (DEPLOY.md, «Адрес клиента»).
+    trust_real_ip: bool = False
 
     sms_provider: str = "log"
     telegram_provider: str = "log"
@@ -44,7 +49,17 @@ class Settings(BaseSettings):
     # Приватное хранилище файлов. Локально — каталог внутри backend, он же
     # версия для разработки: публичного бакета нет нигде (BACKEND_NOTES, 9).
     storage_dir: str = "var/storage"
-    # Секрет подписи ссылок. В бою тот же самый лежит в secure_link_md5 nginx.
+
+    # Объектное хранилище (STORAGE_PROVIDER=s3). Адрес площадки, а не AWS:
+    # у PS Cloud это https://object.pscloud.io, бакет приватный. Регион
+    # подписи S3-совместимые площадки не проверяют, но botocore его требует.
+    s3_endpoint_url: str = ""
+    s3_bucket: str = ""
+    s3_region: str = "us-east-1"
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    # Секрет подписи ссылок на файлы. Проверяет подпись сам сервис
+    # (`app/application/files.py`), отдельного раздатчика нет.
     storage_secret: str = "dev-secret"
     # Откуда фронт скачивает файл: в бою адрес API, локально сам бэкенд
     public_base_url: str = "http://localhost:8000"
@@ -82,6 +97,16 @@ class Settings(BaseSettings):
     # Форма вопроса под уроком без капчи — потолок на пользователя.
     thread_messages_per_min: int = 3
 
+    # Вход без SMS для одного номера. Настоящего SMS-провайдера нет
+    # (SMS_PROVIDER=log печатает код в лог), и в бою войти может только тот,
+    # кто читает логи сервиса. Пара «номер + код» держит вход первого админа,
+    # пока провайдера нет; она же заводит его при старте
+    # (`app/application/bootstrap.py`). Это бэкдор, и снимается он снятием
+    # двух переменных, без релиза. Код здесь не лежит нарочно: пустое
+    # умолчание значит «выключено», а значение живёт в окружении.
+    auth_bootstrap_phone: str = ""
+    auth_bootstrap_code: str = ""
+
 
 # Значения провайдеров, под которые в коде есть адаптер. Опечатка в них
 # не должна доживать до первого запроса: сервис с неизвестным
@@ -91,7 +116,7 @@ class Settings(BaseSettings):
 PROVIDERS = {
     "sms_provider": ("log",),
     "telegram_provider": ("log", "bot"),
-    "storage_provider": ("local",),
+    "storage_provider": ("local", "s3"),
 }
 
 # `telegram_updates` не провайдер — не выбирает адаптер, а выбирает, кто
@@ -126,6 +151,44 @@ def check_providers(cfg: Settings) -> None:
         raise RuntimeError(
             f"TELEGRAM_UPDATES={cfg.telegram_updates!r} — такого режима нет."
             f" Допустимые значения: {', '.join(TELEGRAM_UPDATES_MODES)}"
+        )
+    # То же и у бакета: `s3` без адреса и ключей проверку проходил бы, а падало
+    # бы это на первой загрузке материала — то есть у методиста, а не у нас.
+    if cfg.storage_provider == "s3":
+        empty = [
+            name.upper()
+            for name in ("s3_endpoint_url", "s3_bucket", "s3_access_key", "s3_secret_key")
+            if not getattr(cfg, name)
+        ]
+        if empty:
+            raise RuntimeError(
+                f"STORAGE_PROVIDER=s3, но пусты: {', '.join(empty)} —"
+                " материалы уроков и сданные работы уходили бы в никуда"
+            )
+    check_bootstrap_login(cfg)
+
+
+def check_bootstrap_login(cfg: Settings) -> None:
+    """Вход без SMS проверяется при старте целиком: неверная пара «номер +
+    код» не даёт ни отказа, ни ошибки — она просто не пускает, и разбираться
+    с этим пришлось бы на живом сервере, где кода входа неоткуда взять.
+    """
+    if bool(cfg.auth_bootstrap_phone) != bool(cfg.auth_bootstrap_code):
+        raise RuntimeError(
+            "AUTH_BOOTSTRAP_PHONE и AUTH_BOOTSTRAP_CODE задаются только вместе:"
+            " номер без кода никогда не войдёт, код без номера никого не пускает"
+        )
+    if not cfg.auth_bootstrap_phone:
+        return
+    if normalize_phone(cfg.auth_bootstrap_phone) is None:
+        raise RuntimeError(
+            f"AUTH_BOOTSTRAP_PHONE={cfg.auth_bootstrap_phone!r} — не казахстанский номер:"
+            " нужен +7 и 10 цифр"
+        )
+    if not cfg.auth_bootstrap_code.isdigit() or len(cfg.auth_bootstrap_code) != cfg.code_length:
+        raise RuntimeError(
+            f"AUTH_BOOTSTRAP_CODE — ровно {cfg.code_length} цифр:"
+            " экран входа других не примет, а лишние знаки в него не влезут"
         )
 
 

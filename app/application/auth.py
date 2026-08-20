@@ -110,7 +110,7 @@ class AuthService:
                 )
 
         self.codes.expire_active(phone)
-        code = "".join(secrets.choice("0123456789") for _ in range(self.cfg.code_length))
+        code = self._code_for(phone)
         self.codes.create(phone, _hash_code(phone, code), ip, self.cfg.code_ttl_min)
         # Коммит до отправки, а не после: он отпускает блокировки lock_sending,
         # которые иначе держались бы весь поход к SMS-шлюзу. Ключ адреса
@@ -123,6 +123,22 @@ class AuthService:
         self.commit()
         self.sms.send_code(phone, code)
         return self.cfg.code_resend_sec
+
+    def _code_for(self, phone: str) -> str:
+        """Код входа: обычно случайный, для одного номера — фиксированный
+        из окружения.
+
+        Настоящего SMS-провайдера нет, заглушка печатает код в лог сервиса,
+        и без этой пары в бою войти может только тот, кто читает логи.
+        Всё остальное с фиксированным кодом происходит как с любым другим:
+        он живёт пять минут, гасится входом, три неверных ввода блокируют
+        номер на десять минут. Пара проверена при старте
+        (`check_bootstrap_login`) и снимается снятием двух переменных.
+        """
+        bootstrap = self.cfg.auth_bootstrap_phone
+        if bootstrap and phone == normalize_phone(bootstrap):
+            return self.cfg.auth_bootstrap_code
+        return "".join(secrets.choice("0123456789") for _ in range(self.cfg.code_length))
 
     def verify_code(
         self, raw_phone: str, code: str, user_agent: str, ip: str | None

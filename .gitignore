@@ -1,7 +1,12 @@
 __pycache__/
 *.pyc
 .venv/
+# Секреты живут только в окружении: под версии не уходит ни один .env,
+# кроме образцов с заглушками
 .env
+.env.*
+!.env.example
+!.env.prod.example
 .pytest_cache/
 .ruff_cache/
 var/

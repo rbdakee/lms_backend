@@ -218,8 +218,9 @@ def test_ip_cap_is_one_bucket_for_every_phone_behind_the_address(client, sms):
     """Потолок на адрес общий на все номера: тридцать чужих кодов с того же
     адреса закрывают вход тридцать первому, у которого своих кодов ноль.
 
-    Ключ — get_client_ip, а при `trust_forwarded_for=False` за nginx этот
-    адрес у всей страны один. Тридцать SMS в сутки на всех — см. отчёт.
+    Ключ — get_client_ip: при `trust_real_ip=False` за прокси адрес у всей
+    страны один, и тридцать SMS в сутки становятся тридцатью на всех.
+    Ровно поэтому в бою заголовку верят (DEPLOY.md, «Адрес клиента»).
     """
     for number in range(CFG.ip_codes_per_day):
         assert request_code(client, phone=phone_no(number)).status_code == 200, number
@@ -432,74 +433,90 @@ def test_verify_cap_is_per_address_not_per_person(client, client2, sms):
     assert client2.get(f"/verify/{number}").status_code == 429
 
 
-# -- 1 и 3. Откуда берётся адрес: X-Forwarded-For -----------------------
+# -- 1 и 3. Откуда берётся адрес: X-Real-IP -----------------------------
 
 
-def test_forwarded_header_does_not_split_the_bucket_by_default(client):
-    """`trust_forwarded_for=False` — заголовок не смотрят вовсе: два разных
-    `X-Forwarded-For` делят одно ведро, потому что ключ берётся из сокета.
+def test_the_address_header_does_not_split_the_bucket_by_default(client):
+    """`trust_real_ip=False` — заголовок не смотрят вовсе: два разных
+    `X-Real-IP` делят одно ведро, потому что ключ берётся из сокета.
 
     Это шов сессии 6, и он держится. Обратная сторона у него та же самая:
-    за nginx сокет один на всю страну.
+    за прокси сокет один на всю страну.
     """
     number = certificate_in_registry()
 
     for half in ("9.9.9.9", "8.8.8.8"):
         for _ in range(CFG.verify_per_min // 2):
-            resp = client.get(f"/verify/{number}", headers={"x-forwarded-for": half})
+            resp = client.get(f"/verify/{number}", headers={"x-real-ip": half})
             assert resp.status_code == 200
-    third = client.get(f"/verify/{number}", headers={"x-forwarded-for": "7.7.7.7"})
+    third = client.get(f"/verify/{number}", headers={"x-real-ip": "7.7.7.7"})
     assert third.status_code == 429
 
 
-def test_trusted_forwarded_header_lets_the_client_pick_its_own_bucket(client, monkeypatch):
-    """А включённый `trust_forwarded_for` отдаёт ключ клиенту: берётся первый
-    элемент `X-Forwarded-For`, и новый выдуманный адрес открывает новое ведро.
+def test_trusted_real_ip_header_picks_the_bucket(client, monkeypatch):
+    """А включённый `trust_real_ip` берёт ключ из `X-Real-IP` целиком:
+    другой адрес — другое ведро.
 
-    Первый элемент — ровно тот, который приписал сам клиент: стандартный
-    `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` у nginx
-    не переписывает заголовок, а дописывает свой адрес в конец.
+    Отсюда и условие, при котором его можно включать: заголовок обязан
+    ставить наш прокси, а до сервиса не должно быть дороги мимо прокси —
+    иначе новое ведро открывается одной строчкой в запросе.
     """
-    monkeypatch.setattr(get_settings(), "trust_forwarded_for", True)
+    monkeypatch.setattr(get_settings(), "trust_real_ip", True)
     number = certificate_in_registry()
 
     for _ in range(CFG.verify_per_min):
-        resp = client.get(f"/verify/{number}", headers={"x-forwarded-for": "9.9.9.9, 10.0.0.1"})
+        resp = client.get(f"/verify/{number}", headers={"x-real-ip": "9.9.9.9"})
         assert resp.status_code == 200
+    assert client.get(f"/verify/{number}", headers={"x-real-ip": "9.9.9.9"}).status_code == 429
+
+    # Другой адрес — другое ведро
+    assert client.get(f"/verify/{number}", headers={"x-real-ip": "9.9.9.10"}).status_code == 200
+
+
+def test_forwarded_for_is_never_read(client, monkeypatch):
+    """`X-Forwarded-For` не читается и при включённом доверии — это и есть
+    решение вопроса «Адрес клиента».
+
+    Канонический прокси свой адрес ему дописывает в конец, а первым
+    оставляет то, что приписал себе сам клиент: читая его, мы отдавали бы
+    выбор ведра клиенту. Здесь заголовок меняется на каждом запросе,
+    а ведро остаётся одно — то, что взято из сокета.
+    """
+    monkeypatch.setattr(get_settings(), "trust_real_ip", True)
+    number = certificate_in_registry()
+
+    for step in range(CFG.verify_per_min):
+        resp = client.get(f"/verify/{number}", headers={"x-forwarded-for": f"9.9.9.{step}"})
+        assert resp.status_code == 200, step
     assert client.get(
-        f"/verify/{number}", headers={"x-forwarded-for": "9.9.9.9, 10.0.0.1"}
+        f"/verify/{number}", headers={"x-forwarded-for": "8.8.8.8"}
     ).status_code == 429
 
-    # Другой первый элемент — другое ведро, и так сколько угодно раз
-    assert client.get(
-        f"/verify/{number}", headers={"x-forwarded-for": "9.9.9.10, 10.0.0.1"}
-    ).status_code == 200
 
-
-def test_trusted_forwarded_header_also_unlocks_the_daily_sms_cap(client, sms, monkeypatch):
-    """Тот же ключ — у суточного потолка SMS: с включённым доверием заголовку
-    тридцать кодов с выдуманного адреса не мешают тридцать первому, если
-    подписаться другим адресом. Потолок на номер при этом остаётся."""
-    monkeypatch.setattr(get_settings(), "trust_forwarded_for", True)
+def test_trusted_real_ip_header_also_unlocks_the_daily_sms_cap(client, sms, monkeypatch):
+    """Тот же ключ — у суточного потолка SMS: тридцать кодов с одного адреса
+    не мешают тридцать первому с другого. Потолок на номер при этом
+    остаётся."""
+    monkeypatch.setattr(get_settings(), "trust_real_ip", True)
 
     for number in range(CFG.ip_codes_per_day):
         resp = client.post(
             "/auth/request_code",
             json={"phone": phone_no(number), "consent": True},
-            headers={"x-forwarded-for": "9.9.9.9"},
+            headers={"x-real-ip": "9.9.9.9"},
         )
         assert resp.status_code == 200, number
     same = client.post(
         "/auth/request_code",
         json={"phone": phone_no(900), "consent": True},
-        headers={"x-forwarded-for": "9.9.9.9"},
+        headers={"x-real-ip": "9.9.9.9"},
     )
     assert same.status_code == 429
 
     other = client.post(
         "/auth/request_code",
         json={"phone": phone_no(900), "consent": True},
-        headers={"x-forwarded-for": "9.9.9.10"},
+        headers={"x-real-ip": "9.9.9.10"},
     )
     assert other.status_code == 200
     assert len(sms.sent) == 31

@@ -4,7 +4,10 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session as DbSession
 
+from app.adapters.db.base import get_engine
+from app.adapters.db.repos import UserRepo
 from app.adapters.telegram.poller import run_poller
 from app.api.errors import register_error_handlers
 from app.api.routers import (
@@ -32,6 +35,7 @@ from app.api.routers import (
     tasks,
     telegram,
 )
+from app.application.bootstrap import ensure_bootstrap_admin
 from app.config import check_providers, get_settings
 
 
@@ -43,8 +47,14 @@ async def lifespan(app: FastAPI):
     `TELEGRAM_UPDATES=poll` — только локальная разработка без туннеля
     наружу (`app/adapters/telegram/poller.py`); в бою условие ложно
     и до `create_task` дело не доходит вовсе.
+
+    Здесь же — первый админ на чистой базе. База к этому моменту обязана
+    отвечать: не отвечает — сервис не поднимается, и это правильнее, чем
+    здоровый инстанс, в который некому войти.
     """
     cfg = get_settings()
+    with DbSession(get_engine()) as db:
+        ensure_bootstrap_admin(UserRepo(db), cfg, db.commit)
     task = None
     if cfg.telegram_provider == "bot" and cfg.telegram_updates == "poll":
         task = asyncio.create_task(run_poller(cfg))

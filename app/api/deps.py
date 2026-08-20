@@ -38,6 +38,7 @@ from app.adapters.db.repos import (
 )
 from app.adapters.sms.log_sms import LogSms
 from app.adapters.storage.local_storage import LocalStorage
+from app.adapters.storage.s3_storage import S3Storage, s3_client
 from app.adapters.telegram.bot import TelegramBot
 from app.adapters.telegram.log_telegram import LogTelegram
 from app.application.admin_notify import AdminNotifier
@@ -125,11 +126,17 @@ def get_admin_notifier(
 
 
 def get_storage() -> StoragePort:
-    """Выбор адаптера — конфигурацией, а не `if` в месте вызова. Провайдер
-    пока один: локальный каталог, он же версия для разработки. Что в
-    STORAGE_PROVIDER стоит именно он, проверено при старте
-    (`check_providers`)."""
-    return LocalStorage(Path(get_settings().storage_dir))
+    """Выбор адаптера — конфигурацией, а не `if` в месте вызова.
+
+    `local` — каталог на диске, он же версия для разработки. `s3` — бакет
+    в объектном хранилище, это бой. Что в STORAGE_PROVIDER стоит одно
+    из двух, проверено при старте (`check_providers`), там же проверено,
+    что у `s3` есть адрес и ключи.
+    """
+    cfg = get_settings()
+    if cfg.storage_provider == "local":
+        return LocalStorage(Path(cfg.storage_dir))
+    return S3Storage(s3_client(cfg), cfg.s3_bucket)
 
 
 def get_playback_limiter() -> SlidingWindowLimiter:
@@ -147,14 +154,23 @@ def get_thread_limiter() -> SlidingWindowLimiter:
 def get_client_ip(request: Request) -> str | None:
     """Адрес клиента для лимитов.
 
-    Заголовку верим только при `trust_forwarded_for`: иначе перебор реестра
-    сертификатов обходится одной строчкой в заголовке, а словарь лимитера
-    растёт на каждый выдуманный адрес.
+    Читается `X-Real-IP` — заголовок, который наш прокси переписывает
+    целиком, а не дописывает. `X-Forwarded-For` не читается вовсе: прокси
+    свой адрес дописывает ему в конец, а первым остаётся то, что приписал
+    себе сам клиент, — то есть ведро лимита выбирал бы себе он же.
+
+    Заголовку верим только при `trust_real_ip`, и включать его можно
+    там, где до сервиса нельзя достучаться мимо прокси: иначе перебор
+    реестра сертификатов обходится одной строчкой в заголовке, а словарь
+    лимитера растёт на каждый выдуманный адрес.
+
+    Заголовка нет при включённом доверии — значит запрос пришёл мимо
+    прокси; адрес берётся из сокета, и это адрес прокси, а не клиента.
     """
-    if get_settings().trust_forwarded_for:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
+    if get_settings().trust_real_ip:
+        real = request.headers.get("x-real-ip")
+        if real:
+            return real.strip()
     return request.client.host if request.client else None
 
 
