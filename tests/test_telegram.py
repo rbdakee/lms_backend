@@ -5,6 +5,7 @@ import urllib.error
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session as OrmSession
 
@@ -13,13 +14,16 @@ from app.adapters.db.repos import SessionRepo, SettingRepo
 from app.adapters.telegram import bot as bot_module
 from app.adapters.telegram.bot import ATTEMPTS, PAUSE_SEC, TelegramBot, TelegramError
 from app.adapters.telegram.log_telegram import LogTelegram
+from app.adapters.telegram.poller import _get_updates, _handle_one
 from app.api.deps import get_telegram
 from app.api.routers.telegram import MAX_BODY_BYTES
+from app.application.ports import NotificationCard
 from app.application.settings import TELEGRAM_KEY
 from app.application.telegram_bind import (
     CODE_ALPHABET,
     CONNECTED,
     MAX_ATTEMPTS,
+    START_HINT,
     TEST_MESSAGE,
     WRONG_CODE,
 )
@@ -78,6 +82,12 @@ def webhook(client, update, secret=SECRET, raw=None):
 
 def start(code, **chat):
     return {"message": {"chat": {**CHAT, **chat}, "text": f"/start {code}"}}
+
+
+def bare(text, **chat):
+    """Сообщение без команды — как код или голый `/start`, набранные без
+    подсказки клиента."""
+    return {"message": {"chat": {**CHAT, **chat}, "text": text}}
 
 
 def bind(client, telegram, **chat):
@@ -549,7 +559,7 @@ def test_the_other_flag_stays_on(client, client2, sms, telegram):
     client2.post(f"/courses/{course.id}/lead")
 
     assert len(telegram.sent) == 1
-    assert "Оценивание для учителей" in telegram.sent[0]
+    assert "Оценивание для учителей" in " ".join(telegram.sent[0].lines)
 
 
 # -- настоящий адаптер ----------------------------------------------------
@@ -571,6 +581,80 @@ class FakeResponse:
         return False
 
 
+def test_bot_adapter_renders_a_card_with_a_bold_title_and_a_link_button(monkeypatch):
+    """Ради этого карточка и заведена: жирный заголовок, детали строками,
+    кнопка-ссылка снизу — и опасные для HTML символы в названии курса
+    не ломают разметку сообщения целиком."""
+    calls = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(json.loads(request.data))
+        return FakeResponse({"ok": True})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins(
+        NotificationCard(
+            title="Новая заявка",
+            lines=["Курс: Чтение & письмо <5 класс>", "Цена: 45 000 ₸"],
+            link_text="Открыть в админке",
+            link_url="https://admin.example.kz/leads/7",
+        )
+    )
+
+    payload = calls[0]
+    assert payload["parse_mode"] == "HTML"
+    assert payload["text"] == (
+        "<b>Новая заявка</b>\nКурс: Чтение &amp; письмо &lt;5 класс&gt;\nЦена: 45 000 ₸"
+    )
+    assert payload["reply_markup"] == {
+        "inline_keyboard": [
+            [{"text": "Открыть в админке", "url": "https://admin.example.kz/leads/7"}]
+        ]
+    }
+
+
+def test_bot_adapter_omits_the_button_without_a_link(monkeypatch):
+    """Ответ боту (`send_to`) карточкой не пользуется вовсе — а карточка
+    без ссылки уходит без кнопки, а не с пустой."""
+    calls = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(json.loads(request.data))
+        return FakeResponse({"ok": True})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins(
+        NotificationCard(title="Новая заявка", lines=["Курс: X"])
+    )
+    assert "reply_markup" not in calls[0]
+
+
+def test_bot_adapter_omits_the_button_on_localhost(monkeypatch):
+    """Bot API отказывает кнопке на хосте `localhost` — и всему сообщению
+    вместе с ней (проверено на настоящем API, не в документации). Опечатка
+    в ADMIN_BASE_URL не должна топить уведомление целиком: без кнопки
+    сообщение всё равно уходит."""
+    calls = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(json.loads(request.data))
+        return FakeResponse({"ok": True})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins(
+        NotificationCard(
+            title="Новая заявка",
+            lines=["Курс: X"],
+            link_text="Открыть в админке",
+            link_url="http://localhost:3001/leads/6",
+        )
+    )
+    assert "reply_markup" not in calls[0]
+
+
 def test_bot_adapter_sends_and_notices_a_refusal(monkeypatch):
     """Отказ Bot API приезжает с кодом 200 и `ok: false` в теле: «сообщение
     не ушло» обязано отличаться от «ушло»."""
@@ -583,10 +667,14 @@ def test_bot_adapter_sends_and_notices_a_refusal(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     adapter = TelegramBot("123456:AA-fake-token", str(CHAT_ID))
 
-    adapter.notify_admins("Новая заявка №1 на курс „Оценивание“")
+    adapter.notify_admins(NotificationCard(title="Новая заявка", lines=["№1 на курс „Оценивание“"]))
     url, payload, timeout = calls[0]
     assert url == "https://api.telegram.org/bot123456:AA-fake-token/sendMessage"
-    assert payload == {"chat_id": str(CHAT_ID), "text": "Новая заявка №1 на курс „Оценивание“"}
+    assert payload == {
+        "chat_id": str(CHAT_ID),
+        "text": "<b>Новая заявка</b>\n№1 на курс „Оценивание“",
+        "parse_mode": "HTML",
+    }
     # Без таймаута зависший Telegram вешает запрос, внутри которого отправка
     assert timeout == 5
 
@@ -603,9 +691,10 @@ def test_bot_adapter_notices_an_error_code(monkeypatch, caplog):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
+    card = NotificationCard(title="Новая заявка", lines=["№1"])
     with caplog.at_level(logging.WARNING, logger="telegram"):
         with pytest.raises(TelegramError):
-            TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins("Новая заявка №1")
+            TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins(card)
     assert "429" in caplog.text
     assert "Новая заявка" not in caplog.text
 
@@ -644,7 +733,9 @@ def test_bot_without_a_bound_chat_says_nothing(monkeypatch):
         raise AssertionError("запроса к Telegram быть не должно")
 
     monkeypatch.setattr("urllib.request.urlopen", fail)
-    TelegramBot("123456:AA-fake-token", None).notify_admins("Новая заявка №1")
+    TelegramBot("123456:AA-fake-token", None).notify_admins(
+        NotificationCard(title="Новая заявка", lines=["№1"])
+    )
 
 
 def test_the_provider_is_chosen_by_configuration(monkeypatch):
@@ -662,6 +753,80 @@ def test_the_provider_is_chosen_by_configuration(monkeypatch):
 
         monkeypatch.setattr(get_settings(), "telegram_provider", "log")
         assert isinstance(get_telegram(db), LogTelegram)
+
+
+# -- поллинг вместо вебхука: TELEGRAM_UPDATES=poll ---------------------------
+
+
+def test_poller_get_updates_sends_offset_and_parses_result(monkeypatch):
+    calls = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append((request.full_url, timeout))
+        return FakeResponse({"ok": True, "result": [{"update_id": 1}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert _get_updates("123456:AA-fake-token", offset=42) == [{"update_id": 1}]
+    url, timeout = calls[0]
+    assert url == (
+        "https://api.telegram.org/bot123456:AA-fake-token/getUpdates?timeout=25&offset=42"
+    )
+    # Клиентский таймаут — с запасом поверх долгого опроса Telegram
+    assert timeout == 35
+
+    calls.clear()
+    _get_updates("123456:AA-fake-token", offset=None)
+    assert "offset" not in calls[0][0]
+
+
+def test_poller_get_updates_raises_when_telegram_says_not_ok(monkeypatch):
+    """`ok: false` — тот же отказ, что и у `sendMessage`: цикл поллинга
+    ловит исключение сам и не должен получить пустое «всё хорошо»."""
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda request, timeout=None: FakeResponse({"ok": False})
+    )
+    with pytest.raises(RuntimeError):
+        _get_updates("123456:AA-fake-token", None)
+
+
+def test_poller_handle_one_binds_the_chat_like_the_webhook_does(client, sms, bot, monkeypatch):
+    """Один и тот же разбор апдейта — что через вебхук, что через поллинг:
+    `_handle_one` вызывает ту же `TelegramBindService.handle_update`."""
+    login_admin(client, sms)
+    code = client.post(BIND_CODE).json()["code"]
+
+    sent = []
+
+    def fake_urlopen(request, timeout=None):
+        sent.append(json.loads(request.data))
+        return FakeResponse({"ok": True})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    _handle_one(get_settings(), start(code))
+
+    assert stored_telegram()["chat_id"] == str(CHAT_ID)
+    assert sent == [{"chat_id": str(CHAT_ID), "text": CONNECTED}]
+
+
+def test_lifespan_starts_the_poller_only_in_poll_mode(monkeypatch):
+    """Провод из `app/main.py`: фоновая задача поднимается только вместе
+    с `TELEGRAM_PROVIDER=bot` и `TELEGRAM_UPDATES=poll` — приложение
+    поднимается и гасится, не повиснув на отменённой задаче."""
+    from app.main import app as fastapi_app
+
+    monkeypatch.setattr(get_settings(), "telegram_bot_token", "123456:AA-fake-token")
+    monkeypatch.setattr(get_settings(), "telegram_provider", "bot")
+    monkeypatch.setattr(get_settings(), "telegram_updates", "poll")
+    # Апдейтов нет — цикл сразу уходит во второй виток и там его застаёт отмена
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout=None: FakeResponse({"ok": True, "result": []}),
+    )
+
+    with TestClient(fastapi_app) as c:
+        assert c.get("/health").status_code == 200
 
 
 # -- сессия 8: одноразовость кода, потолок попыток, повторы, размер тела ----
@@ -757,6 +922,39 @@ def test_a_bare_start_does_not_spend_an_attempt(client, sms, telegram, bot):
     assert telegram.to_chat[-1][1] == CONNECTED
 
 
+def test_a_bare_start_gets_a_hint_to_send_the_code(client, sms, telegram, bot):
+    """Нажали ссылку бота или написали `/start` руками — без кода это ещё
+    не промах, а первый шаг: бот подсказывает, что делать дальше."""
+    login_admin(client, sms)
+
+    assert webhook(client, bare("/start")).status_code == 200
+    assert telegram.to_chat == [(str(CHAT_ID), START_HINT)]
+
+
+def test_a_bare_code_binds_the_chat_like_start_would(client, sms, telegram, bot):
+    """Код можно прислать и без команды — тот же ввод, что и `/start <код>`."""
+    login_admin(client, sms)
+    code = client.post(BIND_CODE).json()["code"]
+
+    assert webhook(client, bare(code.lower())).status_code == 200
+    assert telegram.to_chat == [(str(CHAT_ID), CONNECTED)]
+    assert stored_telegram()["chat_id"] == str(CHAT_ID)
+
+
+def test_text_that_is_not_code_shaped_stays_silent(client, sms, telegram, bot):
+    """Обычная фраза — не команда и не похожа на код: бот молчит, как и на
+    всё остальное, не тратя код на постороннее сообщение."""
+    login_admin(client, sms)
+    code = client.post(BIND_CODE).json()["code"]
+
+    assert webhook(client, bare("Здравствуйте")).status_code == 200
+    assert telegram.to_chat == []
+
+    # Код цел — им ещё можно привязаться
+    assert webhook(client, start(code)).status_code == 200
+    assert telegram.to_chat[-1][1] == CONNECTED
+
+
 def test_a_fat_webhook_body_is_not_parsed(client, sms, telegram, bot, caplog):
     """Тело больше потолка не разбирается вовсе, а ответ тот же 200: свой
     код ответа заставил бы Telegram переотправлять то же тело по нарастающей."""
@@ -798,7 +996,9 @@ def test_admin_notification_is_retried_when_telegram_is_unreachable(monkeypatch,
 
     with caplog.at_level(logging.WARNING, logger="telegram"):
         with pytest.raises(TelegramError):
-            TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins("Новая заявка №1")
+            TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins(
+            NotificationCard(title="Новая заявка", lines=["№1"])
+        )
 
     assert len(calls) == ATTEMPTS
     assert pauses == [PAUSE_SEC] * (ATTEMPTS - 1)
@@ -818,7 +1018,9 @@ def test_admin_notification_is_not_retried_when_telegram_refuses(monkeypatch):
     monkeypatch.setattr(bot_module, "time", SimpleNamespace(sleep=_no_sleep))
 
     with pytest.raises(TelegramError):
-        TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins("Новая заявка №1")
+        TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins(
+            NotificationCard(title="Новая заявка", lines=["№1"])
+        )
     assert len(calls) == 1
 
 
@@ -835,7 +1037,9 @@ def test_a_five_hundred_from_telegram_is_retried(monkeypatch):
     monkeypatch.setattr(bot_module, "time", SimpleNamespace(sleep=_no_sleep))
 
     with pytest.raises(TelegramError):
-        TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins("Новая заявка №1")
+        TelegramBot("123456:AA-fake-token", str(CHAT_ID)).notify_admins(
+            NotificationCard(title="Новая заявка", lines=["№1"])
+        )
     assert len(calls) == ATTEMPTS
 
 

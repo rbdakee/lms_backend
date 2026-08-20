@@ -1,8 +1,11 @@
+import asyncio
 import logging
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.adapters.telegram.poller import run_poller
 from app.api.errors import register_error_handlers
 from app.api.routers import (
     admin,
@@ -32,6 +35,26 @@ from app.api.routers import (
 from app.config import check_providers, get_settings
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Поллинг Telegram живёт здесь, а не отдельным процессом: воркер
+    один и тот же uvicorn, задача — просто корутина в его цикле событий.
+
+    `TELEGRAM_UPDATES=poll` — только локальная разработка без туннеля
+    наружу (`app/adapters/telegram/poller.py`); в бою условие ложно
+    и до `create_task` дело не доходит вовсе.
+    """
+    cfg = get_settings()
+    task = None
+    if cfg.telegram_provider == "bot" and cfg.telegram_updates == "poll":
+        task = asyncio.create_task(run_poller(cfg))
+    yield
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
 def create_app() -> FastAPI:
     # INFO, иначе заглушка SMS молчит, а без кода в логе не войти
     logging.basicConfig(level=logging.INFO)
@@ -39,7 +62,7 @@ def create_app() -> FastAPI:
     # До первого запроса: опечатка в провайдере иначе всплывает на заявке
     # учителя, а сервис до того выглядит здоровым
     check_providers(cfg)
-    app = FastAPI(title="LMS API", version="0.1.0")
+    app = FastAPI(title="LMS API", version="0.1.0", lifespan=lifespan)
 
     # Два фронта — клиентское приложение и админка — на разных доменах.
     app.add_middleware(

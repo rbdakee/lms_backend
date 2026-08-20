@@ -54,6 +54,13 @@ BOUND_FIELDS = ("chat_id", "chat_title", "connected_at")
 START = "/start"
 CONNECTED = "Готово: чат подключён. Сюда будут приходить заявки и работы на проверку."
 WRONG_CODE = "Код не подошёл — он живёт 10 минут. Возьмите новый в настройках платформы."
+# Голый /start — самый частый первый шаг: человек нажал ссылку бота и не
+# знает, что дальше. Код можно прислать и так, и командой /start <код> —
+# отвечаем на оба.
+START_HINT = (
+    "Чтобы привязать чат, возьмите код в настройках платформы (вкладка "
+    "«Telegram-бот») и пришлите его сюда — командой /start <код> или просто кодом."
+)
 # Персональных данных в тестовом сообщении нет — как и в настоящих
 TEST_MESSAGE = "Проверка связи: платформа видит этот чат."
 
@@ -114,7 +121,7 @@ class TelegramBindService:
     # -- POST /telegram/webhook --------------------------------------------
 
     def handle_update(self, update: dict) -> None:
-        """Разбор сообщения от бота — единственная команда `/start <код>`.
+        """Разбор сообщения от бота: `/start <код>`, голый код или голый `/start`.
 
         Результат разбора на ответ вебхука не влияет: Telegram на любой
         не-200 повторяет доставку по нарастающей. Отказ по коду виден
@@ -123,15 +130,28 @@ class TelegramBindService:
         message = _dict(update.get("message"))
         chat = _dict(message.get("chat"))
         chat_id = chat.get("id")
-        command, _, argument = _text(message.get("text")).partition(" ")
-        # Бот понимает одну команду; на всё остальное молчит. В группе клиент
-        # дописывает к команде имя бота — «/start@lms_kz_bot K7M2XB»
-        if chat_id is None or command.split("@", 1)[0] != START:
+        text = _text(message.get("text"))
+        if chat_id is None or not text:
             return
 
-        # Код набирают и руками, с продиктованного по телефону: алфавит
-        # заглавный, поэтому регистр присланного значения не важен
-        code = argument.strip().upper()
+        command, _, argument = text.partition(" ")
+        # В группе клиент дописывает к команде имя бота — «/start@lms_kz_bot K7M2XB»
+        if command.split("@", 1)[0] == START:
+            # Код набирают и руками, с продиктованного по телефону: алфавит
+            # заглавный, поэтому регистр присланного значения не важен
+            code = argument.strip().upper()
+            if not code:
+                # Нажали ссылку бота или просто написали /start — код ещё
+                # не присылали, это не промах мимо него, а первый шаг
+                self.telegram.send_to(str(chat_id), START_HINT)
+                return
+        elif _looks_like_code(text):
+            # Код без команды — тот же ввод, что и после /start
+            code = text.strip().upper()
+        else:
+            # Не команда и не похоже на код — молчим, как и на всё остальное
+            return
+
         if self._burn_code(code):
             # Слиянием, а не целой строкой: флаги уведомлений лежат в ней же,
             # и админ мог переключить их, пока код шёл до бота
@@ -212,17 +232,27 @@ class TelegramBindService:
     def _miss_deserves_an_answer(self, code: str) -> bool:
         """Отвечать ли на промах. Код при этом не трогаем — см. MAX_ATTEMPTS.
 
-        Голый `/start` не считается вовсе: это любопытный посетитель
-        публичного бота, а не опечатка админа. Счётчик обнуляется вместе
-        с выдачей нового кода — строка настроек переписывается целиком.
+        Голый `/start` сюда не доходит вовсе — на него отвечает `START_HINT`
+        ещё в `handle_update`, до всякого разбора кода. Счётчик обнуляется
+        вместе с выдачей нового кода — строка настроек переписывается целиком.
         """
-        if not code:
-            return False
         return self.settings.bump(BIND_KEY, ATTEMPTS_FIELD) <= MAX_ATTEMPTS
 
 
 def _new_code() -> str:
     return "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+
+
+def _looks_like_code(text: str) -> bool:
+    """Похоже ли сообщение на код, присланный без команды `/start`.
+
+    Форма, не совпадение с настоящим кодом — тот же промах и то же
+    ограничение попыток проверяет `_burn_code` дальше. Проверка по алфавиту
+    и длине, а не regex-догадка: обычная фраза длиной ровно шесть знаков
+    из этого алфавита — редкость, которую можно принять на себя.
+    """
+    candidate = text.strip().upper()
+    return len(candidate) == CODE_LENGTH and all(ch in CODE_ALPHABET for ch in candidate)
 
 
 def _expired(expires_at: str | None, now: datetime) -> bool:

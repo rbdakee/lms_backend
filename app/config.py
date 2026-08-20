@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # Секрет вебхука: Telegram присылает его заголовком, и это единственное,
     # что отличает настоящий запрос бота от чужого.
     telegram_webhook_secret: str = ""
+    # Как получать апдейты. `webhook` — прод: api.domain.kz и так публичный,
+    # Telegram стучится сам. `poll` — только локально, без туннеля наружу:
+    # сервис сам вытягивает апдейты через getUpdates фоновой задачей
+    # (`app/adapters/telegram/poller.py`), пока `TELEGRAM_PROVIDER=bot`.
+    telegram_updates: str = "webhook"
     # Код привязки живёт 10 минут: за это время админ успевает дойти
     # до телефона, а подобрать шесть знаков за столько — нет.
     telegram_bind_code_min: int = 10
@@ -49,6 +54,11 @@ class Settings(BaseSettings):
     # настроек админом, поэтому он здесь, а не в настройках площадки.
     # Пусто — QR не печатается: код, ведущий в никуда, с бумаги не исправить.
     verify_base_url: str = "http://localhost:3000"
+    # Куда ведёт кнопка «Открыть в админке» в уведомлениях бота. Свой адрес,
+    # а не public_base_url: админка — третий, отдельный деплой, не API.
+    # `127.0.0.1`, а не `localhost` — Bot API отказывает кнопке (и всему
+    # сообщению) на хосте `localhost` целиком, а тот же адрес по IP принимает.
+    admin_base_url: str = "http://127.0.0.1:3001"
     # Ссылка живёт 15 минут и перевыдаётся молча — длина TTL не болезненна
     file_url_ttl_min: int = 15
     upload_max_mb: int = 20
@@ -84,6 +94,13 @@ PROVIDERS = {
     "storage_provider": ("local",),
 }
 
+# `telegram_updates` не провайдер — не выбирает адаптер, а выбирает, кто
+# первым заговорит с Telegram (сервис или Telegram с сервисом). Проверяется
+# рядом, а не в PROVIDERS: тот список сверяется с полями `*_provider`
+# по имени (`test_every_provider_setting_is_checked`), и это поле в него
+# не попадает нарочно.
+TELEGRAM_UPDATES_MODES = ("webhook", "poll")
+
 
 def check_providers(cfg: Settings) -> None:
     """Проверка провайдеров при старте: неизвестное значение роняет сервис
@@ -104,6 +121,11 @@ def check_providers(cfg: Settings) -> None:
         raise RuntimeError(
             "TELEGRAM_PROVIDER=bot, но TELEGRAM_BOT_TOKEN пуст —"
             " уведомления админу уходили бы в никуда"
+        )
+    if cfg.telegram_updates not in TELEGRAM_UPDATES_MODES:
+        raise RuntimeError(
+            f"TELEGRAM_UPDATES={cfg.telegram_updates!r} — такого режима нет."
+            f" Допустимые значения: {', '.join(TELEGRAM_UPDATES_MODES)}"
         )
 
 

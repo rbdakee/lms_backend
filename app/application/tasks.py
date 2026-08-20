@@ -28,7 +28,7 @@ from app.adapters.db.repos import (
 )
 from app.application.admin_notify import AdminNotifier
 from app.application.files import BAD_LINK, safe_name
-from app.application.ports import StoragePort
+from app.application.ports import NotificationCard, StoragePort
 from app.config import Settings
 from app.domain.errors import (
     FieldError,
@@ -258,10 +258,15 @@ class TasksService:
             raise SubmissionPendingError()
         self.commit()
         try:
-            # Без ФИО и телефона: кто именно сдал, админ увидит в карточке
+            # Без ФИО и телефона: кто именно сдал, админ увидит по кнопке —
+            # уже в админке, а не в самой карточке уведомления
             self.telegram.notify_admins(
-                f"Работа №{submission.id} на проверку:"
-                f" задание „{task.title}“, курс „{course.title}“",
+                NotificationCard(
+                    title="Работа на проверку",
+                    lines=[f"Задание: {task.title}", f"Курс: {course.title}"],
+                    link_text="Открыть в админке",
+                    link_url=f"{self.cfg.admin_base_url}/submissions/{submission.id}",
+                ),
                 kind="submission",
             )
         except Exception:

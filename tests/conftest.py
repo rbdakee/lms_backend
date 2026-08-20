@@ -45,6 +45,7 @@ from app.api.deps import (
     get_thread_limiter,
     get_verify_limiter,
 )
+from app.application.ports import NotificationCard
 from app.application.ratelimit import SlidingWindowLimiter
 from app.config import get_settings
 from app.main import app
@@ -121,13 +122,13 @@ def sms():
 
 class FakeTelegram:
     def __init__(self):
-        self.sent: list[str] = []
+        self.sent: list[NotificationCard] = []
         # Ответы в конкретный чат: привязка бота отвечает туда, откуда пришла
         # команда, — это не то же самое, что уведомление админам
         self.to_chat: list[tuple[str, str]] = []
 
-    def notify_admins(self, text: str) -> None:
-        self.sent.append(text)
+    def notify_admins(self, card: NotificationCard) -> None:
+        self.sent.append(card)
 
     def send_to(self, chat_id: str, text: str) -> None:
         self.to_chat.append((chat_id, text))

@@ -487,6 +487,7 @@ def get_leads_service(
         telegram=notifier,
         commit=db.commit,
         preview_course_id=preview_course_id,
+        admin_base_url=get_settings().admin_base_url,
     )
 
 

@@ -8,7 +8,7 @@
 
 import pytest
 
-from app.config import PROVIDERS, check_providers, get_settings
+from app.config import PROVIDERS, TELEGRAM_UPDATES_MODES, check_providers, get_settings
 
 
 def test_a_typo_in_a_provider_stops_the_service_at_start(monkeypatch):
@@ -51,3 +51,16 @@ def test_bot_without_a_token_stops_the_service_at_start(monkeypatch):
 
     monkeypatch.setattr(get_settings(), "telegram_bot_token", "123456:AA-fake-token")
     check_providers(get_settings())
+
+
+def test_a_typo_in_telegram_updates_stops_the_service_at_start(monkeypatch):
+    """`telegram_updates` не заканчивается на `_provider` и потому не в
+    `PROVIDERS` (см. `test_every_provider_setting_is_checked`) — но опечатка
+    в нём так же не должна дожить до первого апдейта от Telegram."""
+    monkeypatch.setattr(get_settings(), "telegram_updates", "webhok")
+    with pytest.raises(RuntimeError) as failed:
+        check_providers(get_settings())
+    message = str(failed.value)
+    assert "TELEGRAM_UPDATES" in message
+    for value in TELEGRAM_UPDATES_MODES:
+        assert value in message

@@ -7,11 +7,15 @@
 людей. Остаётся код ответа и факт неудачи.
 """
 
+import html
 import json
 import logging
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+
+from app.application.ports import NotificationCard
 
 log = logging.getLogger("telegram")
 
@@ -59,8 +63,8 @@ class TelegramBot:
         # ушедшие незнакомому человеку.
         self.chat_id = chat_id
 
-    def notify_admins(self, text: str) -> None:
-        """Уведомление админу — с повторами на недоставку.
+    def notify_admins(self, card: NotificationCard) -> None:
+        """Уведомление админу карточкой — с повторами на недоставку.
 
         Худший случай по времени: ATTEMPTS × TIMEOUT_SEC + паузы между
         попытками = 3 × 5 + 2 × 0,5 ≈ 16 секунд. Ждёт их учитель, нажавший
@@ -72,9 +76,11 @@ class TelegramBot:
             # Бот не привязан — уведомлять некуда. Это не сбой доставки:
             # заявка уже в админке, и падать сценарию не на чем
             return
+        text = _render(card)
+        keyboard = _keyboard(card)
         for attempt in range(ATTEMPTS):
             try:
-                self.send_to(self.chat_id, text)
+                self._post(self.chat_id, text, parse_mode="HTML", reply_markup=keyboard)
                 return
             except TelegramUnreachableError:
                 if attempt == ATTEMPTS - 1:
@@ -82,9 +88,24 @@ class TelegramBot:
                 time.sleep(PAUSE_SEC)
 
     def send_to(self, chat_id: str, text: str) -> None:
+        self._post(chat_id, text)
+
+    def _post(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        parse_mode: str | None = None,
+        reply_markup: dict | None = None,
+    ) -> None:
+        payload = {"chat_id": chat_id, "text": text}
+        if parse_mode is not None:
+            payload["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         request = urllib.request.Request(
             f"{API_BASE}/bot{self.token}/sendMessage",
-            data=json.dumps({"chat_id": chat_id, "text": text}).encode(),
+            data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
         try:
@@ -109,3 +130,28 @@ class TelegramBot:
         if not (isinstance(body, dict) and body.get("ok")):
             log.warning("Telegram не принял сообщение")
             raise TelegramError("Telegram не принял сообщение")
+
+
+def _render(card: NotificationCard) -> str:
+    """Заголовок жирным, дальше — строки деталей. Экранирование обязательно:
+    в строки попадают название курса и задания, а `parse_mode=HTML` на
+    неэкранированном `<` или `&` не рисует текст как есть — валит всё
+    сообщение целиком, и уведомление не уходит вообще."""
+    lines = [f"<b>{html.escape(card.title)}</b>"]
+    lines.extend(html.escape(line) for line in card.lines)
+    return "\n".join(lines)
+
+
+def _keyboard(card: NotificationCard) -> dict | None:
+    """Кнопка-ссылка — или её отсутствие, если ссылка нерабочая.
+
+    Bot API проверяет URL кнопки и отказывает сообщению целиком, а не только
+    кнопке: `sendMessage` с `http://localhost:3001/...` возвращает 400 —
+    хотя тот же адрес по IP (`127.0.0.1`) Telegram принимает. Локальный
+    `ADMIN_BASE_URL` уже смотрит на `127.0.0.1` (см. `.env.example`), но
+    опечатка в конфигурации не должна убивать заявку и уведомление целиком —
+    молча остаётся без кнопки, а не без сообщения.
+    """
+    if not card.link_url or urllib.parse.urlparse(card.link_url).hostname == "localhost":
+        return None
+    return {"inline_keyboard": [[{"text": card.link_text, "url": card.link_url}]]}

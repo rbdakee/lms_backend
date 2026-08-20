@@ -6,6 +6,7 @@
 """
 
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -13,18 +14,36 @@ class SmsPort(Protocol):
     def send_code(self, phone: str, code: str) -> None: ...
 
 
+@dataclass(frozen=True)
+class NotificationCard:
+    """Уведомление админам как его видит домен: заголовок, строки деталей,
+    кнопка-ссылка на разбор в админке.
+
+    Не HTML и не разметка конкретного мессенджера — то, во что это
+    превращается (жирный заголовок, inline-кнопка), решает уже адаптер:
+    порт описывает потребность домена, а не API Telegram.
+    """
+
+    title: str
+    lines: list[str] = field(default_factory=list)
+    link_text: str = ""
+    link_url: str = ""
+
+
 class TelegramPort(Protocol):
     """Доставка сообщений в Telegram. Оба метода при неудаче поднимают
     исключение: «сообщение не ушло» обязано отличаться от «ушло»."""
 
-    def notify_admins(self, text: str) -> None:
-        """Уведомить всех админов одним текстом: заявки и работы на проверку
+    def notify_admins(self, card: NotificationCard) -> None:
+        """Уведомить всех админов одной карточкой: заявки и работы на проверку
         идут в общий бот, а не каждому персонально."""
         ...
 
     def send_to(self, chat_id: str, text: str) -> None:
-        """Сообщение в конкретный чат: бот отвечает туда, откуда пришла
-        команда, — а это не обязательно тот чат, куда идут уведомления."""
+        """Обычный текст в конкретный чат: бот отвечает туда, откуда пришла
+        команда, — а это не обязательно тот чат, куда идут уведомления.
+        Карточка здесь не нужна: подтверждение привязки и отказ по коду —
+        не уведомления, а ответ в диалоге."""
         ...
 
 

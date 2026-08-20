@@ -17,6 +17,7 @@ from app.adapters.db.repos import (
     now_utc,
 )
 from app.application.admin_notify import AdminNotifier
+from app.application.ports import NotificationCard
 from app.domain.errors import (
     AlreadyEnrolledError,
     EnrollmentClosedError,
@@ -39,6 +40,7 @@ class LeadsService:
         telegram: AdminNotifier,
         commit: Callable[[], None],
         preview_course_id: int | None,
+        admin_base_url: str,
     ):
         self.users = users
         self.courses = courses
@@ -51,6 +53,8 @@ class LeadsService:
         self.commit = commit
         # Включённый режим предпросмотра, см. create_lead
         self.preview_course_id = preview_course_id
+        # Кнопка «Открыть в админке» в карточке уведомления
+        self.admin_base_url = admin_base_url
 
     # -- заявка учителя -------------------------------------------------
 
@@ -89,9 +93,19 @@ class LeadsService:
         lead = self.leads.create(user.id, course.id, course.price)
         self.commit()
         try:
-            # Без ФИО и телефона: подробности админ откроет в админке
+            # Без ФИО и телефона: подробности админ откроет по кнопке в
+            # админке — карточка уходит в Telegram, а не за дверь с входом
+            lines = [f"Курс: {course.title}"]
+            if lead.price_snapshot is not None:
+                lines.append(f"Цена: {_fmt_tenge(lead.price_snapshot)}")
             self.telegram.notify_admins(
-                f"Новая заявка №{lead.id} на курс „{course.title}“", kind="lead"
+                NotificationCard(
+                    title="Новая заявка",
+                    lines=lines,
+                    link_text="Открыть в админке",
+                    link_url=f"{self.admin_base_url}/leads/{lead.id}",
+                ),
+                kind="lead",
             )
         except Exception:
             log.exception("Telegram-уведомление о заявке %s не ушло", lead.id)
@@ -229,3 +243,8 @@ class LeadsService:
             "paid": enrollment.paid_note is not None,
             "note": enrollment.paid_note,
         }
+
+
+def _fmt_tenge(amount: int) -> str:
+    """`60000` → «60 000 ₸» — разряды пробелом, как на карточке курса."""
+    return f"{amount:,}".replace(",", " ") + " ₸"

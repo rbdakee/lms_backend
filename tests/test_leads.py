@@ -20,13 +20,15 @@ def test_create_lead(client, sms, telegram):
     assert body["status"] == "new"
     assert body["waiting_days"] == 0
 
-    # Уведомление без ПД: только номер заявки и курс
+    # Уведомление без ПД: карточкой, только курс, цена и ссылка на заявку
     assert len(telegram.sent) == 1
-    message = telegram.sent[0]
-    assert f"№{body['id']}" in message
-    assert "Оценивание для учителей" in message
-    assert "Нурланова" not in message
-    assert "7071234567" not in message
+    card = telegram.sent[0]
+    assert card.title == "Новая заявка"
+    assert card.lines == ["Курс: Оценивание для учителей", "Цена: 45 000 ₸"]
+    assert card.link_url.endswith(f"/leads/{body['id']}")
+    whole = card.title + " ".join(card.lines) + card.link_text + card.link_url
+    assert "Нурланова" not in whole
+    assert "7071234567" not in whole
 
 
 def test_repeat_lead_is_reminder_not_duplicate(client, sms, telegram):

@@ -12,7 +12,7 @@
 from collections.abc import Callable
 
 from app.adapters.db.repos import SettingRepo
-from app.application.ports import TelegramPort
+from app.application.ports import NotificationCard, TelegramPort
 from app.application.settings import TELEGRAM_KEY
 
 # Флаг настройки на каждый тип сообщения — их ровно два (BACKEND_NOTES, 11)
@@ -32,7 +32,7 @@ class AdminNotifier:
         # «слать или нет» опоздает.
         self.commit = commit
 
-    def notify_admins(self, text: str, *, kind: str) -> None:
+    def notify_admins(self, card: NotificationCard, *, kind: str) -> None:
         stored = self.settings.get(TELEGRAM_KEY)
         # По умолчанию включены: бот привязывают затем, чтобы получать заявки
         # и работы на проверку
@@ -42,4 +42,4 @@ class AdminNotifier:
         self.commit()
         if not enabled:
             return
-        self.telegram.notify_admins(text)
+        self.telegram.notify_admins(card)

@@ -269,11 +269,12 @@ def test_submit_text(client, sms, storage, telegram):
     assert body["files"] == []
     assert body["comment"] is None
     assert body["reviewed_at"] is None
-    # Без ФИО и телефона: подробности админ откроет в карточке
-    assert telegram.sent == [
-        f"Работа №{body['id']} на проверку:"
-        " задание „Составьте дескрипторы“, курс „Критериальное оценивание“"
-    ]
+    # Без ФИО и телефона: подробности админ откроет по кнопке
+    assert len(telegram.sent) == 1
+    card = telegram.sent[0]
+    assert card.title == "Работа на проверку"
+    assert card.lines == ["Задание: Составьте дескрипторы", "Курс: Критериальное оценивание"]
+    assert card.link_url.endswith(f"/submissions/{body['id']}")
 
 
 def test_submit_file_hides_storage_key(client, sms, storage, telegram):
