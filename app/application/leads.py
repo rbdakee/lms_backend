@@ -135,7 +135,11 @@ class LeadsService:
         if status == "granted":
             # Выдача — отдельный сценарий: enrollment, уведомление, отметка оплаты
             raise ValidationAppError("Доступ выдаётся через POST /admin/enrollments")
-        if status is not None:
+        if status is not None and status != lead.status:
+            if lead.status == "granted":
+                # Доступ уже выдан — enrollment существует, откатывать
+                # заявку в другой статус нельзя, курс у учителя уже есть
+                raise ValidationAppError("Доступ уже выдан, статус заявки закрыт")
             lead.status = status
         if "note" in fields:
             lead.note = fields["note"]
