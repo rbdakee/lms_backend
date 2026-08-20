@@ -44,6 +44,20 @@ def test_patch_partial_and_clear(client, sms):
     assert body["last_name"] == "Нурланова"
 
 
+def test_experience_out_of_range_is_reported_in_russian(client, sms):
+    """Стаж учитель вводит руками, и ошибка под полем обязана быть на языке
+    остальных ошибок формы."""
+    login(client, sms)
+
+    resp = client.patch("/me", json={"experience": 100})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0] == {
+        "field": "experience",
+        "message": "Стаж — от 0 до 70 лет",
+    }
+
+
 def test_patch_rejects_unknown_field(client, sms):
     login(client, sms)
     resp = client.patch("/me", json={"is_admin": True})

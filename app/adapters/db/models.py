@@ -89,6 +89,13 @@ class Course(Base):
     title: Mapped[str] = mapped_column(Text)
     short: Mapped[str] = mapped_column(Text, default="", server_default="")
     full: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Обложка — загруженный файл: ключ объекта в приватном хранилище и имя,
+    # которое видит админ. Раздаёт байты GET /courses/{id}/cover.
+    cover_key: Mapped[str | None] = mapped_column(Text)
+    cover_name: Mapped[str | None] = mapped_column(Text)
+    # Обложка старым способом — внешний адрес картинки, вписанный руками
+    # до сессии 7в. Только на чтение: задать его через API больше нельзя,
+    # но у заведённых раньше курсов он остаётся и продолжает работать.
     cover: Mapped[str | None] = mapped_column(Text)
     category_id: Mapped[int] = mapped_column(Integer)  # справочник в domain/dictionaries.py
     hours: Mapped[int] = mapped_column(Integer)

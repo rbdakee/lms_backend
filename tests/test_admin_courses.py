@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session as OrmSession
 
 from app.adapters.db.base import get_engine
 from app.adapters.db.repos import CourseAdminRepo
+from app.config import get_settings
 from tests.conftest import (
     in_parallel,
     login,
@@ -27,13 +28,32 @@ from tests.conftest import (
 
 TEACHER_PHONE = "+7 (707) 123-45-67"
 
+BASE = get_settings().public_base_url
+
+# Сигнатура настоящая: обложка опознаётся по байтам объекта, а не по имени,
+# которое сочиняет клиент.
+COVER_PNG = b"\x89PNG\r\n\x1a\n" + b"cover" * 32
+DOCX = b"PK\x03\x04" + b"docx" * 32
+
+# Адрес-ссылка из прежних времён: колонка `cover` осталась на чтение, и у
+# курсов, заведённых до загрузки файлом, обложка обязана продолжать работать.
+OLD_LINK = "https://cdn.example.kz/covers/assessment_ru.jpg"
+
+
+def upload_cover(client, name="Обложка курса.png", content=COVER_PNG):
+    """Картинка кладётся настоящим POST /files: курс привязывается к тому
+    самому ключу, который получил браузер."""
+    resp = client.post("/files", files={"file": (name, content, "application/octet-stream")})
+    assert resp.status_code == 200, resp.text
+    return {"key": resp.json()["key"], "name": resp.json()["name"]}
+
 
 def make_rich_course(**kw):
     """Курс из примера контракта: один модуль, в нём по одному элементу
     каждого вида. Текстовый урок пустой — на нём проверяется чек-лист."""
     course = make_course(
         title="Критериальное оценивание в начальной школе",
-        cover="https://cdn.example.kz/covers/assessment_ru.jpg",
+        cover=OLD_LINK,
         category_id=3,
         **kw,
     )
@@ -212,15 +232,19 @@ def test_create_draft_answers_with_the_editor(client, sms):
             "can_open": False,
             "can_plan": False,
             "items": [
-                {"code": "cover", "ok": False, "text": "Обложка не загружена", "items": []},
-                {"code": "hours", "ok": True, "text": "Объём курса указан", "items": []},
-                {"code": "starts_at", "ok": True,
+                {"code": "cover", "ok": False, "blocking": False,
+                 "text": "Обложки нет — в каталоге курс будет без картинки", "items": []},
+                {"code": "hours", "ok": True, "blocking": True,
+                 "text": "Объём курса указан", "items": []},
+                {"code": "starts_at", "ok": True, "blocking": True,
                  "text": "Дата старта не нужна — курс не запланирован", "items": []},
-                {"code": "empty_lessons", "ok": True,
-                 "text": "Уроков без содержимого нет", "items": []},
-                {"code": "empty_quizzes", "ok": True,
-                 "text": "Во всех тестах есть вопросы", "items": []},
-                {"code": "program", "ok": False,
+                {"code": "empty_lessons", "ok": True, "blocking": True,
+                 "text": "Уроки не проверялись — в программе нет видимых элементов",
+                 "items": []},
+                {"code": "empty_quizzes", "ok": True, "blocking": True,
+                 "text": "Тесты не проверялись — в программе нет видимых элементов",
+                 "items": []},
+                {"code": "program", "ok": False, "blocking": True,
                  "text": "В программе нет ни одного элемента", "items": []},
             ],
         },
@@ -286,6 +310,7 @@ def test_card_shows_hidden_program_and_checklist(client, client2, sms):
     assert checks["empty_lessons"] == {
         "code": "empty_lessons",
         "ok": False,
+        "blocking": True,
         "text": "У 1 урока нет содержимого",
         "items": ["Критерии и дескрипторы"],
     }
@@ -381,6 +406,130 @@ def test_planned_course_publishes_with_empty_program(client, sms):
     ]
 
 
+NOT_CHECKED_LESSONS = "Уроки не проверялись — в программе нет видимых элементов"
+NOT_CHECKED_QUIZZES = "Тесты не проверялись — в программе нет видимых элементов"
+
+
+def checklist(client, course_id) -> dict:
+    """Чек-лист публикации по `code` — пункты в нём проверяются поимённо."""
+    body = client.get(f"/admin/courses/{course_id}").json()
+    return {item["code"]: item for item in body["readiness"]["items"]}
+
+
+def test_checklist_does_not_pretend_it_checked_an_empty_program(client, sms):
+    """Пустая программа — это не «проверено и хорошо»: проверять было нечего,
+    и зелёная галочка «уроков без содержимого нет» тут врала бы."""
+    course = make_course(status="draft")
+    login_admin(client, sms)
+
+    checks = checklist(client, course.id)
+    assert checks["program"]["text"] == "В программе нет ни одного элемента"
+    assert checks["empty_lessons"] == {
+        "code": "empty_lessons", "ok": True, "blocking": True,
+        "text": NOT_CHECKED_LESSONS, "items": [],
+    }
+    assert checks["empty_quizzes"] == {
+        "code": "empty_quizzes", "ok": True, "blocking": True,
+        "text": NOT_CHECKED_QUIZZES, "items": [],
+    }
+
+
+def test_checklist_counts_the_hidden_when_nothing_is_visible(client, sms):
+    """Курс собран, но ни один элемент ещё не показан: заготовка заводится
+    скрытой. «В программе нет ни одного элемента» при шести элементах
+    на соседней вкладке читается как потеря программы."""
+    course = make_course(status="draft")
+    first = make_module(course.id, title="Модуль 1", order_index=1)
+    second = make_module(course.id, title="Модуль 2", order_index=2)
+    for module in (first, second):
+        make_lesson(module.id, is_hidden=True, order_index=1)
+        make_quiz(module.id, is_hidden=True, order_index=2)
+        make_task(module.id, is_hidden=True, order_index=3)
+    login_admin(client, sms)
+
+    checks = checklist(client, course.id)
+    assert checks["program"] == {
+        "code": "program",
+        "ok": False,
+        "blocking": True,
+        "text": "В программе нет ни одного видимого элемента: скрыто 6",
+        "items": [],
+    }
+    # У обоих тестов ноль вопросов, но они скрыты: считать по ним нечего,
+    # и пункт про вопросы честно говорит, что не проверялся
+    assert checks["empty_quizzes"]["text"] == NOT_CHECKED_QUIZZES
+    assert checks["empty_quizzes"]["ok"] is True
+    assert checks["empty_lessons"]["text"] == NOT_CHECKED_LESSONS
+    assert client.get(f"/admin/courses/{course.id}").json()["readiness"]["can_open"] is False
+
+
+def test_missing_cover_warns_but_does_not_close_the_enrollment(client, sms):
+    """Обложка — единственный неблокирующий пункт: без картинки курс в каталоге
+    выглядит бедно, но пускать в него людей это не мешает."""
+    course = make_course(status="draft", cover=None)
+    module = make_module(course.id, title="Модуль 1")
+    make_lesson(module.id, title="Что не так с пятибалльной шкалой", order_index=1)
+    login_admin(client, sms)
+
+    checks = checklist(client, course.id)
+    assert checks["cover"] == {
+        "code": "cover",
+        "ok": False,
+        "blocking": False,
+        "text": "Обложки нет — в каталоге курс будет без картинки",
+        "items": [],
+    }
+    # Пункт не выполнен, а кнопка открыта — предупреждение, а не требование
+    assert client.get(f"/admin/courses/{course.id}").json()["readiness"]["can_open"] is True
+
+
+def test_blocking_check_closes_the_enrollment_even_with_a_cover(client, sms):
+    """Остальные пункты кнопку держат: невыполненный blocking гасит «Открыть
+    набор» и при загруженной обложке."""
+    course = make_course(status="draft", cover="https://cdn.example.kz/c.jpg")
+    module = make_module(course.id, title="Модуль 1")
+    make_lesson(module.id, title="Критерии и дескрипторы", kind="text", video_url=None,
+                body={"html": ""}, order_index=1)
+    login_admin(client, sms)
+
+    body = client.get(f"/admin/courses/{course.id}").json()
+    assert body["readiness"]["can_open"] is False
+    assert [item["code"] for item in body["readiness"]["items"] if not item["ok"]] == [
+        "empty_lessons"
+    ]
+
+
+def test_number_out_of_range_is_reported_in_russian(client, sms):
+    """Границы числовых полей отвечают тем же видом ошибки, что и самописные
+    проверки: английский текст pydantic попадал прямо в подпись под полем."""
+    course = make_course()
+    login_admin(client, sms)
+
+    resp = client.patch(f"/admin/courses/{course.id}", json={"hours": 0})
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0] == {
+        "field": "hours",
+        "message": "Объём курса — от 1 до 999 часов",
+    }
+
+    # Тот же текст на верхней границе и при создании курса: ограничение одно
+    resp = client.post(
+        "/admin/courses",
+        json={"title": "Новый", "lang": "ru", "category_id": 1, "hours": 1000},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0]["message"] == (
+        "Объём курса — от 1 до 999 часов"
+    )
+
+    resp = client.patch(f"/admin/courses/{course.id}", json={"price": -1})
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0] == {
+        "field": "price",
+        "message": "Цена не может быть отрицательной",
+    }
+
+
 def test_patch_validates_category_and_empty_title(client, sms):
     course = make_course()
     login_admin(client, sms)
@@ -413,6 +562,175 @@ def test_patch_refuses_an_empty_title(client, sms):
     # Пробелы по краям обрезаются, как и при создании
     body = client.patch(f"/admin/courses/{course.id}", json={"title": "  Новое  "}).json()
     assert body["title"] == "Новое"
+
+
+# -- обложка курса -----------------------------------------------------
+
+
+def test_cover_is_uploaded_and_served_without_login(client, client2, sms, storage):
+    """Обложка загружается файлом, а наружу уходит адресом: его рисует
+    и каталог, и превью в редакторе, и открывается он без входа."""
+    course = make_course(status="open")
+    login_admin(client, sms)
+
+    body = client.patch(
+        f"/admin/courses/{course.id}", json={"cover": upload_cover(client)}
+    ).json()
+    assert body["cover"] == f"{BASE}/courses/{course.id}/cover"
+    assert checklist(client, course.id)["cover"]["text"] == "Обложка загружена"
+
+    # Каталог показывает тот же адрес — форма поля от загрузки не изменилась
+    catalog = client2.get("/courses").json()
+    assert catalog["items"][0]["versions"][0]["cover"] == f"{BASE}/courses/{course.id}/cover"
+
+    resp = client2.get(f"/courses/{course.id}/cover")
+    assert resp.status_code == 200
+    assert resp.content == COVER_PNG
+    assert resp.headers["content-type"] == "image/png"
+    assert resp.headers["content-length"] == str(len(COVER_PNG))
+    assert resp.headers["cache-control"] == "public, max-age=300"
+    # Внутри svg бывает <script>, а домен API делит куку сессии с обоими фронтами
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["content-security-policy"] == (
+        "default-src 'none'; style-src 'unsafe-inline'"
+    )
+    # Картинка стоит в <img>, а не скачивается
+    assert "content-disposition" not in resp.headers
+
+
+def test_cover_keeps_the_name_of_the_uploaded_file(client, sms, storage):
+    """Имя лежит рядом с ключом: ключи загрузки случайные, и тип картинки
+    в раздаче считается по имени, а не по ключу."""
+    course = make_course()
+    login_admin(client, sms)
+
+    client.patch(
+        f"/admin/courses/{course.id}",
+        json={"cover": upload_cover(client, name="Обложка курса.jpg", content=COVER_PNG)},
+    )
+
+    assert client.get(f"/courses/{course.id}/cover").headers["content-type"] == "image/jpeg"
+
+
+def test_null_removes_the_cover(client, client2, sms, storage):
+    course = make_course()
+    login_admin(client, sms)
+    client.patch(f"/admin/courses/{course.id}", json={"cover": upload_cover(client)})
+
+    body = client.patch(f"/admin/courses/{course.id}", json={"cover": None}).json()
+
+    assert body["cover"] is None
+    assert checklist(client, course.id)["cover"]["ok"] is False
+    assert client2.get(f"/courses/{course.id}/cover").status_code == 404
+
+
+def test_null_removes_an_old_link_cover_too(client, sms):
+    """Снятие обложки одинаково работает и у загруженной картинки, и у адреса,
+    вписанного руками до загрузки файлом."""
+    course = make_course(cover=OLD_LINK)
+    login_admin(client, sms)
+
+    body = client.patch(f"/admin/courses/{course.id}", json={"cover": None}).json()
+
+    assert body["cover"] is None
+
+
+def test_a_new_cover_replaces_an_old_link(client, sms, storage):
+    """Загруженная картинка гасит прежний адрес-ссылку: иначе она ждала бы
+    своей очереди за ним, а на экране ничего бы не изменилось."""
+    course = make_course(cover=OLD_LINK)
+    login_admin(client, sms)
+
+    body = client.patch(
+        f"/admin/courses/{course.id}", json={"cover": upload_cover(client)}
+    ).json()
+
+    assert body["cover"] == f"{BASE}/courses/{course.id}/cover"
+    assert client.get(f"/courses/{course.id}/cover").status_code == 200
+
+
+def test_an_old_link_cover_is_still_read(client, client2, sms):
+    """Переходное поведение: загруженной картинки нет — отдаём то, что лежало
+    в `cover` раньше, как есть. Задать этот адрес через API уже нельзя."""
+    course = make_course(status="open", cover=OLD_LINK)
+    login_admin(client, sms)
+
+    assert client.get(f"/admin/courses/{course.id}").json()["cover"] == OLD_LINK
+    assert client2.get("/courses").json()["items"][0]["versions"][0]["cover"] == OLD_LINK
+    # Раздавать нечего: байтов у ссылки на чужой сайт нет
+    assert client2.get(f"/courses/{course.id}/cover").status_code == 404
+
+
+def test_a_link_is_no_longer_accepted_as_a_cover(client, sms):
+    course = make_course()
+    login_admin(client, sms)
+
+    resp = client.patch(f"/admin/courses/{course.id}", json={"cover": OLD_LINK})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0]["field"] == "cover"
+
+
+def test_cover_refuses_a_file_that_is_not_an_image(client, sms, storage):
+    """Формат опознаётся по байтам объекта: имя сочиняет клиент, и договор,
+    названный «обложка.jpg», проходил бы насквозь."""
+    course = make_course()
+    login_admin(client, sms)
+
+    resp = client.patch(
+        f"/admin/courses/{course.id}",
+        json={"cover": upload_cover(client, name="обложка.jpg", content=DOCX)},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0] == {
+        "field": "cover",
+        "message": "Нужна картинка: PNG, JPEG, GIF, WEBP или SVG",
+    }
+    assert client.get(f"/admin/courses/{course.id}").json()["cover"] is None
+
+
+def test_cover_refuses_a_key_without_an_object(client, sms, storage):
+    """Иначе админ увидит пустой блок вместо только что загруженного файла."""
+    course = make_course()
+    login_admin(client, sms)
+
+    resp = client.patch(
+        f"/admin/courses/{course.id}",
+        json={"cover": {"key": "uploads/2026/08/20/00000000.png", "name": "cover.png"}},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["message"] == "Загруженный файл не найден — загрузите его заново"
+
+
+def test_cover_404_without_a_picture_and_without_a_course(client, sms, storage):
+    """Курса нет, обложки нет, объект пропал — для открывшего адрес это один
+    и тот же 404, а не 422 и не перебор номеров курсов."""
+    course = make_course()
+    login_admin(client, sms)
+    cover = upload_cover(client)
+    client.patch(f"/admin/courses/{course.id}", json={"cover": cover})
+
+    assert client.get("/courses/999999/cover").status_code == 404
+    assert client.get(f"/courses/{make_course().id}/cover").status_code == 404
+
+    storage.objects.pop(cover["key"])
+    resp = client.get(f"/courses/{course.id}/cover")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "not_found"
+    # У курса обложка при этом остаётся: пропал объект, а не привязка
+    assert client.get(f"/admin/courses/{course.id}").json()["cover"] is not None
+
+
+def test_cover_of_a_draft_opens_without_login(client, client2, sms, storage):
+    """Статус курса раздачу не запирает: ту же картинку показывает превью
+    в редакторе, а редактируют как раз черновик."""
+    course = make_course(status="draft")
+    login_admin(client, sms)
+    client.patch(f"/admin/courses/{course.id}", json={"cover": upload_cover(client)})
+
+    assert client2.get(f"/courses/{course.id}/cover").status_code == 200
 
 
 # -- удаление курса ----------------------------------------------------
@@ -579,6 +897,8 @@ def test_duplicate_makes_a_new_group(client, client2, sms):
     assert body["group_id"] != course.group_id
     assert body["lang"] == course.lang
     assert body["title"] == "Критериальное оценивание в начальной школе (копия)"
+    # Обложка переезжает в копию — и загруженная, и доставшаяся ссылкой
+    assert body["cover"] == OLD_LINK
     assert body["status"] == "draft"
     assert body["price"] is None
     assert body["starts_at"] is None

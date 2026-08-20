@@ -160,6 +160,21 @@ def test_stub_validates_fields(client, sms):
     assert field_of({**STUB, "time_required_min": -1}) == "time_required_min"
 
 
+def test_number_out_of_range_is_reported_in_russian(client, sms):
+    """Потолок размера файла проверяется сценарием и говорит по-русски —
+    нижняя граница обязана говорить так же."""
+    _, _, task = make_editable_task()
+    login_admin(client, sms)
+
+    resp = client.patch(f"/admin/tasks/{task.id}", json={"max_size_mb": 0})
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0] == {
+        "field": "max_size_mb",
+        "message": "Размер файла — от 1 МБ",
+    }
+
+
 # -- редактор задания --------------------------------------------------
 
 

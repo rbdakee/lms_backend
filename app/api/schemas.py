@@ -1,10 +1,52 @@
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field, ValidationInfo
 
 from app.adapters.db.models import User
+from app.domain.errors import FieldError
 from app.domain.profile import onboarding_done
+
+
+def _ranged_int(low: int, high: int | None, message: str) -> Any:
+    """Целое поле формы с границами — и с русским текстом, когда в них
+    не попали.
+
+    Само ограничение остаётся у `Field`: оно уходит в OpenAPI-схему, и фронт
+    читает границы оттуда. Проверка стоит перед ним и поднимает обычную
+    `FieldError` — ту же, что кидают самописные проверки сценариев
+    (`_checked_title` и подобные), с тем же именем поля и тем же видом ответа.
+    Иначе под полем в админке появляется английское «Input should be greater
+    than or equal to 1» — единственное английское место среди русских ошибок.
+
+    Ошибка поднимается исключением, а не возвратом: pydantic пропускает
+    наружу всё, кроме ValueError, и обработчик AppError отвечает 422 в общем
+    формате. Значит, из нескольких неверных чисел одного запроса до экрана
+    доедет первое — так же ведут себя и остальные проверки сценариев.
+    """
+
+    def check(value: Any, info: ValidationInfo) -> Any:
+        # Не число — не наше дело: тип проверит сам pydantic
+        if isinstance(value, int | float) and (
+            value < low or (high is not None and value > high)
+        ):
+            raise FieldError(info.field_name, message)
+        return value
+
+    constraint = Field(ge=low) if high is None else Field(ge=low, le=high)
+    return Annotated[int, constraint, BeforeValidator(check)]
+
+
+# Числовые поля, которые человек вводит руками. Одинаковые по смыслу границы
+# обязаны и звучать одинаково, поэтому текст живёт рядом с самой границей.
+Hours = _ranged_int(1, 999, "Объём курса — от 1 до 999 часов")
+Price = _ranged_int(0, None, "Цена не может быть отрицательной")
+PassScore = _ranged_int(1, 100, "Проходной балл — от 1 до 100")
+QuestionPoints = _ranged_int(1, 100, "Баллы за вопрос — от 1 до 100")
+TimeLimitMin = _ranged_int(1, 600, "Таймер теста — от 1 до 600 минут")
+TimeRequiredMin = _ranged_int(0, 600, "Требуемое время — от 0 до 600 минут")
+MaxSizeMb = _ranged_int(1, None, "Размер файла — от 1 МБ")
+Experience = _ranged_int(0, 70, "Стаж — от 0 до 70 лет")
 
 
 class RequestCodeIn(BaseModel):
@@ -90,7 +132,7 @@ class UserPatch(BaseModel):
     region: str | None = Field(None, max_length=100)
     city: str | None = Field(None, max_length=100)
     subject: str | None = Field(None, max_length=100)
-    experience: int | None = Field(None, ge=0, le=70)
+    experience: Experience | None = None
     lang: Literal["ru", "kz"] | None = None
 
 
@@ -1208,14 +1250,17 @@ class ReadinessCheckOut(BaseModel):
 
     code: str
     ok: bool
+    # Держит ли невыполненный пункт кнопку «Открыть набор». Не у всех держит:
+    # обложка — предупреждение, курс без картинки открыть можно
+    blocking: bool
     text: str
     items: list[str]
 
 
 class ReadinessOut(BaseModel):
     # Две кнопки вкладки «Публикация» с разными требованиями: набор открывают
-    # готовому курсу, а запланированный публикуют пустым — ему нужна только
-    # дата старта
+    # курсу, у которого закрыты все blocking-пункты, а запланированный
+    # публикуют пустым — ему нужна только дата старта
     can_open: bool
     can_plan: bool
     items: list[ReadinessCheckOut]
@@ -1262,7 +1307,21 @@ class AdminCourseIn(BaseModel):
     title: str = Field(max_length=200)
     lang: Literal["ru", "kz"]
     category_id: int
-    hours: int = Field(ge=1, le=999)
+    hours: Hours
+
+
+class CourseCoverIn(BaseModel):
+    """Загруженная обложка курса — как картинки настроек: ключ объекта и имя
+    файла из ответа POST /files.
+
+    Имя хранится рядом с ключом: ключи загрузки случайные нарочно, и админу
+    досталось бы «9f3c1a7e.jpg» вместо «Обложка курса.jpg».
+    """
+
+    model_config = {"extra": "forbid"}
+
+    key: str = Field(max_length=500)
+    name: str = Field(max_length=255)
 
 
 class AdminCoursePatchIn(BaseModel):
@@ -1271,13 +1330,15 @@ class AdminCoursePatchIn(BaseModel):
     title: str | None = Field(None, max_length=200)
     short: str | None = Field(None, max_length=500)
     full: str | None = Field(None, max_length=20000)
-    # null — обложки нет
-    cover: str | None = Field(None, max_length=500)
+    # Загруженная картинка; null — снять обложку. Строкой-адресом обложка
+    # больше не задаётся, хотя в ответе `cover` остаётся адресом: сервер
+    # собирает его сам (CONTRACT, PATCH /admin/courses/{id})
+    cover: CourseCoverIn | None = None
     category_id: int | None = None
-    hours: int | None = Field(None, ge=1, le=999)
+    hours: Hours | None = None
     duration_text: str | None = Field(None, max_length=100)
     # null — «Цена по запросу»
-    price: int | None = Field(None, ge=0)
+    price: Price | None = None
     # Публикация — это тот же PATCH со сменой статуса, отдельной ручки нет
     status: Literal["draft", "planned", "open", "closed", "hidden"] | None = None
     # Дата без времени; у запланированного курса обязательна
@@ -1390,7 +1451,7 @@ class AdminLessonIn(BaseModel):
     # появится в редакторе, куда фронт уводит сразу после создания
     title: str = Field(max_length=200)
     kind: Literal["video", "text"]
-    time_required_min: int = Field(ge=0, le=600)
+    time_required_min: TimeRequiredMin
 
 
 class AdminLessonPatchIn(BaseModel):
@@ -1404,7 +1465,7 @@ class AdminLessonPatchIn(BaseModel):
     video_url: str | None = Field(None, max_length=500)
     # Длительность вводится руками: по чужой ссылке она ненадёжна
     duration_label: str | None = Field(None, max_length=20)
-    time_required_min: int | None = Field(None, ge=0, le=600)
+    time_required_min: TimeRequiredMin | None = None
     is_hidden: bool | None = None
 
 
@@ -1489,10 +1550,10 @@ class AdminQuizIn(BaseModel):
     # Заготовка: название, время и то, без чего строки в базе не существует.
     # Вопросы появятся в редакторе, куда фронт уводит сразу после создания
     title: str = Field(max_length=200)
-    time_required_min: int = Field(ge=0, le=600)
+    time_required_min: TimeRequiredMin
     # Итоговый в курсе один: заготовка с is_final отбивается так же, как PATCH
     is_final: bool = False
-    pass_score: int = Field(ge=1, le=100)
+    pass_score: PassScore
 
 
 class AdminQuizPatchIn(BaseModel):
@@ -1500,13 +1561,13 @@ class AdminQuizPatchIn(BaseModel):
 
     title: str | None = Field(None, max_length=200)
     is_final: bool | None = None
-    pass_score: int | None = Field(None, ge=1, le=100)
+    pass_score: PassScore | None = None
     # null — таймера нет: переключатель «Таймер» и есть выбор между null и числом
-    time_limit_min: int | None = Field(None, ge=1, le=600)
+    time_limit_min: TimeLimitMin | None = None
     shuffle: bool | None = None
     show_review: bool | None = None
     retakable: bool | None = None
-    time_required_min: int | None = Field(None, ge=0, le=600)
+    time_required_min: TimeRequiredMin | None = None
     is_hidden: bool | None = None
 
 
@@ -1523,7 +1584,7 @@ class QuizQuestionIn(BaseModel):
     type: QuestionType
     text: str = Field(max_length=2000)
     explanation: str | None = Field(None, max_length=2000)
-    points: int = Field(1, ge=1, le=100)
+    points: QuestionPoints = 1
     # Варианты приходят вместе с вопросом: варианта без вопроса не бывает,
     # а двумя запросами в базе оставались бы вопросы без ответов
     options: list[QuizOptionIn]
@@ -1536,7 +1597,7 @@ class QuizQuestionPatchIn(BaseModel):
     text: str | None = Field(None, max_length=2000)
     # null — стереть пояснение
     explanation: str | None = Field(None, max_length=2000)
-    points: int | None = Field(None, ge=1, le=100)
+    points: QuestionPoints | None = None
     is_hidden: bool | None = None
     # Полным списком, заменяют прежние: частичной правки одного варианта нет
     options: list[QuizOptionIn] | None = None
@@ -1585,7 +1646,7 @@ class AdminTaskIn(BaseModel):
 
     # Заготовка: название и требуемое время. Условие появится в редакторе
     title: str = Field(max_length=200)
-    time_required_min: int = Field(ge=0, le=600)
+    time_required_min: TimeRequiredMin
 
 
 class TaskStatementIn(BaseModel):
@@ -1619,8 +1680,8 @@ class AdminTaskPatchIn(BaseModel):
     allowed_ext: list[str] | None = Field(None, max_length=20)
     # Верхнюю границу проверяет сценарий: потолок у загрузки свой, и текст
     # ошибки называет именно его
-    max_size_mb: int | None = Field(None, ge=1)
-    time_required_min: int | None = Field(None, ge=0, le=600)
+    max_size_mb: MaxSizeMb | None = None
+    time_required_min: TimeRequiredMin | None = None
     is_hidden: bool | None = None
 
 

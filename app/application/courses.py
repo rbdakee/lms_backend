@@ -2,6 +2,8 @@
 ровно формы ответов из CONTRACT.md: роутеры их только заворачивают в схемы.
 """
 
+from collections.abc import Iterator
+
 from app.adapters.db.models import Course, Review, User
 from app.adapters.db.repos import (
     CourseRepo,
@@ -11,10 +13,31 @@ from app.adapters.db.repos import (
     ReviewRepo,
     now_utc,
 )
+from app.application.ports import StoragePort
 from app.application.program import build_program, course_progress, with_statuses
+from app.config import Settings
 from app.domain.errors import ForbiddenError, NotFoundError
 from app.domain.kz_time import waiting_days
 from app.domain.program import progress_of
+from app.domain.submission import mime_of
+
+NO_COVER = "Обложка не найдена"
+
+
+def cover_url(course: Course, base_url: str) -> str | None:
+    """Обложка курса наружу — всегда строка-адрес: её рисует и каталог,
+    и карточка «моих курсов», и превью в редакторе. Форма поля от того,
+    что обложку теперь загружают файлом, не меняется.
+
+    Загружена картинка — отдаём адрес публичной раздачи; ключ объекта наружу
+    не уходит, как и у картинок настроек. Не загружена — отдаём то, что лежит
+    в старой колонке `cover`: у курсов, заведённых до сессии 7в, там внешний
+    адрес, вписанный руками. Это переходное чтение, а не вторая равноправная
+    возможность — задать такой адрес через API уже нельзя.
+    """
+    if course.cover_key:
+        return f"{base_url}/courses/{course.id}/cover"
+    return course.cover
 
 
 def _lang_order(versions: list[Course]) -> list[Course]:
@@ -53,6 +76,8 @@ class CoursesService:
         leads: LeadRepo,
         enrollments: EnrollmentRepo,
         progress: ProgressRepo,
+        storage: StoragePort,
+        cfg: Settings,
         preview_course_id: int | None,
     ):
         self.courses = courses
@@ -60,6 +85,10 @@ class CoursesService:
         self.leads = leads
         self.enrollments = enrollments
         self.progress = progress
+        # Хранилище и адрес раздачи нужны обложке: байты лежат в приватном
+        # хранилище, а наружу уходит адрес публичного маршрута
+        self.storage = storage
+        self.cfg = cfg
         # Курс, который админ смотрит «как учитель»: по нему ничего не пишется
         self.preview_course_id = preview_course_id
 
@@ -105,7 +134,7 @@ class CoursesService:
             "lang": course.lang,
             "title": course.title,
             "category_id": course.category_id,
-            "cover": course.cover,
+            "cover": cover_url(course, self.cfg.public_base_url),
             "hours": course.hours,
             "duration_text": course.duration_text,
             "price": course.price,
@@ -115,6 +144,30 @@ class CoursesService:
             "lessons_count": lessons_count.get(course.id, 0),
             "students_count": students_count.get(course.id, 0),
         }
+
+    # -- GET /courses/{id}/cover ----------------------------------------
+
+    def cover(self, course_id: int) -> tuple[str, int, Iterator[bytes]]:
+        """Байты обложки: тип, размер и поток. Курса нет, обложку не загружали,
+        объект из хранилища пропал — для открывшего адрес это один и тот же
+        404, и перебирать номера курсов незачем.
+
+        Статус курса здесь не проверяется, в отличие от страницы курса:
+        ту же картинку показывает превью в редакторе, а редактируют как раз
+        черновик. Наружу от этого открыта картинка, а не содержимое курса.
+        """
+        course = self.courses.by_id(course_id)
+        if course is None or not course.cover_key:
+            raise NotFoundError(NO_COVER)
+        size = self.storage.size(course.cover_key)
+        if size is None:
+            # Ключ у курса есть, объекта нет: для открывшего тот же 404
+            raise NotFoundError(NO_COVER)
+        return (
+            mime_of(course.cover_name or ""),
+            size,
+            self.storage.read(course.cover_key),
+        )
 
     # -- страница курса -------------------------------------------------
 
@@ -250,7 +303,7 @@ class CoursesService:
                     "lang": course.lang,
                     "title": course.title,
                     "category_id": course.category_id,
-                    "cover": course.cover,
+                    "cover": cover_url(course, self.cfg.public_base_url),
                     "hours": course.hours,
                     "price": course.price,
                     "status": course.status,
@@ -269,7 +322,7 @@ class CoursesService:
                     "course": {
                         "id": course.id,
                         "title": course.title,
-                        "cover": course.cover,
+                        "cover": cover_url(course, self.cfg.public_base_url),
                         # Снимок на момент заявки: человеку показывали эту цену
                         "price": lead.price_snapshot,
                     },

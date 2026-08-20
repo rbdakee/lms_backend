@@ -16,10 +16,16 @@
 
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import app
 from tests.conftest import ADMIN_PHONE, PHONE, login, login_admin, user_id
 
 COURSE_TITLE = "Критериальное оценивание в начальной школе"
+
+# Обложка кладётся настоящей загрузкой: у поля `cover` формы входа и выхода
+# разные — объект внутрь, адрес раздачи наружу, — и стык между ними виден
+# только так.
+COVER_PNG = b"\x89PNG\r\n\x1a\n" + b"cover" * 32
 
 # Ссылка в одном из обычных написаний: редактор обязан привести её к
 # каноническому виду, и плеер учителя ждёт уже приведённую.
@@ -71,13 +77,18 @@ def build_course(admin) -> dict:
     assert course["program"] == []
     course_id = course["id"]
 
+    cover = ok(
+        admin.post(
+            "/files", files={"file": ("assessment.png", COVER_PNG, "application/octet-stream")}
+        )
+    )
     course = ok(
         admin.patch(
             f"/admin/courses/{course_id}",
             json={
                 "short": "Как перейти на критерии, не сломав журнал",
                 "full": "Курс для учителей начальной школы.",
-                "cover": "https://cdn.example.kz/covers/assessment_ru.jpg",
+                "cover": {"key": cover["key"], "name": cover["name"]},
                 "price": PRICE,
                 "duration_text": "6 недель",
                 "strict_order": True,
@@ -89,6 +100,8 @@ def build_course(admin) -> dict:
     )
     assert course["strict_order"] is True
     assert course["price"] == PRICE
+    # Наружу обложка уходит адресом публичной раздачи, а не ключом хранилища
+    assert course["cover"] == f"{get_settings().public_base_url}/courses/{course_id}/cover"
 
     module_one = ok(
         admin.post(
@@ -261,7 +274,7 @@ def build_course(admin) -> dict:
     }
 
 
-def test_full_path_from_editor_to_certificate(client, client2, sms, telegram):
+def test_full_path_from_editor_to_certificate(client, client2, sms, telegram, storage):
     teacher, admin = client, client2
 
     # -- 1. Админ собирает и публикует курс ---------------------------------

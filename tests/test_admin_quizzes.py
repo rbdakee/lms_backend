@@ -206,6 +206,7 @@ def test_stub_does_not_close_the_publish_button(client, sms):
     assert checks["empty_quizzes"] == {
         "code": "empty_quizzes",
         "ok": True,
+        "blocking": True,
         "text": "Во всех тестах есть вопросы",
         "items": [],
     }
@@ -226,6 +227,30 @@ def test_stub_validates_fields(client, sms):
     assert field_of({**STUB, "time_required_min": 601}) == "time_required_min"
     assert field_of({**STUB, "pass_score": 0}) == "pass_score"
     assert field_of({**STUB, "pass_score": 101}) == "pass_score"
+
+
+def test_number_out_of_range_is_reported_in_russian(client, sms):
+    """Границы числовых полей отвечают по-русски: английский текст pydantic
+    попадал прямо в подпись под полем в карточке теста и вопроса."""
+    _, module, quiz = make_editable_quiz()
+    login_admin(client, sms)
+
+    def error_of(resp):
+        assert resp.status_code == 422, resp.text
+        return resp.json()["error"]["details"]["fields"][0]
+
+    assert error_of(
+        client.post(f"/admin/modules/{module.id}/quizzes", json={**STUB, "pass_score": 0})
+    ) == {"field": "pass_score", "message": "Проходной балл — от 1 до 100"}
+    assert error_of(
+        client.patch(f"/admin/quizzes/{quiz.id}", json={"time_limit_min": 601})
+    ) == {"field": "time_limit_min", "message": "Таймер теста — от 1 до 600 минут"}
+    assert error_of(
+        client.post(f"/admin/quizzes/{quiz.id}/questions", json={**QUESTION, "points": 0})
+    ) == {"field": "points", "message": "Баллы за вопрос — от 1 до 100"}
+    assert error_of(
+        client.post(f"/admin/modules/{module.id}/quizzes", json={**STUB, "time_required_min": 601})
+    ) == {"field": "time_required_min", "message": "Требуемое время — от 0 до 600 минут"}
 
 
 # -- редактор теста ----------------------------------------------------

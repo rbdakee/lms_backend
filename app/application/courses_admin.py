@@ -11,6 +11,10 @@
 
 from app.adapters.db.models import Course, Lesson, Module, Quiz, Task
 from app.adapters.db.repos import CategoryRepo, CourseAdminRepo
+from app.application.courses import cover_url
+from app.application.files import safe_name
+from app.application.ports import StoragePort
+from app.config import Settings
 from app.domain.content import is_blank_html
 from app.domain.errors import (
     CourseInUseError,
@@ -19,8 +23,13 @@ from app.domain.errors import (
     NotFoundError,
     VersionExistsError,
 )
+from app.domain.image import HEAD_SIZE, image_mime
 from app.domain.plural import plural
 from app.domain.program import LESSON_KINDS, item_key
+
+# Что берёт обложка — то же, что логотип платформы: картинка любого формата,
+# включая svg. Раздаётся она с теми же заголовками безопасности.
+NOT_AN_IMAGE = "Нужна картинка: PNG, JPEG, GIF, WEBP или SVG"
 
 # Статусы, в которых курс показывают людям: их смена проверяет минимум,
 # без которого карточку нечем нарисовать.
@@ -41,8 +50,9 @@ PLAIN_FIELDS = (
     "cert_require_final_quiz",
 )
 
-# Поля, у которых null — значение: «цена по запросу», «обложки нет», «даты нет».
-NULLABLE_FIELDS = ("cover", "duration_text", "price", "starts_at")
+# Поля, у которых null — значение: «цена по запросу», «даты нет». Обложки
+# здесь нет: она приходит объектом и ложится в две колонки — см. patch.
+NULLABLE_FIELDS = ("duration_text", "price", "starts_at")
 
 # Поля, которые переезжают в языковую версию и в дубликат. Цена, дата старта
 # и статус — не переезжают: цену на казахскую версию ставят отдельно, и молча
@@ -51,6 +61,10 @@ COPIED_FIELDS = (
     "title",
     "short",
     "full",
+    "cover_key",
+    "cover_name",
+    # Старый адрес-ссылка переезжает вместе с остальным: у копии курса 13
+    # обложка обязана остаться той же самой
     "cover",
     "category_id",
     "hours",
@@ -129,70 +143,105 @@ def _version_conflict(lang: str, existing: Course) -> VersionExistsError:
 
 def _readiness(course: Course, program: list[dict]) -> dict:
     """Чек-лист вкладки «Публикация»: `code` — для ветвления, `text` — готовая
-    строка, `items` — названия, которых не хватает."""
-    items = [item for module in program for item in module["items"] if not item["is_hidden"]]
+    строка, `items` — названия, которых не хватает, `blocking` — закрывает ли
+    невыполненный пункт кнопку «Открыть набор»."""
+    all_items = [item for module in program for item in module["items"]]
+    items = [item for item in all_items if not item["is_hidden"]]
+    hidden = len(all_items) - len(items)
     empty_lessons = [
         item["title"] for item in items if item["kind"] in LESSON_KINDS and not item["is_ready"]
     ]
     empty_quizzes = [
         item["title"] for item in items if item["kind"] == "quiz" and not item["is_ready"]
     ]
+    # Пока видимых элементов нет, проверять было нечего, и «нарушений не
+    # нашлось» читается как «проверено и хорошо» — это враньё: заготовка
+    # элемента заводится скрытой, и у собранного курса такое бывает.
+    if empty_lessons:
+        lessons_text = (
+            f"У {len(empty_lessons)} "
+            f"{plural(len(empty_lessons), 'урока', 'уроков', 'уроков')} нет содержимого"
+        )
+    elif items:
+        lessons_text = "Уроков без содержимого нет"
+    else:
+        lessons_text = "Уроки не проверялись — в программе нет видимых элементов"
+    if empty_quizzes:
+        quizzes_text = (
+            f"В {len(empty_quizzes)} "
+            f"{plural(len(empty_quizzes), 'тесте', 'тестах', 'тестах')} нет вопросов"
+        )
+    elif items:
+        quizzes_text = "Во всех тестах есть вопросы"
+    else:
+        quizzes_text = "Тесты не проверялись — в программе нет видимых элементов"
+    if items:
+        program_text = (
+            f"В программе {len(items)} "
+            f"{plural(len(items), 'элемент', 'элемента', 'элементов')}"
+        )
+    elif hidden:
+        # Шесть элементов на соседней вкладке и «нет ни одного» здесь — админ
+        # решит, что программа потерялась, а она вся скрыта.
+        program_text = f"В программе нет ни одного видимого элемента: скрыто {hidden}"
+    else:
+        program_text = "В программе нет ни одного элемента"
+    # Обложка есть — загруженная картинка или доставшийся от прежних времён
+    # адрес-ссылка: в каталоге и та и другая рисуются одинаково
+    has_cover = bool(course.cover_key or course.cover)
     checks = [
         {
             "code": "cover",
-            "ok": bool(course.cover),
-            "text": "Обложка загружена" if course.cover else "Обложка не загружена",
+            "ok": has_cover,
+            # Единственный пункт, который набор не держит: без картинки курс
+            # в каталоге выглядит бедно, но людей в него пускать это не мешает
+            "blocking": False,
+            "text": (
+                "Обложка загружена"
+                if has_cover
+                else "Обложки нет — в каталоге курс будет без картинки"
+            ),
             "items": [],
         },
         {
             "code": "hours",
             "ok": course.hours >= 1,
+            "blocking": True,
             "text": "Объём курса указан" if course.hours >= 1 else "Объём курса не указан",
             "items": [],
         },
-        {**_starts_at_check(course), "items": []},
+        {**_starts_at_check(course), "blocking": True, "items": []},
         {
             "code": "empty_lessons",
             "ok": not empty_lessons,
-            "text": (
-                f"У {len(empty_lessons)} "
-                f"{plural(len(empty_lessons), 'урока', 'уроков', 'уроков')} "
-                "нет содержимого"
-                if empty_lessons
-                else "Уроков без содержимого нет"
-            ),
+            "blocking": True,
+            "text": lessons_text,
             "items": empty_lessons,
         },
         {
             "code": "empty_quizzes",
             "ok": not empty_quizzes,
-            "text": (
-                f"В {len(empty_quizzes)} "
-                f"{plural(len(empty_quizzes), 'тесте', 'тестах', 'тестах')} нет вопросов"
-                if empty_quizzes
-                else "Во всех тестах есть вопросы"
-            ),
+            "blocking": True,
+            "text": quizzes_text,
             "items": empty_quizzes,
         },
         {
             "code": "program",
             "ok": bool(items),
-            "text": (
-                f"В программе {len(items)} "
-                f"{plural(len(items), 'элемент', 'элемента', 'элементов')}"
-                if items
-                else "В программе нет ни одного элемента"
-            ),
+            "blocking": True,
+            "text": program_text,
             "items": [],
         },
     ]
     # Два флага — две кнопки вкладки «Публикация», и требования у них разные.
-    # Открыть набор можно только готовому курсу; запланированный публикуют
-    # пустым, ради того он и нужен — собирать заявки до того, как курс готов
-    # (DESIGN_BRIEF, раздел 9). Поэтому у второго условие одно: дата старта,
-    # именно она рисует бейдж «Старт 1 сентября».
+    # Открыть набор можно только готовому курсу, но считается это по одним
+    # блокирующим пунктам: неблокирующий остаётся предупреждением в чек-листе
+    # и кнопку не держит. Запланированный публикуют пустым, ради того он
+    # и нужен — собирать заявки до того, как курс готов (DESIGN_BRIEF,
+    # раздел 9). Поэтому у второго условие одно: дата старта, именно она
+    # рисует бейдж «Старт 1 сентября».
     return {
-        "can_open": all(check["ok"] for check in checks),
+        "can_open": all(check["ok"] for check in checks if check["blocking"]),
         "can_plan": course.starts_at is not None,
         "items": checks,
     }
@@ -241,11 +290,21 @@ def _starts_at_check(course: Course) -> dict:
 
 
 class CoursesAdminService:
-    def __init__(self, courses: CourseAdminRepo, categories: CategoryRepo):
+    def __init__(
+        self,
+        courses: CourseAdminRepo,
+        categories: CategoryRepo,
+        storage: StoragePort,
+        cfg: Settings,
+    ):
         self.courses = courses
         # Категории с сессии 7б живут в таблице: справочник правит админ,
         # и сверять category_id больше не с чем, кроме неё
         self.categories = categories
+        # Хранилище нужно обложке: что объект есть и что это картинка, сервер
+        # берёт у него, а не у браузера
+        self.storage = storage
+        self.cfg = cfg
 
     # -- GET /admin/courses ---------------------------------------------
 
@@ -278,7 +337,7 @@ class CoursesAdminService:
                     "group_id": course.group_id,
                     "lang": course.lang,
                     "title": course.title,
-                    "cover": course.cover,
+                    "cover": cover_url(course, self.cfg.public_base_url),
                     "category_id": course.category_id,
                     "hours": course.hours,
                     "price": course.price,
@@ -329,6 +388,13 @@ class CoursesAdminService:
         for field in NULLABLE_FIELDS:
             if field in fields:
                 setattr(course, field, fields[field])
+        # null — снять обложку; в остальном это key и name из ответа POST /files
+        if "cover" in fields:
+            course.cover_key, course.cover_name = self._cover(fields["cover"])
+            # Старый адрес-ссылка гаснет вместе с этим: иначе «снять обложку»
+            # у курса, заведённого до сессии 7в, не убирало бы ничего, а новая
+            # картинка ждала бы своей очереди за прежней ссылкой
+            course.cover = None
         # Проверяется то, что получилось, а не то, что прислали: публикация
         # одним запросом вместе с недостающим полем проходит
         if course.status in PUBLIC_STATUSES:
@@ -449,6 +515,35 @@ class CoursesAdminService:
 
     # -- проверки ---------------------------------------------------------
 
+    def _cover(self, value: dict | None) -> tuple[str | None, str | None]:
+        """Ключ объекта в хранилище и имя файла; null убирает обложку.
+
+        Проверок две, и порядок у них тот же, что у картинок настроек: сперва
+        объект в хранилище есть (иначе админ увидит пустой блок вместо только
+        что загруженного файла), и только потом — что это картинка. Формат
+        опознаётся по байтам объекта, а не по присланному имени: имя сочиняет
+        клиент, и договор, названный «обложка.jpg», получил бы публичный адрес
+        раздачи.
+
+        Размеры в пикселях не проверяются: «16:9, минимум 640×360» из брифа —
+        подсказка человеку на экране. Измерить их нечем, кроме библиотеки
+        картинок, а её здесь нет.
+
+        Имя хранится рядом с ключом: ключи POST /files случайные нарочно,
+        и админу досталось бы «9f3c1a7e4b2d8c05.jpg» вместо «Обложка.jpg».
+        Байты при снятии обложки остаются: порт storage умеет писать, читать
+        и мерить, но не удалять.
+        """
+        if value is None:
+            return None, None
+        if self.storage.size(value["key"]) is None:
+            raise NotFoundError("Загруженный файл не найден — загрузите его заново")
+        # Начала объекта хватает на любую сигнатуру: дальше смотреть нечего
+        head = next(iter(self.storage.read(value["key"])), b"")[:HEAD_SIZE]
+        if not (image_mime(head) or "").startswith("image/"):
+            raise FieldError("cover", NOT_AN_IMAGE)
+        return value["key"], safe_name(value["name"])
+
     def _check_category(self, category_id: int) -> None:
         """Категория берётся из таблицы, а не из константы: справочник правит
         админ, и удалить категорию, на которой висит курс, ему уже не дадут."""
@@ -511,7 +606,7 @@ class CoursesAdminService:
             "title": course.title,
             "short": course.short,
             "full": course.full,
-            "cover": course.cover,
+            "cover": cover_url(course, self.cfg.public_base_url),
             "category_id": course.category_id,
             "hours": course.hours,
             "duration_text": course.duration_text,

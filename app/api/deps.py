@@ -325,16 +325,21 @@ def get_users_service(db: Annotated[DbSession, Depends(get_db)]) -> UsersService
 
 def get_courses_service(
     db: Annotated[DbSession, Depends(get_db)],
+    storage: Annotated[StoragePort, Depends(get_storage)],
     enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
     preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
     repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
 ) -> CoursesService:
+    # Хранилище нужно раздаче обложки: байты лежат в приватном хранилище,
+    # а наружу от курса уходит адрес публичного маршрута
     return CoursesService(
         courses=repos.courses,
         reviews=ReviewRepo(db),
         leads=LeadRepo(db),
         enrollments=enrollments,
         progress=ProgressRepo(db),
+        storage=storage,
+        cfg=get_settings(),
         preview_course_id=preview_course_id,
     )
 
@@ -487,10 +492,17 @@ def get_leads_service(
 
 def get_courses_admin_service(
     db: Annotated[DbSession, Depends(get_db)],
+    storage: Annotated[StoragePort, Depends(get_storage)],
 ) -> CoursesAdminService:
     # Настоящий репозиторий, а не подменённый предпросмотром: редактор
-    # показывает курс как он есть, в любом статусе
-    return CoursesAdminService(courses=CourseAdminRepo(db), categories=CategoryRepo(db))
+    # показывает курс как он есть, в любом статусе. Хранилище нужно обложке:
+    # что объект есть и что это картинка, сервер берёт у него
+    return CoursesAdminService(
+        courses=CourseAdminRepo(db),
+        categories=CategoryRepo(db),
+        storage=storage,
+        cfg=get_settings(),
+    )
 
 
 def get_lessons_admin_service(

@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from app.adapters.db.models import User
 from app.api import deps
@@ -19,6 +20,18 @@ from app.application.leads import LeadsService
 
 router = APIRouter(prefix="/courses")
 
+# Пять минут, а не сутки, как у брендинга: адрес обложки у курса один и тот же,
+# и заменивший картинку админ смотрит на результат тут же, в редакторе.
+COVER_CACHE = "public, max-age=300"
+
+# Обложкой кладут и svg, а внутри svg бывает <script>. Открытый прямым адресом,
+# он выполнился бы на домене API — том самом, чью куку сессии делят оба фронта.
+# В <img> картинка от этих заголовков не страдает.
+COVER_SECURITY = {
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
+}
+
 
 @router.get("")
 def catalog(
@@ -35,6 +48,25 @@ def course_page(
     svc: Annotated[CoursesService, Depends(deps.get_courses_service)],
 ) -> CoursePageOut:
     return CoursePageOut(**svc.course_page(course_id, user))
+
+
+@router.get("/{course_id}/cover")
+def course_cover(
+    course_id: int,
+    svc: Annotated[CoursesService, Depends(deps.get_courses_service)],
+) -> StreamingResponse:
+    # Без входа: обложка стоит в каталоге, который открывают все.
+    # content-disposition не ставим — картинка стоит в <img>, а не скачивается
+    mime, size, chunks = svc.cover(course_id)
+    return StreamingResponse(
+        chunks,
+        media_type=mime,
+        headers={
+            "content-length": str(size),
+            "cache-control": COVER_CACHE,
+            **COVER_SECURITY,
+        },
+    )
 
 
 @router.get("/{course_id}/program")

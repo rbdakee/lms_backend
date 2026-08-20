@@ -196,6 +196,7 @@ def test_stub_does_not_close_the_publish_button(client, sms):
     assert checks["empty_lessons"] == {
         "code": "empty_lessons",
         "ok": True,
+        "blocking": True,
         "text": "Уроков без содержимого нет",
         "items": [],
     }
@@ -220,6 +221,23 @@ def test_stub_validates_fields(client, sms):
     assert field_of({**STUB, "time_required_min": 601}) == "time_required_min"
     assert field_of({**STUB, "time_required_min": -1}) == "time_required_min"
     assert field_of({**STUB, "kind": "quiz"}) == "kind"
+
+
+def test_number_out_of_range_is_reported_in_russian(client, sms):
+    """Требуемое время звучит одинаково у урока, теста и задания: ограничение
+    у них одно и то же."""
+    _, module, _ = make_editable_course()
+    login_admin(client, sms)
+
+    resp = client.post(
+        f"/admin/modules/{module.id}/lessons", json={**STUB, "time_required_min": 601}
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0] == {
+        "field": "time_required_min",
+        "message": "Требуемое время — от 0 до 600 минут",
+    }
 
 
 # -- редактор урока ----------------------------------------------------
