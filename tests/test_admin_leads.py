@@ -140,6 +140,27 @@ def test_grant_enrollment(client, client2, sms):
     assert client.get("/me/courses").json()["leads"] == []
 
 
+def test_admin_patch_cannot_move_a_granted_lead_elsewhere(client, client2, sms):
+    """Доступ выдан — enrollment уже существует, откатывать заявку в другой
+    статус нельзя: повторная выдача на неё же ответила бы «уже открыт»,
+    а курс у учителя остался бы, даже если статус заявки соврал бы «новая»."""
+    course = make_course(title="Курс")
+    teacher_id, lead = _teacher_with_lead(client, sms, course)
+
+    login_admin(client2, sms)
+    client2.post(
+        "/admin/enrollments", json={"user_id": teacher_id, "course_id": course.id, "paid": True}
+    )
+
+    resp = client2.patch(f"/admin/leads/{lead['id']}", json={"status": "new"})
+    assert resp.status_code == 422
+    error = resp.json()["error"]
+    assert error["code"] == "validation_error"
+    assert "уже выдан" in error["message"]
+    # Статус остался granted
+    assert client2.get("/admin/leads").json()["items"][0]["status"] == "granted"
+
+
 def test_grant_unpaid_note_goes_to_lead(client, client2, sms):
     course = make_course()
     teacher_id, lead = _teacher_with_lead(client, sms, course)
