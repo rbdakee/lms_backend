@@ -4,6 +4,12 @@ import os
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://lms:lms@localhost:5445/lms_test"
 )
+# Локальный `.env` разработчика тестам не указ: с заведённой парой
+# AUTH_BOOTSTRAP_* вход получает фиксированный код, и проверки обычного входа
+# начинают падать на чужой машине. Переменные окружения главнее `.env`,
+# поэтому обе половины гасятся здесь.
+os.environ["AUTH_BOOTSTRAP_PHONE"] = ""
+os.environ["AUTH_BOOTSTRAP_CODE"] = ""
 
 import itertools
 import threading
