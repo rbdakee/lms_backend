@@ -9,15 +9,19 @@
 локально он нарочно `127.0.0.1`, а браузер ходит на `localhost`.
 """
 
-import pytest
+import logging
 
 from app.api.deps import ADMIN_COOKIE_NAME, COOKIE_NAME
 from app.config import Settings, check_admin_origins, get_settings
 from tests.conftest import ADMIN_PHONE, PHONE, age_codes, make_admin, request_code
 
 CFG = get_settings()
-ADMIN_ORIGIN = CFG.admin_origins[0]
-WEB_ORIGIN = next(o for o in CFG.cors_origins if o not in CFG.admin_origins)
+# Локальный `.env` источники задаёт, а голые умолчания — нет: без настройки
+# кука общая, и тогда проверять нечего (см. `check_admin_origins`)
+ADMIN_ORIGIN = CFG.admin_origins[0] if CFG.admin_origins else "http://localhost:3001"
+WEB_ORIGIN = next(
+    (o for o in CFG.cors_origins if o not in CFG.admin_origins), "http://localhost:3000"
+)
 
 
 def login_from(client, sms, origin, phone):
@@ -82,25 +86,27 @@ def test_request_without_origin_stays_on_the_teacher_cookie(client, sms):
     assert COOKIE_NAME in client.cookies
 
 
-def test_admin_origin_outside_cors_stops_the_service_at_start():
-    """Источник, которому не разрешён CORS, до API не дойдёт вовсе — значит
-    разделение молча не сработает, а выяснится это только руками."""
-    cfg = Settings(
-        cors_origins=["https://lms.kz"],
-        admin_origins=["https://admin.lms.kz"],
-    )
-    with pytest.raises(RuntimeError) as failed:
+def test_admin_origin_outside_cors_warns_but_lets_the_service_start(caplog):
+    """Источник, которому не разрешён CORS, до API не дойдёт вовсе — кука
+    останется общей. Сервис при этом поднимается: цена ошибки — поведение,
+    с которым площадка жила до разделения, и гасить из-за неё API дороже."""
+    cfg = Settings(cors_origins=["https://lms.kz"], admin_origins=["https://admin.lms.kz"])
+    with caplog.at_level(logging.WARNING):
         check_admin_origins(cfg)
-    assert "ADMIN_ORIGINS" in str(failed.value)
+    assert "ADMIN_ORIGINS" in caplog.text
+    assert "https://admin.lms.kz" in caplog.text
 
 
-def test_empty_admin_origins_stops_prod_but_not_dev():
-    """Пустой список — это общая кука обратно. В бою так молчать нельзя."""
-    prod = Settings(env="prod", cors_origins=["https://lms.kz"], admin_origins=[])
-    with pytest.raises(RuntimeError):
-        check_admin_origins(prod)
-    check_admin_origins(Settings(env="dev", cors_origins=["https://lms.kz"], admin_origins=[]))
+def test_missing_admin_origins_warns_loudly(caplog):
+    """Забытая переменная 21.08.2026 уронила прод: сервис уходил в цикл
+    перезапуска. Теперь она говорит в лог, а не гасит API."""
+    cfg = Settings(env="prod", cors_origins=["https://lms.kz"], admin_origins=[])
+    with caplog.at_level(logging.WARNING):
+        check_admin_origins(cfg)
+    assert "ADMIN_ORIGINS" in caplog.text
 
 
-def test_the_shipped_defaults_pass_the_check():
+def test_the_shipped_defaults_do_not_raise():
+    """Голые умолчания — рабочая конфигурация: проверка не мешает старту."""
+    check_admin_origins(Settings())
     check_admin_origins(get_settings())
