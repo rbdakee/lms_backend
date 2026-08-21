@@ -74,7 +74,8 @@ PS Cloud (бакет `lms-main`) — площадка в РК, что и тре�
 | `ENV` | `prod` | |
 | `DATABASE_URL` | своя строка, хост `db` | пароль в окружении, не в репозитории |
 | `CORS_ORIGINS` | `["https://domain.kz","https://admin.domain.kz"]` | два фронта, два источника |
-| `COOKIE_DOMAIN` | `.domain.kz` | одна кука на оба фронта |
+| `ADMIN_ORIGINS` | `["https://admin.domain.kz"]` | какая из сторон админка: у неё своя кука сессии. Пустое значение сервис не поднимет |
+| `COOKIE_DOMAIN` | `.domain.kz` | общий домен; имена кук у приложений разные — `sid` и `sid_admin` |
 | `COOKIE_SECURE` | `true` | |
 | `TRUST_REAL_IP` | `true` | адрес клиента из `X-Real-IP` — см. ниже |
 | `API_PORT` | свободный порт | сервис слушает его на `127.0.0.1`, в него ходит прокси |

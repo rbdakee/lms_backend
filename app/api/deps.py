@@ -74,7 +74,24 @@ from app.application.users import UsersService
 from app.config import Settings, get_settings
 from app.domain.errors import BlockedError, ForbiddenError, UnauthorizedError
 
+# Имя куки сессии зависит от приложения: у кабинета учителя и у админки
+# они разные, и на общем родительском домене два входа живут одновременно —
+# админом с одного номера, учителем с другого. Какое приложение спрашивает,
+# видно по `Origin`: он приходит от браузера на каждый запрос фронта
+# (все они кросс-доменные) и уже проверен CORS.
 COOKIE_NAME = "sid"
+ADMIN_COOKIE_NAME = "sid_admin"
+
+
+def cookie_name(request: Request) -> str:
+    """Имя куки для этого запроса. Без `Origin` — кабинет учителя: так ходят
+    curl и тесты, и общее имя для них остаётся прежним."""
+    origin = request.headers.get("origin")
+    if origin and origin in get_settings().admin_origins:
+        return ADMIN_COOKIE_NAME
+    return COOKIE_NAME
+
+
 # last_seen_at пишем не чаще раза в 5 минут — не превращать каждый GET в UPDATE
 TOUCH_EVERY = timedelta(minutes=5)
 
@@ -188,7 +205,7 @@ def get_current_session_optional(
     """Сессия по куке или её отсутствие. Поиск живёт здесь, а не в строгой
     версии: сессию спрашивают и публичные экраны, и признак предпросмотра,
     и второй такой же запрос в базу на каждый вызов был бы лишним."""
-    token = request.cookies.get(COOKIE_NAME)
+    token = request.cookies.get(cookie_name(request))
     if not token:
         return None
     session = SessionRepo(db).by_token_hash(hash_token(token))
@@ -654,9 +671,9 @@ def get_reports_service(
     )
 
 
-def set_session_cookie(response: Response, token: str, cfg: Settings) -> None:
+def set_session_cookie(request: Request, response: Response, token: str, cfg: Settings) -> None:
     response.set_cookie(
-        COOKIE_NAME,
+        cookie_name(request),
         token,
         max_age=cfg.session_ttl_days * 86400,
         httponly=True,
@@ -667,9 +684,9 @@ def set_session_cookie(response: Response, token: str, cfg: Settings) -> None:
     )
 
 
-def clear_session_cookie(response: Response, cfg: Settings) -> None:
+def clear_session_cookie(request: Request, response: Response, cfg: Settings) -> None:
     response.delete_cookie(
-        COOKIE_NAME,
+        cookie_name(request),
         httponly=True,
         samesite="lax",
         secure=cfg.cookie_secure,

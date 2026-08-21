@@ -40,7 +40,7 @@ def verify_code(
         request.headers.get("user-agent", ""),
         deps.get_client_ip(request),
     )
-    deps.set_session_cookie(response, token, get_settings())
+    deps.set_session_cookie(request, response, token, get_settings())
     return UserOut.from_user(user)
 
 
@@ -51,10 +51,10 @@ def logout(
     svc: Annotated[AuthService, Depends(deps.get_auth_service)],
 ) -> None:
     # Идемпотентно: выход без живой сессии — тоже успех
-    token = request.cookies.get(deps.COOKIE_NAME)
+    token = request.cookies.get(deps.cookie_name(request))
     if token:
         svc.logout(token)
-    deps.clear_session_cookie(response, get_settings())
+    deps.clear_session_cookie(request, response, get_settings())
 
 
 @router.post("/logout_others")

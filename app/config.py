@@ -14,7 +14,16 @@ class Settings(BaseSettings):
     # Два фронта — два источника (BACKEND_NOTES, раздел 1).
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
 
-    # В бою кука ставится на родительский домен и покрывает web и admin.
+    # Какие из них — админка. Имя куки сессии зависит от приложения, а само
+    # приложение узнаётся по `Origin` запроса: только он приходит от браузера
+    # и совпадает с тем, что уже разрешено в CORS. `ADMIN_BASE_URL` для этого
+    # не годится — локально он нарочно `127.0.0.1` (Bot API отвергает кнопки
+    # на localhost), а браузер ходит на localhost, и разделение молча
+    # не срабатывало бы.
+    admin_origins: list[str] = ["http://localhost:3001"]
+
+    # В бою кука ставится на родительский домен: имена у приложений разные,
+    # и на общем домене они не мешают друг другу.
     cookie_domain: str | None = None
     cookie_secure: bool = False
     session_ttl_days: int = 180
@@ -196,6 +205,28 @@ def check_providers(cfg: Settings) -> None:
                 " материалы уроков и сданные работы уходили бы в никуда"
             )
     check_bootstrap_login(cfg)
+    check_admin_origins(cfg)
+
+
+def check_admin_origins(cfg: Settings) -> None:
+    """Источники админки проверяются при старте: ошибка здесь не отказ, а тихое
+    возвращение общей сессии — админ снова выбивал бы учителя из кабинета,
+    и заметить это можно только руками.
+
+    Пустой список в бою — та же тишина: обе стороны получили бы одну куку.
+    Локально пустой допустим: разработку с одним приложением ломать незачем.
+    """
+    unknown = [o for o in cfg.admin_origins if o not in cfg.cors_origins]
+    if unknown:
+        raise RuntimeError(
+            f"ADMIN_ORIGINS вне CORS_ORIGINS: {', '.join(unknown)} —"
+            " браузер до API с такого источника не дойдёт вовсе"
+        )
+    if cfg.env == "prod" and not cfg.admin_origins:
+        raise RuntimeError(
+            "ADMIN_ORIGINS пуст: админка получит ту же куку, что и кабинет учителя,"
+            " и вход в одну сторону будет закрывать сессию в другой"
+        )
 
 
 def check_bootstrap_login(cfg: Settings) -> None:
