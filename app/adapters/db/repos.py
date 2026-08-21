@@ -103,6 +103,15 @@ class UserRepo:
         self.db.flush()
         return user
 
+    def list_admins(self) -> list[User]:
+        """Все админы, свежие сверху. Без пагинации: их единицы, и экран
+        настроек её не рисует — как у категорий."""
+        return list(
+            self.db.scalars(
+                select(User).where(User.is_admin.is_(True)).order_by(User.id.desc())
+            )
+        )
+
     def teachers_count(self) -> int:
         """Учителя — все, у кого не стоит is_admin: заблокированный учителем
         быть не перестал (CONTRACT, сессия 6)."""

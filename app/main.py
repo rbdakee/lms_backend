@@ -12,6 +12,7 @@ from app.adapters.telegram.poller import run_poller
 from app.api.errors import register_error_handlers
 from app.api.routers import (
     admin,
+    admin_admins,
     admin_categories,
     admin_courses,
     admin_lessons,
@@ -112,6 +113,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_teachers.router)
     app.include_router(admin_reviews.router)
     app.include_router(admin_categories.router)
+    app.include_router(admin_admins.router)
     app.include_router(settings.admin_router)
     app.include_router(telegram.admin_router)
     app.include_router(questions.admin_router)

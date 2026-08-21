@@ -43,6 +43,7 @@ from app.adapters.storage.s3_storage import S3Storage, s3_client
 from app.adapters.telegram.bot import TelegramBot
 from app.adapters.telegram.log_telegram import LogTelegram
 from app.application.admin_notify import AdminNotifier
+from app.application.admins import AdminsService
 from app.application.auth import AuthService, hash_token
 from app.application.categories import CategoriesService
 from app.application.certificate_pdf import CertificatePdfService
@@ -599,6 +600,10 @@ def get_teachers_admin_service(
 
 def get_reviews_admin_service(db: Annotated[DbSession, Depends(get_db)]) -> ReviewsAdminService:
     return ReviewsAdminService(reviews=ReviewRepo(db))
+
+
+def get_admins_service(db: Annotated[DbSession, Depends(get_db)]) -> AdminsService:
+    return AdminsService(users=UserRepo(db))
 
 
 def get_categories_service(db: Annotated[DbSession, Depends(get_db)]) -> CategoriesService:

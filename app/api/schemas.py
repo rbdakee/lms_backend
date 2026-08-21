@@ -1905,6 +1905,32 @@ class ReviewReplyIn(BaseModel):
 # -- админка: категории курсов -----------------------------------------
 
 
+class AdminAdminOut(BaseModel):
+    """Строка списка администраторов в настройках. ФИО приходит пустым, пока
+    человек не заполнил профиль сам: добавляют по одному телефону."""
+
+    id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+    phone: str
+    # Это вы: в списке из нескольких номеров себя видно сразу
+    is_current: bool
+    created_at: datetime
+
+
+class AdminAdminsOut(BaseModel):
+    # Без пагинации: админов единицы
+    items: list[AdminAdminOut]
+
+
+class AdminAdminIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Единственное поле: ФИО человек пишет себе сам в профиле
+    phone: str = Field(max_length=20)
+
+
 class AdminCategoryOut(BaseModel):
     id: int
     title: str
