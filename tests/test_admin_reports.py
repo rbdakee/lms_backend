@@ -5,6 +5,7 @@ from app.adapters.db.repos import now_utc
 from tests.conftest import (
     login,
     login_admin,
+    make_admin,
     make_certificate,
     make_course,
     make_enrollment,
@@ -250,6 +251,48 @@ def test_summary_counts_and_averages(client, sms):
         "certificates": 1,
         "avg_days_to_complete": 6,
     }
+
+
+def test_admin_is_a_ghost_in_the_report(client, sms):
+    """Админ проходит курс наравне с учителями, но ни в одно число отчёта
+    не входит: в списке учителей и в счётчике дашборда его нет, и отчёт,
+    считающий его наравне со всеми, расходился бы с ними (владелец,
+    21.08.2026)."""
+    login_admin(client, sms)
+    course, lesson_one, lesson_two, task, quiz, final = report_course()
+    questions = two_questions(final)
+
+    person = teacher(1)
+    make_enrollment(person.id, course.id)
+    make_progress(person.id, lesson_one.id)
+
+    # Тот же курс целиком проходит второй админ — с сертификатом и сданным
+    # итоговым тестом, то есть по всем показателям сразу
+    ghost = teacher(2)
+    make_admin(ghost.phone)
+    make_enrollment(ghost.id, course.id, granted_at=days_ago(10), completed_at=days_ago(4))
+    make_progress(ghost.id, lesson_one.id)
+    make_progress(ghost.id, lesson_two.id)
+    make_submission(ghost.id, task.id, status="accepted")
+    attempt(ghost.id, quiz, two_questions(quiz), score=2)
+    attempt(ghost.id, final, questions, score=2)
+    make_certificate(ghost.id, course.id)
+
+    body = client.get(f"/admin/reports/{course.id}").json()
+
+    assert body["summary"] == {
+        "granted": 1,
+        "started": 1,
+        "completed": 0,
+        "avg_progress_percent": 20,
+        "avg_final_score": None,
+        "certificates": 0,
+        "avg_days_to_complete": None,
+    }
+    # Воронка считает только учителя: пройденное админом в ней не отражается
+    assert [item["reached"] for item in body["funnel"]] == [1, 0, 0, 0, 0]
+    assert body["participants"]["total"] == 1
+    assert list(by_user(body)) == [person.id]
 
 
 def test_revoked_certificate_is_not_counted(client, sms):

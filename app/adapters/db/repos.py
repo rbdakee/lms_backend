@@ -743,6 +743,7 @@ class AttemptRepo(CourseVisibility):
                     QuizAttempt.quiz_id == quiz_id,
                     QuizAttempt.finished_at.is_not(None),
                     QuizAttempt.is_counted.is_(True),
+                    not_admin(QuizAttempt.user_id),
                 )
             )
         )
@@ -1083,8 +1084,9 @@ class CertificateRepo:
     def active_count(self, course_id: int | None = None) -> int:
         """Действующие сертификаты: без course_id — по всей платформе (справочное
         число дашборда), с ним — по версии курса (сводка отчёта). Отозванные
-        не считаются ни там, ни там (CONTRACT, сессия 6)."""
-        conds = [Certificate.revoked_at.is_(None)]
+        не считаются ни там, ни там (CONTRACT, сессия 6), документ админа —
+        тоже: в показателях его нет нигде (`not_admin`)."""
+        conds = [Certificate.revoked_at.is_(None), not_admin(Certificate.user_id)]
         if course_id is not None:
             conds.append(Certificate.course_id == course_id)
         return (
@@ -1217,7 +1219,7 @@ class ProgressRepo:
                     Enrollment.revoked_at.is_(None),
                 ),
             )
-            .where(Module.course_id == course_id)
+            .where(Module.course_id == course_id, not_admin(LessonProgress.user_id))
         )
         quizzes = (
             select(
@@ -1242,6 +1244,7 @@ class ProgressRepo:
                 QuizAttempt.finished_at.is_not(None),
                 QuizAttempt.is_counted.is_(True),
                 QuizAttempt.passed.is_(True),
+                not_admin(QuizAttempt.user_id),
             )
         )
         tasks = (
@@ -1265,6 +1268,7 @@ class ProgressRepo:
             .where(
                 Module.course_id == course_id,
                 Submission.status == SUBMISSION_ACCEPTED,
+                not_admin(Submission.user_id),
             )
         )
         return union(lessons, quizzes, tasks).subquery()
@@ -1415,6 +1419,22 @@ class ReviewRepo:
         return review
 
 
+def not_admin(user_id: ColumnElement) -> ColumnElement[bool]:
+    """«Этот участник — не админ». Условие статистики, а не прав доступа.
+
+    Админ проходит курсы наравне с учителями — доступ ему выдают той же
+    кнопкой, — но ни в один показатель он не входит: в списке учителей его
+    нет и в счётчике дашборда тоже, а отчёт по курсу считал бы его наравне
+    со всеми, и два числа на двух экранах расходились бы (владелец,
+    21.08.2026). Поэтому админ в статистике — призрак: его прогресс, попытки
+    и сертификат не видит ни сводка, ни воронка, ни таблица участников.
+
+    Подзапросом, а не join: у трёх подзапросов `_course_done_rows` своя
+    таблица прогресса, и лишний join в каждом читался бы хуже одного условия.
+    """
+    return user_id.in_(select(User.id).where(User.is_admin.is_(False)))
+
+
 def name_or_phone_filter(q: str):
     """Поиск по ФИО и телефону. Цифры запроса нормализуются к хранимому
     виду: «8 707 123…» находит +7707123…
@@ -1554,7 +1574,11 @@ class EnrollmentRepo:
             self.db.scalar(
                 select(func.count())
                 .select_from(Enrollment)
-                .where(Enrollment.course_id == course_id, Enrollment.revoked_at.is_(None))
+                .where(
+                    Enrollment.course_id == course_id,
+                    Enrollment.revoked_at.is_(None),
+                    not_admin(Enrollment.user_id),
+                )
             )
             or 0
         )
@@ -1569,6 +1593,7 @@ class EnrollmentRepo:
                 Enrollment.course_id == course_id,
                 Enrollment.revoked_at.is_(None),
                 Enrollment.completed_at.is_not(None),
+                not_admin(Enrollment.user_id),
             )
         )
         return [(granted_at, completed_at) for granted_at, completed_at in rows]
@@ -1581,7 +1606,11 @@ class EnrollmentRepo:
 
         Поиск только по ФИО — телефона в отчёте нет (CONTRACT, сессия 6).
         """
-        conds = [Enrollment.course_id == course_id, Enrollment.revoked_at.is_(None)]
+        conds = [
+            Enrollment.course_id == course_id,
+            Enrollment.revoked_at.is_(None),
+            User.is_admin.is_(False),
+        ]
         if q is not None and q.strip():
             conds.append(
                 func.concat_ws(" ", User.last_name, User.first_name, User.middle_name).ilike(
