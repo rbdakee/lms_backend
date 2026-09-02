@@ -146,7 +146,9 @@ class TeachersAdminService:
 
     # -- POST /admin/teachers/{id}/retakes -------------------------------
 
-    def allow_retake(self, admin: User, user_id: int, quiz_id: int, reason: str) -> dict:
+    def allow_retake(
+        self, admin: User, user_id: int, quiz_id: int, reason: str, platform: str
+    ) -> dict:
         """Пересдача снимает зачёт с попытки, но не трогает её содержимое:
         ответы, баллы и `passed` остаются как были — строка нужна админу как
         история. Освобождается частичный индекс `uq_quiz_attempt_counted`,
@@ -163,12 +165,15 @@ class TeachersAdminService:
         if quiz.retakable:
             raise QuizRetakableError()
 
-        counted = self.attempts.counted_for(teacher.id, quiz.id)
+        # Зачётная попытка ищется на конкретной площадке: у человека, купившего
+        # общий курс дважды, их две, и снять зачёт не с той — необратимая
+        # ошибка ценой в попытку
+        counted = self.attempts.counted_for(teacher.id, quiz.id, platform)
         if counted is None:
             raise NoAttemptError()
         if counted.finished_at is None:
             raise AttemptInProgressError("Попытка ещё не завершена — дождитесь её конца")
-        if self.certificates.active_for(teacher.id, course.id) is not None:
+        if self.certificates.active_for(teacher.id, course.id, platform) is not None:
             # Иначе новая попытка на 40% отменила бы уже выданный документ
             raise CertificateIssuedError("Сертификат по курсу уже выдан — пересдача закрыта")
 
@@ -182,6 +187,8 @@ class TeachersAdminService:
             teacher.id,
             "retake_allowed",
             {"course_id": course.id, "quiz_id": quiz.id, "quiz_title": quiz.title},
+            # Площадка — у снятой попытки: ссылка ведёт туда, где тест открылся
+            counted.platform,
         )
         return self._card_out(teacher)
 

@@ -35,19 +35,21 @@ COVER_SECURITY = {
 
 @router.get("")
 def catalog(
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CoursesService, Depends(deps.get_courses_service)],
 ) -> CatalogOut:
     # Без пагинации: каталог маленький, фильтры на фронте
-    return CatalogOut(items=svc.catalog())
+    return CatalogOut(items=svc.catalog(platform))
 
 
 @router.get("/{course_id}")
 def course_page(
     course_id: int,
     user: Annotated[User | None, Depends(deps.get_current_user_optional)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CoursesService, Depends(deps.get_courses_service)],
 ) -> CoursePageOut:
-    return CoursePageOut(**svc.course_page(course_id, user))
+    return CoursePageOut(**svc.course_page(course_id, user, platform))
 
 
 @router.get("/{course_id}/cover")
@@ -73,10 +75,11 @@ def course_cover(
 def course_program(
     course_id: int,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CoursesService, Depends(deps.get_courses_service)],
 ) -> ProgramOut:
     # Программа со статусами — сайдбар экрана урока, только своим учителям
-    return ProgramOut(**svc.program_page(user, course_id))
+    return ProgramOut(**svc.program_page(user, course_id, platform))
 
 
 @router.get("/{course_id}/reviews")
@@ -98,16 +101,18 @@ def add_review(
     course_id: int,
     body: ReviewIn,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CoursesService, Depends(deps.get_courses_service)],
 ) -> ReviewOut:
-    return ReviewOut(**svc.add_review(user, course_id, body.rating, body.text))
+    return ReviewOut(**svc.add_review(user, course_id, body.rating, body.text, platform))
 
 
 @router.post("/{course_id}/lead")
 def create_lead(
     course_id: int,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[LeadsService, Depends(deps.get_leads_service)],
 ) -> LeadOut:
     # Тело пустое: телефон и ФИО уже в профиле
-    return LeadOut(**svc.create_lead(user, course_id))
+    return LeadOut(**svc.create_lead(user, course_id, platform))

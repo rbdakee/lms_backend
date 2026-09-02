@@ -6,9 +6,19 @@
 отправку, а код входа продолжал уходить в лог заглушкой.
 """
 
+import logging
+
 import pytest
 
-from app.config import PROVIDERS, TELEGRAM_UPDATES_MODES, check_providers, get_settings
+from app.config import (
+    PROVIDERS,
+    TELEGRAM_UPDATES_MODES,
+    Settings,
+    check_platform_origins,
+    check_providers,
+    get_settings,
+)
+from app.domain.platform import DEFAULT_PLATFORM
 
 
 def test_a_typo_in_a_provider_stops_the_service_at_start(monkeypatch):
@@ -149,3 +159,51 @@ def test_a_bootstrap_code_the_login_screen_cannot_take_stops_the_service(monkeyp
 
     monkeypatch.setattr(get_settings(), "auth_bootstrap_code", "0909")
     check_providers(get_settings())
+
+
+# -- Источники площадок -------------------------------------------------
+
+
+def test_missing_platform_origins_warns_and_leaves_one_platform(caplog):
+    """Настройки нет — всё уходит первой площадке, то есть работает ровно
+    как до разделения. Отказывать в обслуживании за это дороже."""
+    cfg = Settings(cors_origins=["https://lms.kz"], platform_origins={})
+    with caplog.at_level(logging.WARNING):
+        check_platform_origins(cfg)
+    assert "PLATFORM_ORIGINS" in caplog.text
+    assert DEFAULT_PLATFORM in caplog.text
+
+
+def test_a_platform_origin_outside_cors_warns_but_lets_the_service_start(caplog):
+    """Источник без CORS до API не доходит вовсе: браузер с него не пустят,
+    и площадкой у него останется первая."""
+    cfg = Settings(
+        cors_origins=["https://lms.kz"],
+        platform_origins={"https://lms.kz": "p1", "https://second.kz": "p2"},
+    )
+    with caplog.at_level(logging.WARNING):
+        check_platform_origins(cfg)
+    assert "PLATFORM_ORIGINS" in caplog.text
+    assert "https://second.kz" in caplog.text
+
+
+def test_an_unknown_platform_code_stops_the_service_at_start():
+    """В отличие от забытой настройки, опечатка в коде площадки роняет сервис:
+    такую строку отвергнет `CHECK` в базе, и падать это начнёт на каждой
+    записи учителя — на доступе, прогрессе, попытке теста."""
+    cfg = Settings(
+        cors_origins=["https://lms.kz"],
+        platform_origins={"https://lms.kz": "p3"},
+    )
+    with pytest.raises(RuntimeError) as failed:
+        check_platform_origins(cfg)
+    message = str(failed.value)
+    assert "PLATFORM_ORIGINS" in message
+    assert "p3" in message
+    assert DEFAULT_PLATFORM in message
+
+
+def test_the_shipped_platform_defaults_do_not_raise():
+    """Голые умолчания — рабочая конфигурация: проверка не мешает старту."""
+    check_platform_origins(Settings())
+    check_platform_origins(get_settings())

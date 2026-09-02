@@ -54,6 +54,7 @@ from app.api.deps import (
 from app.application.ports import NotificationCard
 from app.application.ratelimit import SlidingWindowLimiter
 from app.config import get_settings
+from app.domain.platform import DEFAULT_PLATFORM
 from app.main import app
 
 # Каждый тест начинается с TRUNCATE всех таблиц. Направить это на базу
@@ -381,13 +382,15 @@ def make_task(module_id, **kw):
 
 
 def make_submission(user_id, task_id, **kw):
-    fields = {"user_id": user_id, "task_id": task_id, "text": "Первый вариант"}
+    fields = {"user_id": user_id, "task_id": task_id, "text": "Первый вариант",
+              "platform": DEFAULT_PLATFORM}
     fields.update(kw)
     return seed(Submission(**fields))
 
 
 def make_enrollment(user_id, course_id, **kw):
-    fields = {"user_id": user_id, "course_id": course_id, "granted_by": user_id}
+    fields = {"user_id": user_id, "course_id": course_id, "granted_by": user_id,
+              "platform": DEFAULT_PLATFORM}
     fields.update(kw)
     return seed(Enrollment(**fields))
 
@@ -395,13 +398,15 @@ def make_enrollment(user_id, course_id, **kw):
 def make_certificate(user_id, course_id, **kw):
     fields = {"user_id": user_id, "course_id": course_id, "number": "KZ-2026-XB7K2M",
               "holder_name": "Смагулова Гульмира Токтарбековна", "course_title": "Курс",
-              "hours": 72, "lang": "ru"}
+              "hours": 72, "lang": "ru", "platform": DEFAULT_PLATFORM}
     fields.update(kw)
     return seed(Certificate(**fields))
 
 
-def make_progress(user_id, lesson_id):
-    return seed(LessonProgress(user_id=user_id, lesson_id=lesson_id))
+def make_progress(user_id, lesson_id, **kw):
+    fields = {"user_id": user_id, "lesson_id": lesson_id, "platform": DEFAULT_PLATFORM}
+    fields.update(kw)
+    return seed(LessonProgress(**fields))
 
 
 def user_id(client) -> int:
@@ -410,7 +415,8 @@ def user_id(client) -> int:
 
 def make_notification(user_id, **kw):
     fields = {"user_id": user_id, "type": "access_granted",
-              "params": {"course_id": 1, "course_title": "Курс"}}
+              "params": {"course_id": 1, "course_title": "Курс"},
+              "platform": DEFAULT_PLATFORM}
     fields.update(kw)
     return seed(Notification(**fields))
 
@@ -427,7 +433,7 @@ def make_user(phone, **kw):
 
 def make_lead(user_id, course_id, **kw):
     fields = {"user_id": user_id, "course_id": course_id, "price_snapshot": 45000,
-              "status": "new"}
+              "status": "new", "platform": DEFAULT_PLATFORM}
     fields.update(kw)
     return seed(Lead(**fields))
 
@@ -436,7 +442,8 @@ def make_review(user_id, course_id, **kw):
     """Отзыв мимо HTTP: лента админа и модерация проверяют разбор отзыва,
     а не право его оставить — доступ к курсу для этого не нужен."""
     fields = {"user_id": user_id, "course_id": course_id, "rating": 5,
-              "text": "Наконец-то понятно, как объяснять оценки родителям."}
+              "text": "Наконец-то понятно, как объяснять оценки родителям.",
+              "platform": DEFAULT_PLATFORM}
     fields.update(kw)
     return seed(Review(**fields))
 
@@ -451,6 +458,6 @@ def make_category(title, **kw):
 
 def make_thread_message(lesson_id, course_id, user_id, **kw):
     fields = {"lesson_id": lesson_id, "course_id": course_id, "user_id": user_id,
-              "text": "Вопрос по уроку"}
+              "text": "Вопрос по уроку", "platform": DEFAULT_PLATFORM}
     fields.update(kw)
     return seed(ThreadMessage(**fields))

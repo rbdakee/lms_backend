@@ -123,14 +123,17 @@ class FilesService:
             "size_bytes": size,
         }
 
-    def link(self, user: User, file_id: int) -> dict:
+    def link(self, user: User, file_id: int, platform: str) -> dict:
         """Ссылка на материал урока. Порядок проверок общий: существование,
-        потом доступ, — поэтому у чужого курса приходит 403, а не 404."""
+        потом доступ, — поэтому у чужого курса приходит 403, а не 404.
+
+        Доступ спрашивается у своей площадки: выданный на соседней материалы
+        этого урока не открывает."""
         found = self.lessons.file_with_course(file_id)
         if found is None:
             raise NotFoundError("Файл не найден")
         file, course = found
-        if self.enrollments.active_for(user.id, course.id) is None:
+        if self.enrollments.active_for(user.id, course.id, platform) is None:
             raise ForbiddenError("Материалы доступны учителям с доступом к курсу")
 
         # Секунды, а не микросекунды: в подпись уходит unix-время, и фронту

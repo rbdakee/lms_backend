@@ -35,8 +35,8 @@ class LessonsService:
         # Курс, который админ смотрит «как учитель»: по нему ничего не пишется
         self.preview_course_id = preview_course_id
 
-    def lesson_page(self, user: User, lesson_id: int) -> dict:
-        lesson, _ = self._accessible(user, lesson_id)
+    def lesson_page(self, user: User, lesson_id: int, platform: str) -> dict:
+        lesson, _ = self._accessible(user, lesson_id, platform)
         return {
             "id": lesson.id,
             "module_id": lesson.module_id,
@@ -46,7 +46,7 @@ class LessonsService:
             "body": lesson.body,
             "duration_label": lesson.duration_label,
             "time_required_min": lesson.time_required_min,
-            "is_completed": self.progress.is_lesson_done(user.id, lesson.id),
+            "is_completed": self.progress.is_lesson_done(user.id, lesson.id, platform),
             # Ссылки на файл здесь нет — за ней идут отдельно, GET /files/{id}
             "files": [
                 {
@@ -59,11 +59,11 @@ class LessonsService:
             ],
         }
 
-    def complete(self, user: User, lesson_id: int) -> dict:
-        lesson, course = self._accessible(user, lesson_id)
+    def complete(self, user: User, lesson_id: int, platform: str) -> dict:
+        lesson, course = self._accessible(user, lesson_id, platform)
         preview = course.id == self.preview_course_id
         if not preview:
-            self.progress.mark_lesson_done(user.id, lesson.id)
+            self.progress.mark_lesson_done(user.id, lesson.id, platform)
         # Прогресс считаем уже с новой отметкой: экран сразу перерисовывает
         # «N из M» и кнопку «Далее», не дожидаясь второго запроса. В режиме
         # предпросмотра отметки нет, и счётчики придут прежними: писать их
@@ -71,11 +71,11 @@ class LessonsService:
         return {
             "is_completed": True,
             **course_progress(
-                self.courses, self.progress, course, user.id, preview=preview
+                self.courses, self.progress, course, user.id, platform, preview=preview
             ),
         }
 
-    def playback(self, user: User, lesson_id: int) -> dict:
+    def playback(self, user: User, lesson_id: int, platform: str) -> dict:
         """Ссылка для плеера. Доступ проверяется на каждый вызов: отозвал админ
         доступ посреди просмотра — следующий запрос вернёт отказ, а не ссылку."""
         # Лимит впереди всего остального: он затем и нужен, чтобы качалка
@@ -86,7 +86,7 @@ class LessonsService:
                 "Слишком много запросов — попробуйте через несколько секунд",
                 retry_after_sec=retry_after,
             )
-        lesson, _ = self._accessible(user, lesson_id, denied=PLAYBACK_DENIED)
+        lesson, _ = self._accessible(user, lesson_id, platform, denied=PLAYBACK_DENIED)
         if lesson.kind != "video" or lesson.video_url is None:
             # Нечего отдавать. Спрашиваем вид, а не одну ссылку: редактор
             # не стирает video_url при смене вида на текстовый, и оставшаяся
@@ -102,14 +102,17 @@ class LessonsService:
         }
 
     def _accessible(
-        self, user: User, lesson_id: int, denied: str = LESSON_DENIED
+        self, user: User, lesson_id: int, platform: str, denied: str = LESSON_DENIED
     ) -> tuple[Lesson, Course]:
         """Порядок проверок один на все эндпоинты урока: существование, потом
-        доступ, — поэтому у чужого курса приходит 403, а не 404."""
+        доступ, — поэтому у чужого курса приходит 403, а не 404.
+
+        Доступ спрашивается у своей площадки: выданный на соседней этот урок
+        не открывает, и отказ у него тот же, что у некупленного курса."""
         found = self.lessons.visible_with_course(lesson_id)
         if found is None:
             raise NotFoundError("Урок не найден")
         lesson, course = found
-        if self.enrollments.active_for(user.id, course.id) is None:
+        if self.enrollments.active_for(user.id, course.id, platform) is None:
             raise ForbiddenError(denied)
         return lesson, course

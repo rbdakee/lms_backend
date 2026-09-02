@@ -73,6 +73,7 @@ def with_statuses(
     course: Course,
     user_id: int,
     program: list[dict],
+    platform: str,
     *,
     preview: bool = False,
 ) -> list[dict]:
@@ -84,7 +85,7 @@ def with_statuses(
     """
     return apply_statuses(
         program,
-        progress.done_keys(user_id, course.id),
+        progress.done_keys(user_id, course.id, platform),
         strict_order=course.strict_order,
         unlock_all=preview,
     )
@@ -95,11 +96,17 @@ def course_progress(
     progress: ProgressRepo,
     course: Course,
     user_id: int,
+    platform: str,
     *,
     preview: bool = False,
 ) -> dict:
     """Блок прогресса курса: агрегат по статусам той же программы."""
     program = with_statuses(
-        progress, course, user_id, build_program(courses, course.id), preview=preview
+        progress,
+        course,
+        user_id,
+        build_program(courses, course.id),
+        platform,
+        preview=preview,
     )
     return progress_of(program)

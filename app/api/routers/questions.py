@@ -23,9 +23,10 @@ def lesson_questions(
     lesson_id: int,
     user: Annotated[User, Depends(deps.get_current_user)],
     params: Annotated[PageParams, Depends()],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[QuestionsService, Depends(deps.get_questions_service)],
 ) -> QuestionsPageOut:
-    data = svc.lesson_questions(user, lesson_id, params.offset, params.per_page)
+    data = svc.lesson_questions(user, lesson_id, params.offset, params.per_page, platform)
     return QuestionsPageOut(**page_out(data["items"], data["total"], params))
 
 
@@ -34,10 +35,13 @@ def add_question(
     lesson_id: int,
     body: ThreadMessageIn,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[QuestionsService, Depends(deps.get_questions_service)],
 ) -> ThreadQuestionOut:
     # Один эндпоинт на вопрос и на ответ — различает их parent_id
-    return ThreadQuestionOut(**svc.add_message(user, lesson_id, body.text, body.parent_id))
+    return ThreadQuestionOut(
+        **svc.add_message(user, lesson_id, body.text, body.parent_id, platform)
+    )
 
 
 @admin_router.get("/questions")

@@ -94,13 +94,13 @@ class CoursesService:
 
     # -- каталог --------------------------------------------------------
 
-    def catalog(self) -> list[dict]:
+    def catalog(self, platform: str) -> list[dict]:
         versions = self.courses.catalog()
         if not versions:
             return []
         ids = [c.id for c in versions]
         lessons = self.courses.lessons_count(ids)
-        students = self.courses.students_count(ids)
+        students = self.courses.students_count(ids, platform)
         ratings = self.courses.group_ratings(list({c.group_id for c in versions}))
 
         groups: dict[int, list[Course]] = {}
@@ -177,10 +177,10 @@ class CoursesService:
             raise NotFoundError("Курс не найден")
         return course
 
-    def course_page(self, course_id: int, user: User | None) -> dict:
+    def course_page(self, course_id: int, user: User | None, platform: str) -> dict:
         course = self._visible(course_id)
         lessons = self.courses.lessons_count([course.id])
-        students = self.courses.students_count([course.id])
+        students = self.courses.students_count([course.id], platform)
         rating, reviews_count = self.courses.group_ratings([course.group_id]).get(
             course.group_id, (None, 0)
         )
@@ -202,16 +202,16 @@ class CoursesService:
                 # элементов считает GET /courses/{id}/program
                 "strict_order": course.strict_order,
                 "program": program,
-                "access": self._access(course, user, program),
+                "access": self._access(course, user, program, platform),
             }
         )
         return data
 
-    def program_page(self, user: User, course_id: int) -> dict:
+    def program_page(self, user: User, course_id: int, platform: str) -> dict:
         """Сайдбар экрана урока. Порядок проверок общий: вход (роутер),
         существование курса, потом доступ."""
         course = self._visible(course_id)
-        if self.enrollments.active_for(user.id, course.id) is None:
+        if self.enrollments.active_for(user.id, course.id, platform) is None:
             raise ForbiddenError("Доступ к курсу не открыт")
         program = build_program(self.courses, course.id)
         return {
@@ -220,14 +220,17 @@ class CoursesService:
                 course,
                 user.id,
                 program,
+                platform,
                 preview=course.id == self.preview_course_id,
             )
         }
 
-    def _access(self, course: Course, user: User | None, program: list[dict]) -> dict:
+    def _access(
+        self, course: Course, user: User | None, program: list[dict], platform: str
+    ) -> dict:
         if user is None:
             return {"state": "none"}
-        if self.enrollments.active_for(user.id, course.id) is not None:
+        if self.enrollments.active_for(user.id, course.id, platform) is not None:
             return {
                 "state": "granted",
                 **progress_of(
@@ -236,11 +239,12 @@ class CoursesService:
                         course,
                         user.id,
                         program,
+                        platform,
                         preview=course.id == self.preview_course_id,
                     )
                 ),
             }
-        lead = self.leads.open_for(user.id, course.id)
+        lead = self.leads.open_for(user.id, course.id, platform)
         if lead is not None:
             return {
                 "state": "requested",
@@ -269,9 +273,11 @@ class CoursesService:
             "breakdown": {str(star): breakdown.get(star, 0) for star in (5, 4, 3, 2, 1)},
         }
 
-    def add_review(self, user: User, course_id: int, rating: int, text: str) -> dict:
+    def add_review(
+        self, user: User, course_id: int, rating: int, text: str, platform: str
+    ) -> dict:
         self._visible(course_id)
-        if self.enrollments.active_for(user.id, course_id) is None:
+        if self.enrollments.active_for(user.id, course_id, platform) is None:
             raise ForbiddenError("Отзыв может оставить только учитель с доступом к курсу")
         if course_id == self.preview_course_id:
             # Ранний выход: иначе на курсе появится отзыв от админа, а обещание
@@ -285,18 +291,21 @@ class CoursesService:
                     rating=rating,
                     text=text,
                     created_at=now_utc(),
+                    platform=platform,
                 ),
                 user,
             )
         # Премодерации нет: отзыв виден сразу, админ отвечает или удаляет постфактум
-        review = self.reviews.create(course_id, user.id, rating, text)
+        review = self.reviews.create(course_id, user.id, rating, text, platform)
         return _review_out(review, user)
 
     # -- мои курсы ------------------------------------------------------
 
-    def my_courses(self, user: User) -> dict:
+    def my_courses(self, user: User, platform: str) -> dict:
         items = []
-        for enrollment, course in self.enrollments.active_for_user(user.id):
+        # Доступы и заявки — обе половины одного экрана, поэтому площадка
+        # отсекается у обеих: иначе курса в «Моих» нет, а заявка на него висит
+        for enrollment, course in self.enrollments.active_for_user(user.id, platform):
             items.append(
                 {
                     "id": course.id,
@@ -307,12 +316,14 @@ class CoursesService:
                     "hours": course.hours,
                     "price": course.price,
                     "status": course.status,
-                    **course_progress(self.courses, self.progress, course, user.id),
+                    **course_progress(
+                        self.courses, self.progress, course, user.id, platform
+                    ),
                     "completed_at": enrollment.completed_at,
                 }
             )
         leads = []
-        for lead, course in self.leads.open_for_user(user.id):
+        for lead, course in self.leads.open_for_user(user.id, platform):
             leads.append(
                 {
                     "id": lead.id,

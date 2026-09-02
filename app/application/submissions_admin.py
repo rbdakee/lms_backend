@@ -81,7 +81,9 @@ class SubmissionsAdminService:
         )
         if not marked:
             raise AlreadyReviewedError()
-        # Текст уведомления не храним — соберётся на языке читателя (раздел 11)
+        # Текст уведомления не храним — соберётся на языке читателя (раздел 11).
+        # Площадка — у самой работы: админка одна на обе, и её `Origin`
+        # площадки не несёт
         self.notifications.create(
             submission.user_id,
             "submission_reviewed",
@@ -91,6 +93,7 @@ class SubmissionsAdminService:
                 "course_id": course.id,
                 "verdict": verdict,
             },
+            submission.platform,
         )
         return self._card_out(*found)
 

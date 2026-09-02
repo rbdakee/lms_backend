@@ -136,9 +136,9 @@ class TasksService:
 
     # -- GET /tasks/{id} ------------------------------------------------
 
-    def task_page(self, user: User, task_id: int) -> dict:
-        task, _ = self._accessible(user, task_id)
-        history = self.submissions.history_for(user.id, task.id)
+    def task_page(self, user: User, task_id: int, platform: str) -> dict:
+        task, _ = self._accessible(user, task_id, platform)
+        history = self.submissions.history_for(user.id, task.id, platform)
         # Свежие сверху, значит статус задания — статус первой в списке
         status = history[0].status if history else NO_SUBMISSION
         return {
@@ -161,10 +161,10 @@ class TasksService:
 
     # -- файл-шаблон ----------------------------------------------------
 
-    def template_link(self, user: User, task_id: int) -> dict:
+    def template_link(self, user: User, task_id: int, platform: str) -> dict:
         """Подписанная ссылка на шаблон — как у материалов урока: короткий срок
         жизни, фронт запрашивает её по клику."""
-        task, _ = self._accessible(user, task_id)
+        task, _ = self._accessible(user, task_id, platform)
         template = template_file_out(self.storage, task)
         if template is None:
             # Шаблона нет — нечего и подписывать; на экране кнопки тоже нет
@@ -223,9 +223,11 @@ class TasksService:
 
     # -- POST /tasks/{id}/submissions -----------------------------------
 
-    def submit(self, user: User, task_id: int, text: str | None, files: list[dict]) -> dict:
-        task, course = self._accessible(user, task_id)
-        last = self.submissions.last_for(user.id, task.id)
+    def submit(
+        self, user: User, task_id: int, text: str | None, files: list[dict], platform: str
+    ) -> dict:
+        task, course = self._accessible(user, task_id, platform)
+        last = self.submissions.last_for(user.id, task.id, platform)
         if last is not None and last.status == SUBMISSION_PENDING:
             raise SubmissionPendingError()
         if last is not None and last.status == SUBMISSION_ACCEPTED:
@@ -249,10 +251,13 @@ class TasksService:
                     files=snapshot,
                     status=SUBMISSION_PENDING,
                     created_at=now_utc(),
+                    platform=platform,
                 ),
                 self.cfg.public_base_url,
             )
-        submission = self.submissions.create(user.id, task.id, text=text, files=snapshot)
+        submission = self.submissions.create(
+            user.id, task.id, text=text, files=snapshot, platform=platform
+        )
         if submission is None:
             # Гонка двух одновременных отправок: вторую pending не пустила база
             raise SubmissionPendingError()
@@ -325,13 +330,13 @@ class TasksService:
 
     # -- рамка доступа ---------------------------------------------------
 
-    def _accessible(self, user: User, task_id: int) -> tuple[Task, Course]:
+    def _accessible(self, user: User, task_id: int, platform: str) -> tuple[Task, Course]:
         """Порядок проверок один на все эндпоинты задания: существование, потом
         доступ, — поэтому у чужого курса приходит 403, а не 404."""
         found = self.tasks.visible_with_course(task_id)
         if found is None:
             raise NotFoundError("Задание не найдено")
         task, course = found
-        if self.enrollments.active_for(user.id, course.id) is None:
+        if self.enrollments.active_for(user.id, course.id, platform) is None:
             raise ForbiddenError(TASK_DENIED)
         return task, course

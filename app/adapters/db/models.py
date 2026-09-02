@@ -32,6 +32,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.domain.platform import PLATFORMS
+
 
 def now_utc() -> datetime:
     return datetime.now(UTC)
@@ -45,6 +47,11 @@ naming_convention = {
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
+
+
+# Условие CHECK у колонки platform — одно на все таблицы: список кодов
+# площадок живёт в domain/platform.py, а база сверяет его сама.
+PLATFORM_CHECK = "platform IN (" + ", ".join(f"'{code}'" for code in PLATFORMS) + ")"
 
 
 class Base(DeclarativeBase):
@@ -133,6 +140,27 @@ class Course(Base):
             "status IN ('draft', 'planned', 'open', 'closed', 'hidden')", name="status"
         ),
     )
+
+
+class CoursePlatform(Base):
+    """Публикация курса на площадке и его цена там.
+
+    Строка есть — курс выложен на этой площадке по этой цене; галочка
+    в редакторе курса это строку и создаёт. Цена бывает пустой ровно так же,
+    как пустой бывает `course.price`.
+
+    `course.price` пока остаётся на месте и продолжает читаться: чтение
+    переключает сессия 2, она же убирает колонку. Сломанного каталога между
+    сессиями быть не должно — он в бою.
+    """
+
+    __tablename__ = "course_platform"
+
+    course_id: Mapped[int] = mapped_column(ForeignKey("course.id"), primary_key=True)
+    platform: Mapped[str] = mapped_column(Text, primary_key=True)
+    price: Mapped[int | None] = mapped_column(Integer)  # тенге; эквайринга нет, цена — число
+
+    __table_args__ = (CheckConstraint(PLATFORM_CHECK, name="platform"),)
 
 
 class Module(Base):
@@ -275,6 +303,11 @@ class Lead(Base):
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     reminded_at: Mapped[datetime | None] = mapped_column()
+    # Откуда пришла заявка. По курсу это не вычисляется: курс бывает общим,
+    # а заявка — по одной на площадку (PLATFORMS_BRIEF, решение 15).
+    platform: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (CheckConstraint(PLATFORM_CHECK, name="platform"),)
 
 
 class Enrollment(Base):
@@ -289,8 +322,14 @@ class Enrollment(Base):
     paid_note: Mapped[str | None] = mapped_column(Text)
     revoked_at: Mapped[datetime | None] = mapped_column()
     completed_at: Mapped[datetime | None] = mapped_column()
+    # Доступ выдаётся на площадку: тот же курс на второй — второй доступ,
+    # со своим прогрессом и своим сертификатом (PLATFORMS_BRIEF, решение 2).
+    platform: Mapped[str] = mapped_column(Text)
 
-    __table_args__ = (UniqueConstraint("user_id", "course_id"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "course_id", "platform"),
+        CheckConstraint(PLATFORM_CHECK, name="platform"),
+    )
 
 
 class LessonProgress(Base):
@@ -298,7 +337,12 @@ class LessonProgress(Base):
 
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"), primary_key=True)
     lesson_id: Mapped[int] = mapped_column(ForeignKey("lesson.id"), primary_key=True)
+    # Урок общего курса проходится на каждой площадке заново — платформа
+    # в ключе, а не рядом с ним.
+    platform: Mapped[str] = mapped_column(Text, primary_key=True)
     completed_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (CheckConstraint(PLATFORM_CHECK, name="platform"),)
 
 
 class QuizAttempt(Base):
@@ -321,14 +365,19 @@ class QuizAttempt(Base):
     uncounted_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
     uncounted_reason: Mapped[str | None] = mapped_column(Text)
     uncounted_at: Mapped[datetime | None] = mapped_column()
+    # Попытка принадлежит площадке: у общего курса на каждой своя
+    # единственная попытка (PLATFORMS_BRIEF, решение 2).
+    platform: Mapped[str] = mapped_column(Text)
 
     # Одна зачётная попытка — гарантия базы, а не проверка в коде: двойной
     # клик по «Начать тест» упирается в этот индекс.
     __table_args__ = (
+        CheckConstraint(PLATFORM_CHECK, name="platform"),
         Index(
             "uq_quiz_attempt_counted",
             "user_id",
             "quiz_id",
+            "platform",
             unique=True,
             postgresql_where=text("is_counted"),
         ),
@@ -339,6 +388,7 @@ class QuizAttempt(Base):
             "uq_quiz_attempt_active",
             "user_id",
             "quiz_id",
+            "platform",
             unique=True,
             postgresql_where=text("finished_at IS NULL"),
         ),
@@ -375,14 +425,17 @@ class Submission(Base):
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
     reviewed_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    platform: Mapped[str] = mapped_column(Text)
 
     # Одна работа «на проверке» — гарантия базы: проверка в коде не закрывает
     # гонку двух одновременных отправок.
     __table_args__ = (
+        CheckConstraint(PLATFORM_CHECK, name="platform"),
         Index(
             "uq_submission_pending",
             "user_id",
             "task_id",
+            "platform",
             unique=True,
             postgresql_where=_SUBMISSION_PENDING_ONLY,
         ),
@@ -404,15 +457,20 @@ class Certificate(Base):
     lang: Mapped[str] = mapped_column(Text, default="ru", server_default="ru")
     issued_at: Mapped[datetime] = mapped_column(server_default=func.now())
     revoked_at: Mapped[datetime | None] = mapped_column()
+    # Сертификат свой на каждой площадке; номер при этом уникален на всю
+    # базу — нумерация общая, иначе проверка по номеру неоднозначна.
+    platform: Mapped[str] = mapped_column(Text)
 
     __table_args__ = (
         CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
+        CheckConstraint(PLATFORM_CHECK, name="platform"),
         # Двойной клик по «Получить сертификат» не должен выдавать два
         # документа: единственность держит база, а не проверка в сценарии.
         Index(
             "uq_certificate_active",
             "user_id",
             "course_id",
+            "platform",
             unique=True,
             postgresql_where=text("revoked_at IS NULL"),
         ),
@@ -447,9 +505,14 @@ class Notification(Base):
     params: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     read_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Площадка решает, на какой домен ведёт ссылка из колокольчика.
+    platform: Mapped[str] = mapped_column(Text)
 
     # Колокольчик всегда читается одним запросом: свои, свежие сверху.
-    __table_args__ = (Index("ix_notification_user_created", "user_id", "created_at"),)
+    __table_args__ = (
+        CheckConstraint(PLATFORM_CHECK, name="platform"),
+        Index("ix_notification_user_created", "user_id", "created_at"),
+    )
 
 
 class ThreadMessage(Base):
@@ -467,10 +530,16 @@ class ThreadMessage(Base):
     # по той же причине, что и отзыв.
     deleted_at: Mapped[datetime | None] = mapped_column()
     deleted_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
+    # Откуда задан вопрос: урок общего курса открыт на обеих площадках,
+    # а обсуждения у них свои.
+    platform: Mapped[str] = mapped_column(Text)
 
     # Ответы треда собираются по parent_id — без индекса это seq scan на каждый
     # открытый урок.
-    __table_args__ = (Index("ix_thread_message_parent", "parent_id"),)
+    __table_args__ = (
+        CheckConstraint(PLATFORM_CHECK, name="platform"),
+        Index("ix_thread_message_parent", "parent_id"),
+    )
 
 
 class Review(Base):
@@ -491,8 +560,14 @@ class Review(Base):
     # Удаление мягкое: у действий админа хранится actor_id (backend/CLAUDE.md).
     deleted_at: Mapped[datetime | None] = mapped_column()
     deleted_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
+    # Отзыв виден в каталоге своей площадки, рейтинг считается по ней же
+    # (PLATFORMS_BRIEF, решение 3).
+    platform: Mapped[str] = mapped_column(Text)
 
-    __table_args__ = (CheckConstraint("rating BETWEEN 1 AND 5", name="rating"),)
+    __table_args__ = (
+        CheckConstraint("rating BETWEEN 1 AND 5", name="rating"),
+        CheckConstraint(PLATFORM_CHECK, name="platform"),
+    )
 
 
 class Category(Base):

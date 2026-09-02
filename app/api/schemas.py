@@ -5,7 +5,14 @@ from pydantic import BaseModel, BeforeValidator, Field, ValidationInfo
 
 from app.adapters.db.models import User
 from app.domain.errors import FieldError
+from app.domain.platform import PLATFORMS
 from app.domain.profile import onboarding_done
+
+# Коды площадок — из домена, а не литералом в схеме: список один на базу,
+# на API и на типы фронта, и добавленная площадка не должна требовать
+# правки в трёх местах. Неизвестный код отбивает pydantic — 422 в общем
+# формате ошибок.
+Platform = Literal[PLATFORMS]
 
 
 def _ranged_int(low: int, high: int | None, message: str) -> Any:
@@ -732,6 +739,9 @@ class EnrollmentIn(BaseModel):
 
     user_id: int
     course_id: int
+    # Площадка обязательна и приходит телом: админка одна на обе, и её `Origin`
+    # площадки не несёт — угадать её здесь неоткуда (решение владельца)
+    platform: Platform
     paid: bool
     note: str | None = Field(None, max_length=2000)
 
@@ -740,6 +750,8 @@ class EnrollmentOut(BaseModel):
     id: int
     user_id: int
     course_id: int
+    # Ответ описывает то, что создано: доступ выдан на эту площадку
+    platform: Platform
     granted_at: datetime
     paid: bool
     # Комментарий к оплате (paid_note); при paid=false — null, комментарий ушёл в заявку
@@ -1844,6 +1856,10 @@ class TeacherRetakeIn(BaseModel):
     model_config = {"extra": "forbid"}
 
     quiz_id: int
+    # Площадка обязательна и приходит телом, как у выдачи доступа: админка одна
+    # на обе, её `Origin` площадки не несёт, а зачётных попыток у человека
+    # может быть две — снятая не с той стоит ему единственной попытки
+    platform: Platform
     # Причина обязательна: она остаётся в истории попытки, и по ней потом
     # разбирают, почему зачёт снят. Пустую строку отбивает сценарий
     reason: str = Field(max_length=2000)

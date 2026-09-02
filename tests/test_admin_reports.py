@@ -65,6 +65,7 @@ def attempt(uid, quiz, questions, *, score, passed=True, finished=True, counted=
             score=score if finished else None,
             passed=passed if finished else None,
             is_counted=counted,
+            platform="p1",
         )
     )
 

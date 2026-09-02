@@ -115,7 +115,7 @@ def test_grant_enrollment(client, client2, sms):
 
     login_admin(client2, sms)
     resp = client2.post("/admin/enrollments", json={
-        "user_id": teacher_id, "course_id": course.id,
+        "user_id": teacher_id, "course_id": course.id, "platform": "p1",
         "paid": True, "note": "Kaspi, перевод от 16.08",
     })
     assert resp.status_code == 200
@@ -149,7 +149,13 @@ def test_admin_patch_cannot_move_a_granted_lead_elsewhere(client, client2, sms):
 
     login_admin(client2, sms)
     client2.post(
-        "/admin/enrollments", json={"user_id": teacher_id, "course_id": course.id, "paid": True}
+        "/admin/enrollments",
+        json={
+            "user_id": teacher_id,
+            "course_id": course.id,
+            "platform": "p1",
+            "paid": True,
+        },
     )
 
     resp = client2.patch(f"/admin/leads/{lead['id']}", json={"status": "new"})
@@ -167,7 +173,7 @@ def test_grant_unpaid_note_goes_to_lead(client, client2, sms):
 
     login_admin(client2, sms)
     body = client2.post("/admin/enrollments", json={
-        "user_id": teacher_id, "course_id": course.id,
+        "user_id": teacher_id, "course_id": course.id, "platform": "p1",
         "paid": False, "note": "Оплатит после зарплаты",
     }).json()
     assert body["paid"] is False
@@ -183,7 +189,7 @@ def test_grant_twice_409(client, client2, sms):
     teacher_id, _ = _teacher_with_lead(client, sms, course)
 
     login_admin(client2, sms)
-    payload = {"user_id": teacher_id, "course_id": course.id, "paid": True}
+    payload = {"user_id": teacher_id, "course_id": course.id, "platform": "p1", "paid": True}
     assert client2.post("/admin/enrollments", json=payload).status_code == 200
     resp = client2.post("/admin/enrollments", json=payload)
     assert resp.status_code == 409
@@ -198,7 +204,7 @@ def test_grant_after_revoke_reuses_row(client, client2, sms):
 
     login_admin(client2, sms)
     resp = client2.post("/admin/enrollments", json={
-        "user_id": teacher_id, "course_id": course.id, "paid": True,
+        "user_id": teacher_id, "course_id": course.id, "platform": "p1", "paid": True,
     })
     assert resp.status_code == 200
     assert resp.json()["id"] == enrollment.id
@@ -215,14 +221,14 @@ def test_grant_404_for_missing_user_or_hidden_course(client2, sms):
     hidden = make_course(status="hidden")
     login_admin(client2, sms)
     assert client2.post("/admin/enrollments", json={
-        "user_id": 999999, "course_id": hidden.id, "paid": True,
+        "user_id": 999999, "course_id": hidden.id, "platform": "p1", "paid": True,
     }).status_code == 404
 
     course = make_course()
     admin_id = user_id(client2)
     assert client2.post("/admin/enrollments", json={
-        "user_id": admin_id, "course_id": hidden.id, "paid": True,
+        "user_id": admin_id, "course_id": hidden.id, "platform": "p1", "paid": True,
     }).status_code == 404
     assert client2.post("/admin/enrollments", json={
-        "user_id": 999999, "course_id": course.id, "paid": True,
+        "user_id": 999999, "course_id": course.id, "platform": "p1", "paid": True,
     }).status_code == 404

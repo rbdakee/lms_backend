@@ -4,6 +4,7 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain.phone import normalize_phone
+from app.domain.platform import DEFAULT_PLATFORM, PLATFORMS
 
 log = logging.getLogger(__name__)
 
@@ -30,9 +31,16 @@ class Settings(BaseSettings):
     # Пустое значение значит «кука общая», как было до разделения.
     admin_origins: list[str] = []
 
-    # В бою кука ставится на родительский домен: имена у приложений разные,
-    # и на общем домене они не мешают друг другу.
-    cookie_domain: str | None = None
+    # Какая из площадок спрашивает: «источник → код платформы». Способ тот же,
+    # что у `admin_origins`, и по той же причине — `Origin` единственное, что
+    # приходит от браузера на каждый запрос и уже проверено CORS.
+    #
+    # По умолчанию пусто по той же причине, что и у `admin_origins`: значение
+    # годится либо для разработки, либо для боя, и «удобное» localhost-умолчание
+    # 21.08.2026 уронило прод. Пустое значит «всё — первой площадке», как было
+    # до разделения.
+    platform_origins: dict[str, str] = {}
+
     cookie_secure: bool = False
     session_ttl_days: int = 180
 
@@ -214,6 +222,7 @@ def check_providers(cfg: Settings) -> None:
             )
     check_bootstrap_login(cfg)
     check_admin_origins(cfg)
+    check_platform_origins(cfg)
 
 
 def check_admin_origins(cfg: Settings) -> None:
@@ -239,6 +248,42 @@ def check_admin_origins(cfg: Settings) -> None:
             "ADMIN_ORIGINS вне CORS_ORIGINS: %s — браузер до API с такого источника"
             " не дойдёт вовсе, и кука у админки останется общей",
             ", ".join(unknown),
+        )
+
+
+def check_platform_origins(cfg: Settings) -> None:
+    """Источники площадок: забытая настройка — предупреждение, опечатка
+    в коде площадки — отказ.
+
+    Цена ошибки разная. Настройки нет — всё уходит первой площадке, то есть
+    ровно то, как площадка работала до разделения; гасить из-за этого живой
+    API дороже (та же логика, что у `check_admin_origins`).
+
+    А код вне `PLATFORMS` пишется в базу и там его отвергает `CHECK`: сервис
+    поднимается здоровым и падает на каждой записи учителя — на доступе,
+    прогрессе, попытке. Это тот же случай, ради которого `check_providers`
+    роняет сервис на неизвестном провайдере.
+    """
+    unknown = sorted({code for code in cfg.platform_origins.values() if code not in PLATFORMS})
+    if unknown:
+        raise RuntimeError(
+            f"PLATFORM_ORIGINS: неизвестные коды площадок — {', '.join(unknown)}."
+            f" Допустимые значения: {', '.join(PLATFORMS)}"
+        )
+    if not cfg.platform_origins:
+        log.warning(
+            "PLATFORM_ORIGINS не задан: все запросы считаются площадкой %s —"
+            " вторая получит каталог, доступы и сертификаты первой",
+            DEFAULT_PLATFORM,
+        )
+        return
+    outside = [origin for origin in cfg.platform_origins if origin not in cfg.cors_origins]
+    if outside:
+        log.warning(
+            "PLATFORM_ORIGINS вне CORS_ORIGINS: %s — браузер до API с такого источника"
+            " не дойдёт вовсе, и площадкой у него останется %s",
+            ", ".join(outside),
+            DEFAULT_PLATFORM,
         )
 
 

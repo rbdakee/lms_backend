@@ -98,7 +98,8 @@ def download_submission_file(
 def lesson_file_link(
     file_id: int,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[FilesService, Depends(deps.get_files_service)],
 ) -> FileLinkOut:
     # Файл не проксируем: отдаём подписанную ссылку, фронт открывает её сам
-    return FileLinkOut(**svc.link(user, file_id))
+    return FileLinkOut(**svc.link(user, file_id, platform))

@@ -142,15 +142,18 @@ class CertificatesService:
 
     # -- GET /courses/{id}/completion ------------------------------------
 
-    def completion(self, course_id: int, user: User | None) -> dict:
+    def completion(self, course_id: int, user: User | None, platform: str) -> dict:
         """Чек-лист публичен, как и сама страница курса: без входа и без
         доступа отдаём список требований без счётчиков."""
         course = self._visible(course_id)
         enrolled = (
-            user is not None and self.enrollments.active_for(user.id, course.id) is not None
+            user is not None
+            and self.enrollments.active_for(user.id, course.id, platform) is not None
         )
-        conditions = self._conditions(course, user if enrolled else None)
-        certificate = self.certificates.active_for(user.id, course.id) if enrolled else None
+        conditions = self._conditions(course, user if enrolled else None, platform)
+        certificate = (
+            self.certificates.active_for(user.id, course.id, platform) if enrolled else None
+        )
         # Блокер — про «условия выполнены, а кнопка всё равно неактивна».
         # Пока чек-лист не закрыт, человеку нечего сообщать про попытку:
         # он и так видит, чего не хватает
@@ -158,7 +161,7 @@ class CertificatesService:
             _attempt_blocker()
             if enrolled
             and all_done(conditions)
-            and self.certificates.unfinished_attempt(user.id, course.id)
+            and self.certificates.unfinished_attempt(user.id, course.id, platform)
             else None
         )
         return {
@@ -178,7 +181,7 @@ class CertificatesService:
             ),
         }
 
-    def _conditions(self, course: Course, user: User | None) -> list[dict]:
+    def _conditions(self, course: Course, user: User | None, platform: str) -> list[dict]:
         """Счётчики чек-листа: видимые элементы плюс скрытые, которые этот
         человек уже прошёл.
 
@@ -190,7 +193,7 @@ class CertificatesService:
         done = (
             None
             if user is None
-            else self.progress.done_keys(user.id, course.id, include_hidden=True)
+            else self.progress.done_keys(user.id, course.id, platform, include_hidden=True)
         )
         return course_conditions(
             course,
@@ -200,25 +203,25 @@ class CertificatesService:
             done=done,
         )
 
-    def conditions_met(self, course: Course, user: User) -> bool:
+    def conditions_met(self, course: Course, user: User, platform: str) -> bool:
         """Выполнены ли условия сертификата — итог того же чек-листа, что видит
         учитель. Отчёту админа нужен только он («условия выполнены, но документ
         не выдан»), а правила должны остаться в одном месте: разойдутся —
         и админ прочитает это как ошибку (CONTRACT, сессия 6)."""
-        return all_done(self._conditions(course, user))
+        return all_done(self._conditions(course, user, platform))
 
     # -- POST /courses/{id}/certificate ----------------------------------
 
-    def issue(self, user: User, course_id: int) -> dict:
+    def issue(self, user: User, course_id: int, platform: str) -> dict:
         course = self._visible(course_id)
-        enrollment = self.enrollments.active_for(user.id, course.id)
+        enrollment = self.enrollments.active_for(user.id, course.id, platform)
         if enrollment is None:
             raise ForbiddenError(ACCESS_DENIED)
 
         if course.id == self.preview_course_id:
-            return self._preview_certificate(user, course)
+            return self._preview_certificate(user, course, platform)
 
-        existing = self.certificates.active_for(user.id, course.id)
+        existing = self.certificates.active_for(user.id, course.id, platform)
         if existing is not None:
             # Идемпотентность: экран завершения дёргает выдачу при открытии,
             # и F5 не должен превращаться в отказ
@@ -226,11 +229,11 @@ class CertificatesService:
 
         # Условия — раньше попытки: человеку, у которого пройдено 2 урока
         # из 18, надо показать чек-лист, а не «завершите начатый тест»
-        conditions = self._conditions(course, user)
+        conditions = self._conditions(course, user, platform)
         if not all_done(conditions):
             # Чек-лист уходит целиком: экран показывает, чего не хватает
             raise ConditionsNotMetError(conditions)
-        if self.certificates.unfinished_attempt(user.id, course.id):
+        if self.certificates.unfinished_attempt(user.id, course.id, platform):
             raise AttemptInProgressError()
         if not onboarding_done(user.first_name, user.last_name):
             # ФИО — снимок на бумаге. Курс без единого условия выдаёт документ
@@ -238,7 +241,7 @@ class CertificatesService:
             # вообще открыл профиль, и пустое имя уже не исправить
             raise ProfileIncompleteError()
 
-        certificate, created = self._issue_document(user, course)
+        certificate, created = self._issue_document(user, course, platform)
         if not created:
             # Гонку выиграл соседний запрос: документ его, и отметка
             # «курс пройден» с уведомлением тоже уже сделаны им
@@ -247,6 +250,8 @@ class CertificatesService:
             # «Курс пройден» и «сертификат получен» — одно событие: вкладка
             # «Пройденные» на /my показывает именно его (CONTRACT, сессия 6)
             enrollment.completed_at = now_utc()
+        # Площадка — у выданного документа: ссылка из колокольчика ведёт
+        # на тот сайт, где сертификат получен
         self.notifications.create(
             user.id,
             "certificate_issued",
@@ -255,10 +260,11 @@ class CertificatesService:
                 "course_title": course.title,
                 "certificate_id": certificate.id,
             },
+            certificate.platform,
         )
         return self._issued_out(certificate)
 
-    def _preview_certificate(self, user: User, course: Course) -> dict:
+    def _preview_certificate(self, user: User, course: Course, platform: str) -> dict:
         """Документ, которого не будет: ни строки в certificate, ни уведомления,
         ни отметки «курс пройден» у доступа (BACKEND_NOTES, раздел 12).
 
@@ -279,6 +285,7 @@ class CertificatesService:
                 lang=course.lang,
                 issued_at=now_utc(),
                 revoked_at=None,
+                platform=platform,
             )
         )
 
@@ -289,7 +296,9 @@ class CertificatesService:
             part for part in (user.last_name, user.first_name, user.middle_name) if part
         )
 
-    def _issue_document(self, user: User, course: Course) -> tuple[Certificate, bool]:
+    def _issue_document(
+        self, user: User, course: Course, platform: str
+    ) -> tuple[Certificate, bool]:
         """Документ и признак «создали мы, а не соседний запрос»: от него
         зависит, писать ли уведомление и отметку о завершении."""
         holder_name = self._holder_name(user)
@@ -303,10 +312,11 @@ class CertificatesService:
                 hours=course.hours,
                 # Язык версии курса: сертификат одноязычный, переключателя нет
                 lang=course.lang,
+                platform=platform,
             )
             if certificate is not None:
                 return certificate, True
-            existing = self.certificates.active_for(user.id, course.id)
+            existing = self.certificates.active_for(user.id, course.id, platform)
             if existing is not None:
                 # Вставку отбил не занятый номер, а соседний запрос: двойной
                 # клик рождает один документ, второй запрос отдаёт его же
@@ -315,19 +325,23 @@ class CertificatesService:
 
     # -- GET /me/certificates ---------------------------------------------
 
-    def my_certificates(self, user: User) -> dict:
+    def my_certificates(self, user: User, platform: str) -> dict:
         # Без пагинации: список заведомо короткий, экран её не рисует
         return {
             "items": [
                 self._certificate_out(certificate)
-                for certificate in self.certificates.list_for_user(user.id)
+                for certificate in self.certificates.list_for_user(user.id, platform)
             ]
         }
 
     # -- GET /verify/{number} ---------------------------------------------
 
-    def verify(self, raw_number: str, ip: str | None) -> dict:
-        """Публичная проверка: комиссия смотрит документ, не заводя аккаунта."""
+    def verify(self, raw_number: str, ip: str | None, platform: str) -> dict:
+        """Публичная проверка: комиссия смотрит документ, не заводя аккаунта.
+
+        Только своя площадка: номер с соседней отвечает как несуществующий
+        (PLATFORMS_BRIEF, решение 10). Отсекает его сам репозиторий — чтобы
+        отказ был неотличим от «такого номера нет»."""
         # Лимит впереди поиска: он затем и нужен, чтобы перебор номеров
         # не ходил в базу на каждую попытку
         retry_after = self.verify_limiter.hit(ip or "unknown")
@@ -336,7 +350,9 @@ class CertificatesService:
                 "Слишком много проверок, попробуйте позже", retry_after_sec=retry_after
             )
         number = canonical_number(raw_number)
-        certificate = self.certificates.by_number(number) if number is not None else None
+        certificate = (
+            self.certificates.by_number(number, platform) if number is not None else None
+        )
         if certificate is None:
             raise NotFoundError("Сертификат не найден")
         # Наружу только то, что напечатано на бумаге: ни id, ни course_id,

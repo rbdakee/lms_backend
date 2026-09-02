@@ -40,8 +40,13 @@ class PreviewEnrollmentRepo(EnrollmentRepo):
         self.preview_user_id = user_id
         self.preview_course_id = course_id
 
-    def active_for(self, user_id: int, course_id: int) -> Enrollment | None:
-        real = super().active_for(user_id, course_id)
+    def active_for(self, user_id: int, course_id: int, platform: str) -> Enrollment | None:
+        # Площадку режим не различает: предпросмотр показывает содержание курса,
+        # а не оформление площадки (PLATFORMS_BRIEF, решение 16). Параметр здесь
+        # ради общей сигнатуры — синтетический доступ отдаётся на любую
+        # запрошенную площадку, и в объект пишется именно она, чтобы дальше
+        # сценарий читал у доступа ту же платформу, что спрашивал.
+        real = super().active_for(user_id, course_id, platform)
         if real is not None:
             # Настоящий доступ главнее: у админа он по этому курсу быть может,
             # и подменять его синтетическим незачем
@@ -58,6 +63,7 @@ class PreviewEnrollmentRepo(EnrollmentRepo):
             course_id=course_id,
             granted_by=user_id,
             granted_at=now_utc(),
+            platform=platform,
         )
 
 

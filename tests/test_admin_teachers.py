@@ -54,6 +54,7 @@ def attempt(uid, quiz, questions, **kw):
         "score": 1,
         "passed": False,
         "is_counted": True,
+        "platform": "p1",
     }
     fields.update(kw)
     return seed(QuizAttempt(**fields))
@@ -83,7 +84,7 @@ def test_teachers_require_admin(client, sms):
             client.patch(f"/admin/teachers/{person.id}", json={"is_blocked": True}).status_code,
             client.post(
                 f"/admin/teachers/{person.id}/retakes",
-                json={"quiz_id": 1, "reason": "интернет"},
+                json={"quiz_id": 1, "platform": "p1", "reason": "интернет"},
             ).status_code,
             client.delete(f"/admin/enrollments/{enrollment.id}").status_code,
         ]
@@ -494,7 +495,7 @@ def test_retake_uncounts_the_attempt_and_keeps_it(client, sms):
 
     resp = client.post(
         f"/admin/teachers/{person.id}/retakes",
-        json={"quiz_id": quiz.id, "reason": "Пропал интернет на 12-й минуте."},
+        json={"quiz_id": quiz.id, "platform": "p1", "reason": "Пропал интернет на 12-й минуте."},
     )
     assert resp.status_code == 200
     kept = resp.json()["quizzes"][0]["attempts"][0]
@@ -524,7 +525,8 @@ def test_retake_409_for_a_retakable_quiz(client, sms):
     attempt(person.id, quiz, [make_question(quiz.id)])
 
     resp = client.post(
-        f"/admin/teachers/{person.id}/retakes", json={"quiz_id": quiz.id, "reason": "интернет"}
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": quiz.id, "platform": "p1", "reason": "интернет"},
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "quiz_retakable"
@@ -536,7 +538,8 @@ def test_retake_409_when_the_person_never_took_the_quiz(client, sms):
     person = teacher(1)
 
     resp = client.post(
-        f"/admin/teachers/{person.id}/retakes", json={"quiz_id": quiz.id, "reason": "интернет"}
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": quiz.id, "platform": "p1", "reason": "интернет"},
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "no_attempt"
@@ -548,7 +551,7 @@ def test_retake_409_when_it_is_already_allowed(client, sms):
     _, _, _, _, quiz, questions = teacher_course()
     person = teacher(1)
     attempt(person.id, quiz, questions)
-    body = {"quiz_id": quiz.id, "reason": "Пропал интернет"}
+    body = {"quiz_id": quiz.id, "platform": "p1", "reason": "Пропал интернет"}
     assert client.post(f"/admin/teachers/{person.id}/retakes", json=body).status_code == 200
 
     resp = client.post(f"/admin/teachers/{person.id}/retakes", json=body)
@@ -563,7 +566,8 @@ def test_retake_409_while_the_attempt_is_running(client, sms):
     attempt(person.id, quiz, questions, finished_at=None, score=None, passed=None)
 
     resp = client.post(
-        f"/admin/teachers/{person.id}/retakes", json={"quiz_id": quiz.id, "reason": "интернет"}
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": quiz.id, "platform": "p1", "reason": "интернет"},
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "attempt_in_progress"
@@ -578,7 +582,8 @@ def test_retake_409_after_the_certificate_was_issued(client, sms):
     make_certificate(person.id, course.id)
 
     resp = client.post(
-        f"/admin/teachers/{person.id}/retakes", json={"quiz_id": quiz.id, "reason": "интернет"}
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": quiz.id, "platform": "p1", "reason": "интернет"},
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "certificate_issued"
@@ -594,17 +599,57 @@ def test_retake_422_without_a_reason(client, sms):
     attempt(person.id, quiz, questions)
 
     resp = client.post(
-        f"/admin/teachers/{person.id}/retakes", json={"quiz_id": quiz.id, "reason": "   "}
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": quiz.id, "platform": "p1", "reason": "   "},
     )
     assert resp.status_code == 422
     assert resp.json()["error"]["details"]["fields"][0]["field"] == "reason"
+
+
+def test_retake_422_without_a_platform(client, sms):
+    """Площадка обязательна: у админки `Origin` её не несёт, и подставить
+    первую значило бы снять зачёт наугад."""
+    login_admin(client, sms)
+    _, _, _, _, quiz, questions = teacher_course()
+    person = teacher(1)
+    attempt(person.id, quiz, questions)
+
+    resp = client.post(
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": quiz.id, "reason": "интернет"},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"][0]["field"] == "platform"
+
+
+def test_retake_on_the_other_platform_leaves_the_attempt_counted(client, sms):
+    """Зачётная попытка лежит на p1, пересдачу просят на p2 — снимать там
+    нечего, и зачёт на p1 остаётся: это единственная попытка человека."""
+    login_admin(client, sms)
+    _, _, _, _, quiz, questions = teacher_course()
+    person = teacher(1)
+    row = attempt(person.id, quiz, questions, platform="p1")
+
+    resp = client.post(
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": quiz.id, "platform": "p2", "reason": "интернет"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "no_attempt"
+
+    kept = client.get(f"/admin/teachers/{person.id}").json()["quizzes"][0]["attempts"][0]
+    assert kept["id"] == row.id
+    assert kept["is_counted"] is True
+    assert kept["uncounted_reason"] is None
+    assert kept["uncounted_at"] is None
 
 
 def test_retake_404_for_unknown_quiz(client, sms):
     login_admin(client, sms)
     person = teacher(1)
     resp = client.post(
-        f"/admin/teachers/{person.id}/retakes", json={"quiz_id": 999999, "reason": "интернет"}
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": 999999, "platform": "p1", "reason": "интернет"},
     )
     assert resp.status_code == 404
 
@@ -622,7 +667,7 @@ def test_retake_notifies_the_teacher_in_his_own_language(client, client2, sms):
     assert (
         client2.post(
             f"/admin/teachers/{uid}/retakes",
-            json={"quiz_id": quiz.id, "reason": "Разрядился телефон"},
+            json={"quiz_id": quiz.id, "platform": "p1", "reason": "Разрядился телефон"},
         ).status_code
         == 200
     )

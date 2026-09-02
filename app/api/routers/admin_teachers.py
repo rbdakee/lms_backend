@@ -66,8 +66,12 @@ def allow_retake(
     admin: Annotated[User, Depends(deps.get_current_admin)],
     svc: Annotated[TeachersAdminService, Depends(deps.get_teachers_admin_service)],
 ) -> AdminTeacherCardOut:
+    # Площадка — из тела, а не из `Origin`: админка одна на обе, и `platform_of`
+    # отдал бы здесь первую площадку всегда (решение владельца).
     # Ответ — карточка целиком: экран перерисовывает вкладку «Тесты» ответом
-    return AdminTeacherCardOut(**svc.allow_retake(admin, user_id, body.quiz_id, body.reason))
+    return AdminTeacherCardOut(
+        **svc.allow_retake(admin, user_id, body.quiz_id, body.reason, body.platform)
+    )
 
 
 @router.delete("/enrollments/{enrollment_id}", status_code=status.HTTP_204_NO_CONTENT)

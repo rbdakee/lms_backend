@@ -349,6 +349,7 @@ def test_full_path_from_editor_to_certificate(client, client2, sms, telegram, st
             json={
                 "user_id": teacher_id,
                 "course_id": course_id,
+                "platform": "p1",
                 "paid": True,
                 "note": "Оплата 45 000 ₸, Kaspi, 20.08",
             },

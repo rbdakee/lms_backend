@@ -23,38 +23,43 @@ pdf_router = APIRouter(prefix="/certificates")
 def completion(
     course_id: int,
     user: Annotated[User | None, Depends(deps.get_current_user_optional)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CertificatesService, Depends(deps.get_certificates_service)],
 ) -> CompletionOut:
     # Публично, как и страница курса: вход только добавляет счётчики
-    return CompletionOut(**svc.completion(course_id, user))
+    return CompletionOut(**svc.completion(course_id, user, platform))
 
 
 @router.post("/{course_id}/certificate")
 def issue_certificate(
     course_id: int,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CertificatesService, Depends(deps.get_certificates_service)],
 ) -> CertificateOut:
     # Тела запроса нет; повторный вызов отдаёт 200 и тот же документ
-    return CertificateOut(**svc.issue(user, course_id))
+    return CertificateOut(**svc.issue(user, course_id, platform))
 
 
 @me_router.get("/certificates")
 def my_certificates(
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CertificatesService, Depends(deps.get_certificates_service)],
 ) -> MyCertificatesOut:
-    return MyCertificatesOut(**svc.my_certificates(user))
+    return MyCertificatesOut(**svc.my_certificates(user, platform))
 
 
 @verify_router.get("/{number}")
 def verify(
     number: str,
     request: Request,
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CertificatesService, Depends(deps.get_certificates_service)],
 ) -> VerifyOut:
-    # Без входа: комиссия проверяет документ, не заводя аккаунта
-    return VerifyOut(**svc.verify(number, deps.get_client_ip(request)))
+    # Без входа: комиссия проверяет документ, не заводя аккаунта. Номер
+    # с соседней площадки отвечает «не найден» — это её реестр
+    return VerifyOut(**svc.verify(number, deps.get_client_ip(request), platform))
 
 
 @pdf_router.get("/{certificate_id}/pdf")

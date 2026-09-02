@@ -488,8 +488,9 @@ def test_second_pending_submission_blocked_by_index(client, sms):
 
     with OrmSession(get_engine()) as db:
         repo = SubmissionRepo(db)
-        first = repo.create(uid, task.id, text="Первый", files=[])
-        second = repo.create(uid, task.id, text="Второй", files=[])
+        # Обе строки на одной площадке: индекс проверяется именно так
+        first = repo.create(uid, task.id, text="Первый", files=[], platform="p1")
+        second = repo.create(uid, task.id, text="Второй", files=[], platform="p1")
         db.commit()
 
     assert first is not None

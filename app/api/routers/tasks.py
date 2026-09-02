@@ -14,19 +14,21 @@ router = APIRouter(prefix="/tasks")
 def task(
     task_id: int,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[TasksService, Depends(deps.get_tasks_service)],
 ) -> TaskOut:
-    return TaskOut(**svc.task_page(user, task_id))
+    return TaskOut(**svc.task_page(user, task_id, platform))
 
 
 @router.get("/{task_id}/template_file")
 def task_template_file(
     task_id: int,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[TasksService, Depends(deps.get_tasks_service)],
 ) -> FileLinkOut:
     # Файл не проксируем: отдаём подписанную ссылку, как у материалов урока
-    return FileLinkOut(**svc.template_link(user, task_id))
+    return FileLinkOut(**svc.template_link(user, task_id, platform))
 
 
 @router.post("/{task_id}/submissions")
@@ -34,9 +36,10 @@ def submit_task(
     task_id: int,
     body: SubmissionIn,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[TasksService, Depends(deps.get_tasks_service)],
 ) -> SubmissionOut:
     # Файлы уже загружены через POST /files: сюда приходят key и имя, а размер
     # и тип сервер снимает с хранилища сам
     files = [file.model_dump() for file in body.files]
-    return SubmissionOut(**svc.submit(user, task_id, body.text, files))
+    return SubmissionOut(**svc.submit(user, task_id, body.text, files, platform))

@@ -94,7 +94,9 @@ def grant_enrollment(
     svc: Annotated[LeadsService, Depends(deps.get_leads_service)],
 ) -> EnrollmentOut:
     return EnrollmentOut(
-        **svc.grant(admin, body.user_id, body.course_id, body.paid, body.note)
+        **svc.grant(
+            admin, body.user_id, body.course_id, body.paid, body.note, body.platform
+        )
     )
 
 

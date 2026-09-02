@@ -85,8 +85,8 @@ class QuizzesService:
 
     # -- GET /quizzes/{id} ----------------------------------------------
 
-    def quiz_page(self, user: User, quiz_id: int) -> dict:
-        quiz, course = self._accessible(user, quiz_id)
+    def quiz_page(self, user: User, quiz_id: int, platform: str) -> dict:
+        quiz, course = self._accessible(user, quiz_id, platform)
         questions = self.quizzes.visible_questions(quiz.id)
         if self._preview(course):
             # В предпросмотре история — это единственная попытка из памяти,
@@ -97,8 +97,8 @@ class QuizzesService:
             )
             state = self._preview_state(quiz, attempt)
         else:
-            finished = list(self.attempts.finished_for(user.id, quiz.id))
-            state = self._state(user, quiz, course, finished)
+            finished = list(self.attempts.finished_for(user.id, quiz.id, platform))
+            state = self._state(user, quiz, course, finished, platform)
         return {
             "id": quiz.id,
             "module_id": quiz.module_id,
@@ -118,17 +118,24 @@ class QuizzesService:
         }
 
     def _state(
-        self, user: User, quiz: Quiz, course: Course, finished: list[AnyAttempt]
+        self,
+        user: User,
+        quiz: Quiz,
+        course: Course,
+        finished: list[AnyAttempt],
+        platform: str,
     ) -> dict:
-        active = self.attempts.active_for(user.id, quiz.id)
+        active = self.attempts.active_for(user.id, quiz.id, platform)
         if active is not None:
             # Активная попытка главнее прочего: экран возвращает человека в неё
             return {"status": "in_progress", "attempt": self._attempt_out(active, quiz)}
-        has_certificate = self.certificates.active_for(user.id, course.id) is not None
+        has_certificate = (
+            self.certificates.active_for(user.id, course.id, platform) is not None
+        )
         # Замок программы входит в «можно начать» тем же расчётом, каким
         # его проверяет старт: иначе экран рисует живую кнопку, а нажатие даёт 403 —
         # человек видит открытый тест и получает отказ
-        blocked = has_certificate or self._is_locked(user, quiz, course)
+        blocked = has_certificate or self._is_locked(user, quiz, course, platform)
         if not finished:
             return {"status": "not_started", "can_start": not blocked}
         return {
@@ -169,38 +176,38 @@ class QuizzesService:
 
     # -- POST /quizzes/{id}/quiz_attempts --------------------------------
 
-    def start(self, user: User, quiz_id: int) -> dict:
-        quiz, course = self._accessible(user, quiz_id)
+    def start(self, user: User, quiz_id: int, platform: str) -> dict:
+        quiz, course = self._accessible(user, quiz_id, platform)
         if self._preview(course):
             return self._preview_start(user, quiz)
-        active = self.attempts.active_for(user.id, quiz.id)
+        active = self.attempts.active_for(user.id, quiz.id, platform)
         if active is not None:
             # Идемпотентность по активной попытке: двойной клик по «Начать тест»
             # возвращает ту же попытку с сохранёнными ответами
             return self._attempt_out(active, quiz)
-        self._check_unlocked(user, quiz, course)
-        if self.certificates.active_for(user.id, course.id) is not None:
+        self._check_unlocked(user, quiz, course, platform)
+        if self.certificates.active_for(user.id, course.id, platform) is not None:
             raise CertificateIssuedError()
-        if not quiz.retakable and self.attempts.finished_for(user.id, quiz.id):
+        if not quiz.retakable and self.attempts.finished_for(user.id, quiz.id, platform):
             raise AttemptUsedError()
 
         order = self._question_order(quiz)
         # У непересдаваемого попытка сразу зачётная: вторую не пустит индекс
         attempt = self.attempts.create(
-            user.id, quiz.id, order, is_counted=not quiz.retakable
+            user.id, quiz.id, order, platform, is_counted=not quiz.retakable
         )
         if attempt is None:
             # Гонку двойного старта выиграл соседний запрос — отвечаем его
             # попыткой, чтобы клик не выглядел ошибкой и не съел вторую
-            active = self.attempts.active_for(user.id, quiz.id)
+            active = self.attempts.active_for(user.id, quiz.id, platform)
             if active is not None:
                 return self._attempt_out(active, quiz)
-            attempt = self.attempts.counted_for(user.id, quiz.id)
+            attempt = self.attempts.counted_for(user.id, quiz.id, platform)
             if attempt is None or attempt.finished_at is not None:
                 raise AttemptUsedError()
         return self._attempt_out(attempt, quiz)
 
-    def _is_locked(self, user: User, quiz: Quiz, course: Course) -> bool:
+    def _is_locked(self, user: User, quiz: Quiz, course: Course, platform: str) -> bool:
         """Закрыт ли тест замком программы — строгим порядком курса или
         правилом итогового теста, ждущего все уроки.
 
@@ -209,7 +216,7 @@ class QuizzesService:
         на тесте, который экран показывает открытым.
         """
         program = with_statuses(
-            self.progress, course, user.id, build_program(self.courses, course.id)
+            self.progress, course, user.id, build_program(self.courses, course.id), platform
         )
         return any(
             item["status"] == LOCKED and item_key(item) == ("quiz", quiz.id)
@@ -217,7 +224,7 @@ class QuizzesService:
             for item in module["items"]
         )
 
-    def _check_unlocked(self, user: User, quiz: Quiz, course: Course) -> None:
+    def _check_unlocked(self, user: User, quiz: Quiz, course: Course, platform: str) -> None:
         """Тест не начинается раньше своего черёда.
 
         Замок программы до этого был правилом показа: экран рисовал его,
@@ -226,7 +233,7 @@ class QuizzesService:
         ничего не теряет, — а вот попытка единственная и не возвращается:
         сгоревшая не в свой черёд стоит человеку курса.
         """
-        if self._is_locked(user, quiz, course):
+        if self._is_locked(user, quiz, course, platform):
             raise ForbiddenError(QUIZ_LOCKED)
 
     def _question_order(self, quiz: Quiz) -> list[int]:
@@ -244,8 +251,15 @@ class QuizzesService:
 
     # -- POST /quiz_attempts/{id}/answers --------------------------------
 
-    def answer(self, user: User, attempt_id: int, question_id: int, option_ids: list[int]) -> None:
-        attempt, quiz, _ = self._own_attempt(user, attempt_id)
+    def answer(
+        self,
+        user: User,
+        attempt_id: int,
+        question_id: int,
+        option_ids: list[int],
+        platform: str,
+    ) -> None:
+        attempt, quiz, _ = self._own_attempt(user, attempt_id, platform)
         if attempt.finished_at is not None:
             raise AttemptFinishedError()
         if is_expired(attempt.started_at, quiz.time_limit_min, now_utc()):
@@ -279,8 +293,8 @@ class QuizzesService:
 
     # -- POST /quiz_attempts/{id}/finish ---------------------------------
 
-    def finish(self, user: User, attempt_id: int) -> dict:
-        attempt, quiz, _ = self._own_attempt(user, attempt_id)
+    def finish(self, user: User, attempt_id: int, platform: str) -> dict:
+        attempt, quiz, _ = self._own_attempt(user, attempt_id, platform)
         if attempt.finished_at is not None:
             # Идемпотентность: повторный клик по «Завершить» отдаёт тот же
             # результат и не сдвигает finished_at
@@ -313,8 +327,8 @@ class QuizzesService:
 
     # -- GET /quiz_attempts/{id}/review ----------------------------------
 
-    def review(self, user: User, attempt_id: int) -> dict:
-        attempt, quiz, _ = self._own_attempt(user, attempt_id)
+    def review(self, user: User, attempt_id: int, platform: str) -> dict:
+        attempt, quiz, _ = self._own_attempt(user, attempt_id, platform)
         if attempt.finished_at is None:
             raise AttemptNotFinishedError()
         if not review_available(quiz.retakable, quiz.show_review):
@@ -419,23 +433,28 @@ class QuizzesService:
             "review_available": review_available(quiz.retakable, quiz.show_review),
         }
 
-    def _accessible(self, user: User, quiz_id: int) -> tuple[Quiz, Course]:
+    def _accessible(self, user: User, quiz_id: int, platform: str) -> tuple[Quiz, Course]:
         """Порядок проверок один на все эндпоинты теста: существование, потом
         доступ. Замок строгого порядка сюда не заходит — он правило показа."""
         found = self.quizzes.visible_with_course(quiz_id)
         if found is None:
             raise NotFoundError("Тест не найден")
         quiz, course = found
-        if self.enrollments.active_for(user.id, course.id) is None:
+        if self.enrollments.active_for(user.id, course.id, platform) is None:
             raise ForbiddenError(QUIZ_DENIED)
         return quiz, course
 
-    def _own_attempt(self, user: User, attempt_id: int) -> tuple[AnyAttempt, Quiz, Course]:
+    def _own_attempt(
+        self, user: User, attempt_id: int, platform: str
+    ) -> tuple[AnyAttempt, Quiz, Course]:
         """Доступ к курсу проверяется на каждый вызов, а не только на старте:
         отозвали посреди попытки — следующий ответ уже не примут.
 
         Первой спрашивается память: в режиме предпросмотра попытка живёт там,
         и дальше ответ, подсчёт и разбор идут общим кодом (раздел 12).
+
+        Попытка ищется среди своих на этой площадке: чужая площадка отвечает
+        «не найдена», как и чужая попытка.
         """
         preview = self.preview_attempts.get() if self.preview_attempts is not None else None
         if preview is not None and preview.id == attempt_id:
@@ -443,15 +462,15 @@ class QuizzesService:
             if found_quiz is None:
                 raise NotFoundError("Попытка не найдена")
             quiz, course = found_quiz
-            if self.enrollments.active_for(user.id, course.id) is None:
+            if self.enrollments.active_for(user.id, course.id, platform) is None:
                 raise ForbiddenError(QUIZ_DENIED)
             return preview, quiz, course
 
-        found = self.attempts.own_with_quiz(attempt_id, user.id)
+        found = self.attempts.own_with_quiz(attempt_id, user.id, platform)
         if found is None:
             raise NotFoundError("Попытка не найдена")
         attempt, quiz, course = found
-        if self.enrollments.active_for(user.id, course.id) is None:
+        if self.enrollments.active_for(user.id, course.id, platform) is None:
             raise ForbiddenError(QUIZ_DENIED)
         return attempt, quiz, course
 

@@ -59,6 +59,7 @@ def pass_quiz(uid, quiz_id):
             score=1,
             passed=True,
             is_counted=True,
+            platform="p1",
         )
     )
 
@@ -67,7 +68,9 @@ def start_attempt(uid, quiz_id):
     """Незавершённая попытка: её finish ещё может изменить зачёт. Зачётной
     не помечена — такой её и заводит пересдача поверх уже сданной."""
     return seed(
-        QuizAttempt(user_id=uid, quiz_id=quiz_id, question_order=[], is_counted=False)
+        QuizAttempt(
+            user_id=uid, quiz_id=quiz_id, question_order=[], is_counted=False, platform="p1"
+        )
     )
 
 
@@ -451,9 +454,10 @@ def test_second_insert_is_stopped_by_the_index(client, sms):
             course_title="Курс",
             hours=72,
             lang="ru",
+            platform="p1",
         )
         # Отбитая вставка не роняет транзакцию запроса: SAVEPOINT откатил её одну
-        found = repo.active_for(uid, course.id)
+        found = repo.active_for(uid, course.id, "p1")
         db.commit()
 
     assert rejected is None
@@ -860,7 +864,7 @@ def test_race_leaves_one_certificate_and_one_notification(client, sms, monkeypat
         # Соседний запрос успел вставить документ и записать своё уведомление
         CertificateRepo.create = real_create
         real_create(self, **kw)
-        NotificationRepo(self.db).create(uid, "certificate_issued", {})
+        NotificationRepo(self.db).create(uid, "certificate_issued", {}, "p1")
         self.db.flush()
         return None
 

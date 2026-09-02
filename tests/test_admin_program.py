@@ -174,7 +174,7 @@ def test_module_with_other_peoples_data_is_not_deleted(client, client2, sms):
     teacher = user_id(client)
     make_enrollment(teacher, course.id)
     make_progress(teacher, lesson.id)
-    seed(QuizAttempt(user_id=teacher, quiz_id=quiz.id))
+    seed(QuizAttempt(user_id=teacher, quiz_id=quiz.id, platform="p1"))
     make_submission(teacher, task.id)
 
     login_admin(client2, sms)

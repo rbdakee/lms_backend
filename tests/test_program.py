@@ -168,8 +168,16 @@ def test_program_hides_hidden_quiz_and_task(client, sms):
     make_enrollment(uid, course.id)
     # Скрытое человек успел пройти: правило одно на числитель и знаменатель —
     # из обоих оно выпадает целиком, иначе проценты уедут
-    seed(QuizAttempt(user_id=uid, quiz_id=hidden_quiz.id, finished_at=now_utc(), passed=True))
-    seed(Submission(user_id=uid, task_id=hidden_task.id, status="accepted"))
+    seed(
+        QuizAttempt(
+            user_id=uid,
+            quiz_id=hidden_quiz.id,
+            finished_at=now_utc(),
+            passed=True,
+            platform="p1",
+        )
+    )
+    seed(Submission(user_id=uid, task_id=hidden_task.id, status="accepted", platform="p1"))
 
     program = client.get(f"/courses/{course.id}/program").json()["program"]
     assert statuses(program) == [("Урок", "available")]
@@ -236,9 +244,25 @@ def test_done_needs_counted_passed_attempt_and_accepted_task(client, sms):
     uid = user_id(client)
     make_enrollment(uid, course.id)
     # Сценариев сессии 5 ещё нет — попытки и сдачи кладём в базу напрямую
-    seed(QuizAttempt(user_id=uid, quiz_id=passed.id, finished_at=now_utc(), passed=True))
-    seed(QuizAttempt(user_id=uid, quiz_id=unfinished.id, passed=True))
-    seed(QuizAttempt(user_id=uid, quiz_id=failed.id, finished_at=now_utc(), passed=False))
+    seed(
+        QuizAttempt(
+            user_id=uid,
+            quiz_id=passed.id,
+            finished_at=now_utc(),
+            passed=True,
+            platform="p1",
+        )
+    )
+    seed(QuizAttempt(user_id=uid, quiz_id=unfinished.id, passed=True, platform="p1"))
+    seed(
+        QuizAttempt(
+            user_id=uid,
+            quiz_id=failed.id,
+            finished_at=now_utc(),
+            passed=False,
+            platform="p1",
+        )
+    )
     seed(
         QuizAttempt(
             user_id=uid,
@@ -246,10 +270,11 @@ def test_done_needs_counted_passed_attempt_and_accepted_task(client, sms):
             finished_at=now_utc(),
             passed=True,
             is_counted=False,
+            platform="p1",
         )
     )
-    seed(Submission(user_id=uid, task_id=accepted.id, status="accepted"))
-    seed(Submission(user_id=uid, task_id=pending.id, status="pending"))
+    seed(Submission(user_id=uid, task_id=accepted.id, status="accepted", platform="p1"))
+    seed(Submission(user_id=uid, task_id=pending.id, status="pending", platform="p1"))
 
     program = client.get(f"/courses/{course.id}/program").json()["program"]
     assert statuses(program) == [

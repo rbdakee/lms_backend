@@ -372,11 +372,19 @@ class CourseRepo(CourseVisibility):
         )
         return dict(rows.all())
 
-    def students_count(self, course_ids: list[int]) -> dict[int, int]:
-        """Действующие enrollment по курсам — {course_id: count}."""
+    def students_count(self, course_ids: list[int], platform: str) -> dict[int, int]:
+        """Действующие enrollment по курсам — {course_id: count}.
+
+        Считаются только доступы своей площадки: число под карточкой в каталоге
+        — это «сколько учится здесь», а не сумма по обеим площадкам.
+        """
         rows = self.db.execute(
             select(Enrollment.course_id, func.count())
-            .where(Enrollment.course_id.in_(course_ids), Enrollment.revoked_at.is_(None))
+            .where(
+                Enrollment.course_id.in_(course_ids),
+                Enrollment.platform == platform,
+                Enrollment.revoked_at.is_(None),
+            )
             .group_by(Enrollment.course_id)
         )
         return dict(rows.all())
@@ -604,17 +612,19 @@ class AttemptRepo(CourseVisibility):
     def __init__(self, db: DbSession):
         self.db = db
 
-    def active_for(self, user_id: int, quiz_id: int) -> QuizAttempt | None:
-        """Незавершённая попытка теста. Она одна: новую не начать, пока эта идёт."""
+    def active_for(self, user_id: int, quiz_id: int, platform: str) -> QuizAttempt | None:
+        """Незавершённая попытка теста своей площадки. Она одна: новую
+        не начать, пока эта идёт, — но на соседней площадке идёт своя."""
         return self.db.scalar(
             select(QuizAttempt).where(
                 QuizAttempt.user_id == user_id,
                 QuizAttempt.quiz_id == quiz_id,
+                QuizAttempt.platform == platform,
                 QuizAttempt.finished_at.is_(None),
             )
         )
 
-    def finished_for(self, user_id: int, quiz_id: int) -> list[QuizAttempt]:
+    def finished_for(self, user_id: int, quiz_id: int, platform: str) -> list[QuizAttempt]:
         """История попыток, старые сверху — в этом порядке её рисует экран."""
         return list(
             self.db.scalars(
@@ -622,6 +632,7 @@ class AttemptRepo(CourseVisibility):
                 .where(
                     QuizAttempt.user_id == user_id,
                     QuizAttempt.quiz_id == quiz_id,
+                    QuizAttempt.platform == platform,
                     QuizAttempt.finished_at.is_not(None),
                 )
                 .order_by(QuizAttempt.started_at, QuizAttempt.id)
@@ -629,10 +640,12 @@ class AttemptRepo(CourseVisibility):
         )
 
     def own_with_quiz(
-        self, attempt_id: int, user_id: int
+        self, attempt_id: int, user_id: int, platform: str
     ) -> tuple[QuizAttempt, Quiz, Course] | None:
         """Своя попытка вместе с тестом и курсом. Чужая не находится вовсе:
-        попытки личные, и их id не публикуются — отсюда 404, а не 403."""
+        попытки личные, и их id не публикуются — отсюда 404, а не 403.
+        Своя попытка с соседней площадки здесь тоже не находится: разбор
+        открывается там, где тест проходили."""
         row = self.db.execute(
             select(QuizAttempt, Quiz, Course)
             .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
@@ -641,13 +654,20 @@ class AttemptRepo(CourseVisibility):
             .where(
                 QuizAttempt.id == attempt_id,
                 QuizAttempt.user_id == user_id,
+                QuizAttempt.platform == platform,
                 self.visible_course(),
             )
         ).first()
         return (row[0], row[1], row[2]) if row is not None else None
 
     def create(
-        self, user_id: int, quiz_id: int, question_order: list[int], *, is_counted: bool
+        self,
+        user_id: int,
+        quiz_id: int,
+        question_order: list[int],
+        platform: str,
+        *,
+        is_counted: bool,
     ) -> QuizAttempt | None:
         """Новая попытка. None — один из частичных уникальных индексов не
         пустил вторую: зачётную у непересдаваемого или активную у любого.
@@ -664,6 +684,7 @@ class AttemptRepo(CourseVisibility):
             started_at=now_utc(),
             question_order=question_order,
             is_counted=is_counted,
+            platform=platform,
         )
         try:
             # SAVEPOINT: откатывать всю транзакцию запроса из-за проигранной
@@ -675,11 +696,12 @@ class AttemptRepo(CourseVisibility):
             return None
         return attempt
 
-    def counted_for(self, user_id: int, quiz_id: int) -> QuizAttempt | None:
+    def counted_for(self, user_id: int, quiz_id: int, platform: str) -> QuizAttempt | None:
         return self.db.scalar(
             select(QuizAttempt).where(
                 QuizAttempt.user_id == user_id,
                 QuizAttempt.quiz_id == quiz_id,
+                QuizAttempt.platform == platform,
                 QuizAttempt.is_counted.is_(True),
             )
         )
@@ -690,12 +712,17 @@ class AttemptRepo(CourseVisibility):
         Порядок обязателен: сперва снять зачёт со старой, потом поставить
         на эту, и всё в одной транзакции — иначе частичный уникальный индекс
         не пустит вторую зачётную даже на миг.
+
+        Площадка берётся у самой попытки: зачётных попыток у общего курса
+        две, по одной на площадку, и снять зачёт с чужой значит отобрать
+        у человека сданный тест на соседнем сайте.
         """
         self.db.execute(
             update(QuizAttempt)
             .where(
                 QuizAttempt.user_id == attempt.user_id,
                 QuizAttempt.quiz_id == attempt.quiz_id,
+                QuizAttempt.platform == attempt.platform,
                 QuizAttempt.id != attempt.id,
                 QuizAttempt.is_counted.is_(True),
             )
@@ -727,7 +754,11 @@ class AttemptRepo(CourseVisibility):
     def counted_for_quiz(self, course_id: int, quiz_id: int) -> list[QuizAttempt]:
         """Зачётные завершённые попытки одного теста у действующих участников
         курса — из них считается средний балл в отчёте. Отозванный доступ
-        в среднее не идёт: его нет и в `granted` (CONTRACT, сессия 6)."""
+        в среднее не идёт: его нет и в `granted` (CONTRACT, сессия 6).
+
+        Площадка в условии join, а не в фильтре: отчёт админа считает обе,
+        но у человека с доступом на двух площадках каждая попытка склеилась
+        бы с двумя доступами и попала в среднее дважды."""
         return list(
             self.db.scalars(
                 select(QuizAttempt)
@@ -736,6 +767,7 @@ class AttemptRepo(CourseVisibility):
                     and_(
                         Enrollment.user_id == QuizAttempt.user_id,
                         Enrollment.course_id == course_id,
+                        Enrollment.platform == QuizAttempt.platform,
                         Enrollment.revoked_at.is_(None),
                     ),
                 )
@@ -809,34 +841,47 @@ class SubmissionRepo:
     def by_id(self, submission_id: int) -> Submission | None:
         return self.db.get(Submission, submission_id)
 
-    def last_for(self, user_id: int, task_id: int) -> Submission | None:
+    def last_for(self, user_id: int, task_id: int, platform: str) -> Submission | None:
         """Последняя сдача пары: её статус — и есть статус задания на экране."""
         return self.db.scalar(
             select(Submission)
-            .where(Submission.user_id == user_id, Submission.task_id == task_id)
+            .where(
+                Submission.user_id == user_id,
+                Submission.task_id == task_id,
+                Submission.platform == platform,
+            )
             .order_by(Submission.created_at.desc(), Submission.id.desc())
             .limit(1)
         )
 
-    def history_for(self, user_id: int, task_id: int) -> list[Submission]:
+    def history_for(self, user_id: int, task_id: int, platform: str) -> list[Submission]:
         """История сдач, свежие сверху — в этом порядке её рисует экран."""
         return list(
             self.db.scalars(
                 select(Submission)
-                .where(Submission.user_id == user_id, Submission.task_id == task_id)
+                .where(
+                    Submission.user_id == user_id,
+                    Submission.task_id == task_id,
+                    Submission.platform == platform,
+                )
                 .order_by(Submission.created_at.desc(), Submission.id.desc())
             )
         )
 
     def earlier_than(self, submission: Submission) -> list[Submission]:
         """Прежние сдачи той же пары, свежие сверху: history карточки проверки
-        показывает, что человек присылал до этой работы, — саму работу нет."""
+        показывает, что человек присылал до этой работы, — саму работу нет.
+
+        Площадка берётся у самой работы, а не у запроса: админка одна на обе,
+        и карточка проверки показывает историю именно этой работы.
+        """
         return list(
             self.db.scalars(
                 select(Submission)
                 .where(
                     Submission.user_id == submission.user_id,
                     Submission.task_id == submission.task_id,
+                    Submission.platform == submission.platform,
                     tuple_(Submission.created_at, Submission.id)
                     < tuple_(submission.created_at, submission.id),
                 )
@@ -845,14 +890,16 @@ class SubmissionRepo:
         )
 
     def create(
-        self, user_id: int, task_id: int, text: str | None, files: list
+        self, user_id: int, task_id: int, text: str | None, files: list, platform: str
     ) -> Submission | None:
         """Каждая отправка — новая строка: история сдач не переписывается,
         и вердикт остаётся при той работе, к которой он был написан.
 
         None — частичный индекс не пустил вторую pending-строку: гонка двух
         одновременных отправок, сценарий отвечает «работа уже на проверке»."""
-        submission = Submission(user_id=user_id, task_id=task_id, text=text, files=files)
+        submission = Submission(
+            user_id=user_id, task_id=task_id, text=text, files=files, platform=platform
+        )
         try:
             # SAVEPOINT: проигранная гонка не должна откатывать всю транзакцию
             with self.db.begin_nested():
@@ -891,7 +938,11 @@ class SubmissionRepo:
 
     def attempt_number(self, submission: Submission) -> int:
         """Номер сдачи в паре учитель+задание: 1 — первая работа, больше —
-        доработка. Порядок тот же, что в очереди, — по времени создания."""
+        доработка. Порядок тот же, что в очереди, — по времени создания.
+
+        Площадка — у самой работы: сдачи с соседней площадки в этот номер
+        не входят, иначе первая работа второй площадки стала бы «доработкой».
+        """
         return (
             self.db.scalar(
                 select(func.count())
@@ -899,6 +950,7 @@ class SubmissionRepo:
                 .where(
                     Submission.user_id == submission.user_id,
                     Submission.task_id == submission.task_id,
+                    Submission.platform == submission.platform,
                     tuple_(Submission.created_at, Submission.id)
                     <= tuple_(submission.created_at, submission.id),
                 )
@@ -947,12 +999,14 @@ class SubmissionRepo:
             or 0
         )
         # Номер сдачи считает база одним окном на всю страницу: считать его
-        # запросом на каждую строку — это N+1 на самом ходовом экране админки
+        # запросом на каждую строку — это N+1 на самом ходовом экране админки.
+        # Площадка в разбиении — та же, что в `attempt_number`: очередь
+        # и карточка проверки обязаны показывать один и тот же номер.
         numbered = select(
             Submission.id.label("submission_id"),
             func.row_number()
             .over(
-                partition_by=(Submission.user_id, Submission.task_id),
+                partition_by=(Submission.user_id, Submission.task_id, Submission.platform),
                 order_by=(Submission.created_at, Submission.id),
             )
             .label("attempt_number"),
@@ -1010,21 +1064,33 @@ class CertificateRepo:
     def __init__(self, db: DbSession):
         self.db = db
 
-    def active_for(self, user_id: int, course_id: int) -> Certificate | None:
+    def active_for(self, user_id: int, course_id: int, platform: str) -> Certificate | None:
         """Действующий сертификат по курсу: он закрывает новые попытки тестов.
-        Отозванный не считается — результат снова можно менять."""
+        Отозванный не считается — результат снова можно менять. Сертификат
+        соседней площадки попытки здесь не закрывает: там своя учёба."""
         return self.db.scalar(
             select(Certificate).where(
                 Certificate.user_id == user_id,
                 Certificate.course_id == course_id,
+                Certificate.platform == platform,
                 Certificate.revoked_at.is_(None),
             )
         )
 
-    def by_number(self, number: str) -> Certificate | None:
+    def by_number(self, number: str, platform: str) -> Certificate | None:
         """Публичная проверка ищет по номеру и находит в том числе отозванный:
-        запись в реестре есть, просто документ недействителен."""
-        return self.db.scalar(select(Certificate).where(Certificate.number == number))
+        запись в реестре есть, просто документ недействителен.
+
+        Площадка отсекается здесь, а не в сценарии: чужой номер обязан быть
+        неотличим от несуществующего — тот же 404 и тот же текст, иначе
+        проверка сама подсказывает, что документ где-то есть
+        (PLATFORMS_BRIEF, решение 10).
+        """
+        return self.db.scalar(
+            select(Certificate).where(
+                Certificate.number == number, Certificate.platform == platform
+            )
+        )
 
     def by_id(self, certificate_id: int) -> Certificate | None:
         """Документ по id — вместе с отозванным.
@@ -1036,12 +1102,17 @@ class CertificateRepo:
         """
         return self.db.get(Certificate, certificate_id)
 
-    def list_for_user(self, user_id: int) -> list[Certificate]:
-        """Свои сертификаты, свежие сверху. Отозванные в кабинет не попадают."""
+    def list_for_user(self, user_id: int, platform: str) -> list[Certificate]:
+        """Свои сертификаты этой площадки, свежие сверху. Отозванные в кабинет
+        не попадают."""
         return list(
             self.db.scalars(
                 select(Certificate)
-                .where(Certificate.user_id == user_id, Certificate.revoked_at.is_(None))
+                .where(
+                    Certificate.user_id == user_id,
+                    Certificate.platform == platform,
+                    Certificate.revoked_at.is_(None),
+                )
                 .order_by(Certificate.issued_at.desc(), Certificate.id.desc())
             )
         )
@@ -1056,6 +1127,7 @@ class CertificateRepo:
         course_title: str,
         hours: int,
         lang: str,
+        platform: str,
     ) -> Certificate | None:
         """Новый сертификат. None — вставку отбила база: либо номер уже занят,
         либо соседний запрос выдал сертификат первым (uq_certificate_active).
@@ -1070,6 +1142,7 @@ class CertificateRepo:
             course_title=course_title,
             hours=hours,
             lang=lang,
+            platform=platform,
         )
         try:
             # SAVEPOINT: откатывать всю транзакцию запроса из-за проигранной
@@ -1108,7 +1181,7 @@ class CertificateRepo:
             )
         )
 
-    def unfinished_attempt(self, user_id: int, course_id: int) -> bool:
+    def unfinished_attempt(self, user_id: int, course_id: int, platform: str) -> bool:
         """Идёт ли по курсу незавершённая попытка теста: её finish ещё может
         поменять зачёт, поэтому выдача ждёт (CONTRACT, сессия 6).
 
@@ -1124,6 +1197,7 @@ class CertificateRepo:
                 .where(
                     Module.course_id == course_id,
                     QuizAttempt.user_id == user_id,
+                    QuizAttempt.platform == platform,
                     Quiz.is_hidden.is_(False),
                     QuizAttempt.finished_at.is_(None),
                 )
@@ -1138,7 +1212,7 @@ class ProgressRepo:
         self.db = db
 
     def done_keys(
-        self, user_id: int, course_id: int, *, include_hidden: bool = False
+        self, user_id: int, course_id: int, platform: str, *, include_hidden: bool = False
     ) -> set[tuple[str, int]]:
         """Пройденное в курсе — ключами («lesson» | «quiz» | «task», id):
         отмеченные уроки, тесты со сданной зачётной попыткой, зачтённые задания.
@@ -1147,10 +1221,25 @@ class ProgressRepo:
         и скрытый элемент выпадает разом из done и из total. `include_hidden`
         нужен чек-листу условий сертификата: пройденное скрытие не отбирает,
         и решает это домен (`application/certificates.py`).
+
+        Прогресс считается по своей площадке: общий курс на второй изучается
+        заново, с нуля (PLATFORMS_BRIEF, решение 2).
         """
-        lesson_conds = [Module.course_id == course_id, LessonProgress.user_id == user_id]
-        quiz_conds = [Module.course_id == course_id, QuizAttempt.user_id == user_id]
-        task_conds = [Module.course_id == course_id, Submission.user_id == user_id]
+        lesson_conds = [
+            Module.course_id == course_id,
+            LessonProgress.user_id == user_id,
+            LessonProgress.platform == platform,
+        ]
+        quiz_conds = [
+            Module.course_id == course_id,
+            QuizAttempt.user_id == user_id,
+            QuizAttempt.platform == platform,
+        ]
+        task_conds = [
+            Module.course_id == course_id,
+            Submission.user_id == user_id,
+            Submission.platform == platform,
+        ]
         if not include_hidden:
             lesson_conds.append(Lesson.is_hidden.is_(False))
             quiz_conds.append(Quiz.is_hidden.is_(False))
@@ -1200,6 +1289,10 @@ class ProgressRepo:
 
         UNION, а не UNION ALL: два зачтённых ответа по одному заданию — это
         всё равно одно пройденное задание, как и в множестве `done_keys`.
+
+        Отчёт считает обе площадки разом — админка одна на обе, — но площадка
+        стоит в условии каждого join: без неё прогресс человека, купившего
+        общий курс дважды, склеился бы с двумя доступами и удвоил числа.
         """
         lessons = (
             select(
@@ -1216,6 +1309,7 @@ class ProgressRepo:
                 and_(
                     Enrollment.user_id == LessonProgress.user_id,
                     Enrollment.course_id == Module.course_id,
+                    Enrollment.platform == LessonProgress.platform,
                     Enrollment.revoked_at.is_(None),
                 ),
             )
@@ -1236,6 +1330,7 @@ class ProgressRepo:
                 and_(
                     Enrollment.user_id == QuizAttempt.user_id,
                     Enrollment.course_id == Module.course_id,
+                    Enrollment.platform == QuizAttempt.platform,
                     Enrollment.revoked_at.is_(None),
                 ),
             )
@@ -1262,6 +1357,7 @@ class ProgressRepo:
                 and_(
                     Enrollment.user_id == Submission.user_id,
                     Enrollment.course_id == Module.course_id,
+                    Enrollment.platform == Submission.platform,
                     Enrollment.revoked_at.is_(None),
                 ),
             )
@@ -1316,18 +1412,25 @@ class ProgressRepo:
         )
         return {(kind, item_id): count for kind, item_id, count in rows}
 
-    def is_lesson_done(self, user_id: int, lesson_id: int) -> bool:
+    def is_lesson_done(self, user_id: int, lesson_id: int, platform: str) -> bool:
         return (
-            self.db.get(LessonProgress, {"user_id": user_id, "lesson_id": lesson_id})
+            self.db.get(
+                LessonProgress,
+                {"user_id": user_id, "lesson_id": lesson_id, "platform": platform},
+            )
             is not None
         )
 
-    def mark_lesson_done(self, user_id: int, lesson_id: int) -> None:
+    def mark_lesson_done(self, user_id: int, lesson_id: int, platform: str) -> None:
         """Отметка «урок пройден». Идемпотентна на уровне базы: повторный вызов
-        и двойной клик не сдвигают completed_at первой отметки."""
+        и двойной клик не сдвигают completed_at первой отметки.
+
+        Площадка входит в первичный ключ, а значит и в конфликтный: тот же
+        урок на второй площадке — вторая отметка, а не повтор первой.
+        """
         self.db.execute(
             pg_insert(LessonProgress)
-            .values(user_id=user_id, lesson_id=lesson_id)
+            .values(user_id=user_id, lesson_id=lesson_id, platform=platform)
             .on_conflict_do_nothing()
         )
 
@@ -1412,8 +1515,16 @@ class ReviewRepo:
         )
         return [(review, author, course) for review, author, course in rows], total
 
-    def create(self, course_id: int, user_id: int, rating: int, text: str) -> Review:
-        review = Review(course_id=course_id, user_id=user_id, rating=rating, text=text)
+    def create(
+        self, course_id: int, user_id: int, rating: int, text: str, platform: str
+    ) -> Review:
+        review = Review(
+            course_id=course_id,
+            user_id=user_id,
+            rating=rating,
+            text=text,
+            platform=platform,
+        )
         self.db.add(review)
         self.db.flush()
         return review
@@ -1462,29 +1573,43 @@ class LeadRepo:
     def by_id(self, lead_id: int) -> Lead | None:
         return self.db.get(Lead, lead_id)
 
-    def open_for(self, user_id: int, course_id: int) -> Lead | None:
+    def open_for(self, user_id: int, course_id: int, platform: str) -> Lead | None:
+        # Заявка по одной на площадку: на второй тот же курс покупают отдельно
+        # (PLATFORMS_BRIEF, решение 15)
         return self.db.scalar(
             select(Lead)
             .where(
                 Lead.user_id == user_id,
                 Lead.course_id == course_id,
+                Lead.platform == platform,
                 Lead.status.in_(OPEN_LEAD_STATUSES),
             )
             .order_by(Lead.id.desc())
             .limit(1)
         )
 
-    def open_for_user(self, user_id: int) -> list[tuple[Lead, Course]]:
+    def open_for_user(self, user_id: int, platform: str) -> list[tuple[Lead, Course]]:
         rows = self.db.execute(
             select(Lead, Course)
             .join(Course, Course.id == Lead.course_id)
-            .where(Lead.user_id == user_id, Lead.status.in_(OPEN_LEAD_STATUSES))
+            .where(
+                Lead.user_id == user_id,
+                Lead.platform == platform,
+                Lead.status.in_(OPEN_LEAD_STATUSES),
+            )
             .order_by(Lead.created_at.desc(), Lead.id.desc())
         )
         return [(lead, course) for lead, course in rows]
 
-    def create(self, user_id: int, course_id: int, price_snapshot: int | None) -> Lead:
-        lead = Lead(user_id=user_id, course_id=course_id, price_snapshot=price_snapshot)
+    def create(
+        self, user_id: int, course_id: int, price_snapshot: int | None, platform: str
+    ) -> Lead:
+        lead = Lead(
+            user_id=user_id,
+            course_id=course_id,
+            price_snapshot=price_snapshot,
+            platform=platform,
+        )
         self.db.add(lead)
         self.db.flush()
         return lead
@@ -1542,28 +1667,38 @@ class EnrollmentRepo:
     def by_id(self, enrollment_id: int) -> Enrollment | None:
         return self.db.get(Enrollment, enrollment_id)
 
-    def active_for(self, user_id: int, course_id: int) -> Enrollment | None:
+    def active_for(self, user_id: int, course_id: int, platform: str) -> Enrollment | None:
+        # Доступ, выданный на одной площадке, курса на другой не открывает
+        # (PLATFORMS_BRIEF, решение 2)
         return self.db.scalar(
             select(Enrollment).where(
                 Enrollment.user_id == user_id,
                 Enrollment.course_id == course_id,
+                Enrollment.platform == platform,
                 Enrollment.revoked_at.is_(None),
             )
         )
 
-    def by_user_course(self, user_id: int, course_id: int) -> Enrollment | None:
-        # Включая отозванный: unique (user_id, course_id) — строка всегда одна
+    def by_user_course(self, user_id: int, course_id: int, platform: str) -> Enrollment | None:
+        # Включая отозванный: unique (user_id, course_id, platform) — на своей
+        # площадке строка всегда одна
         return self.db.scalar(
             select(Enrollment).where(
-                Enrollment.user_id == user_id, Enrollment.course_id == course_id
+                Enrollment.user_id == user_id,
+                Enrollment.course_id == course_id,
+                Enrollment.platform == platform,
             )
         )
 
-    def active_for_user(self, user_id: int) -> list[tuple[Enrollment, Course]]:
+    def active_for_user(self, user_id: int, platform: str) -> list[tuple[Enrollment, Course]]:
         rows = self.db.execute(
             select(Enrollment, Course)
             .join(Course, Course.id == Enrollment.course_id)
-            .where(Enrollment.user_id == user_id, Enrollment.revoked_at.is_(None))
+            .where(
+                Enrollment.user_id == user_id,
+                Enrollment.platform == platform,
+                Enrollment.revoked_at.is_(None),
+            )
             .order_by(Enrollment.granted_at.desc(), Enrollment.id.desc())
         )
         return [(enrollment, course) for enrollment, course in rows]
@@ -1639,10 +1774,20 @@ class EnrollmentRepo:
         return users, total
 
     def create(
-        self, user_id: int, course_id: int, *, granted_by: int, paid_note: str | None
+        self,
+        user_id: int,
+        course_id: int,
+        platform: str,
+        *,
+        granted_by: int,
+        paid_note: str | None,
     ) -> Enrollment:
         enrollment = Enrollment(
-            user_id=user_id, course_id=course_id, granted_by=granted_by, paid_note=paid_note
+            user_id=user_id,
+            course_id=course_id,
+            platform=platform,
+            granted_by=granted_by,
+            paid_note=paid_note,
         )
         self.db.add(enrollment)
         self.db.flush()
@@ -1653,8 +1798,13 @@ class NotificationRepo:
     def __init__(self, db: DbSession):
         self.db = db
 
-    def create(self, user_id: int, type_: str, params: dict) -> Notification:
-        notification = Notification(user_id=user_id, type=type_, params=params)
+    def create(self, user_id: int, type_: str, params: dict, platform: str) -> Notification:
+        # Площадка решает, на какой домен ведёт ссылка из колокольчика, поэтому
+        # берётся у той строки, о которой уведомление, а не у запроса: половину
+        # уведомлений заводит админка, у которой площадки нет вовсе
+        notification = Notification(
+            user_id=user_id, type=type_, params=params, platform=platform
+        )
         self.db.add(notification)
         self.db.flush()
         return notification
@@ -1757,7 +1907,14 @@ class ThreadMessageRepo:
         return by_root
 
     def create(
-        self, *, lesson_id: int, course_id: int, user_id: int, text_: str, parent_id: int | None
+        self,
+        *,
+        lesson_id: int,
+        course_id: int,
+        user_id: int,
+        text_: str,
+        parent_id: int | None,
+        platform: str,
     ) -> ThreadMessage:
         # course_id пишется рядом с lesson_id: админский экран фильтрует по курсу,
         # а ходить к нему через lesson → module → course на каждый запрос дорого
@@ -1767,6 +1924,7 @@ class ThreadMessageRepo:
             user_id=user_id,
             text=text_,
             parent_id=parent_id,
+            platform=platform,
         )
         self.db.add(message)
         self.db.flush()

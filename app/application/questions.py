@@ -63,8 +63,10 @@ class QuestionsService:
 
     # -- GET /lessons/{id}/questions ------------------------------------
 
-    def lesson_questions(self, user: User, lesson_id: int, offset: int, limit: int) -> dict:
-        self._accessible(user, lesson_id)
+    def lesson_questions(
+        self, user: User, lesson_id: int, offset: int, limit: int, platform: str
+    ) -> dict:
+        self._accessible(user, lesson_id, platform)
         roots, total = self.messages.roots_page(lesson_id, offset, limit)
         replies = self.messages.replies_for([root.id for root, _ in roots])
         return {
@@ -86,9 +88,9 @@ class QuestionsService:
     # -- POST /lessons/{id}/questions -----------------------------------
 
     def add_message(
-        self, user: User, lesson_id: int, text: str, parent_id: int | None
+        self, user: User, lesson_id: int, text: str, parent_id: int | None, platform: str
     ) -> dict:
-        lesson, course = self._accessible(user, lesson_id)
+        lesson, course = self._accessible(user, lesson_id, platform)
         # Лимит стоит до разбора текста: иначе спам мимо валидации бесплатен.
         # Админа он не касается: тот отвечает из очереди вопросов подряд
         # и упёрся бы в потолок на четвёртом ответе (CONTRACT, сессия 6).
@@ -106,6 +108,10 @@ class QuestionsService:
             raise FieldError("text", f"Не длиннее {TEXT_MAX} символов")
 
         parent = self._parent(lesson_id, parent_id)
+        # Ответ ложится на площадку своего вопроса, а не запроса: админ отвечает
+        # из общей очереди, и тред обязан остаться целым на той площадке,
+        # где вопрос задан. Корень — площадка запроса
+        message_platform = parent.platform if parent is not None else platform
         if course.id == self.preview_course_id:
             # Ранний выход: ни сообщения в треде, ни уведомления автору вопроса
             # (BACKEND_NOTES, раздел 12). Режим привязан к курсу, поэтому ответы
@@ -119,6 +125,7 @@ class QuestionsService:
                 user_id=user.id,
                 text=text,
                 created_at=now_utc(),
+                platform=message_platform,
             )
             return {**_message_out(preview_message, user), "replies": []}
         message = self.messages.create(
@@ -127,6 +134,7 @@ class QuestionsService:
             user_id=user.id,
             text_=text,
             parent_id=parent.id if parent is not None else None,
+            platform=message_platform,
         )
         if parent is not None and parent.user_id != user.id:
             # На собственный ответ уведомление не приходит (CONTRACT, сессия 6)
@@ -139,6 +147,7 @@ class QuestionsService:
                     "course_id": course.id,
                     "message_id": message.id,
                 },
+                parent.platform,
             )
         return {**_message_out(message, user), "replies": []}
 
@@ -188,7 +197,7 @@ class QuestionsService:
 
     # -- общее -----------------------------------------------------------
 
-    def _accessible(self, user: User, lesson_id: int) -> tuple[Lesson, Course]:
+    def _accessible(self, user: User, lesson_id: int, platform: str) -> tuple[Lesson, Course]:
         """Те же правила, что у самого урока (`application/lessons.py`):
         сначала существование, потом доступ, — поэтому у чужого курса
         приходит 403, а не 404.
@@ -200,7 +209,10 @@ class QuestionsService:
         if found is None:
             raise NotFoundError("Урок не найден")
         lesson, course = found
-        if not user.is_admin and self.enrollments.active_for(user.id, course.id) is None:
+        if (
+            not user.is_admin
+            and self.enrollments.active_for(user.id, course.id, platform) is None
+        ):
             raise ForbiddenError(QUESTIONS_DENIED)
         return lesson, course
 

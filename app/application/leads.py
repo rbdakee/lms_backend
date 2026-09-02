@@ -58,7 +58,7 @@ class LeadsService:
 
     # -- заявка учителя -------------------------------------------------
 
-    def create_lead(self, user: User, course_id: int) -> dict:
+    def create_lead(self, user: User, course_id: int, platform: str) -> dict:
         course = self.courses.visible_by_id(course_id)
         if course is None:
             raise NotFoundError("Курс не найден")
@@ -77,20 +77,21 @@ class LeadsService:
                     price_snapshot=course.price,
                     status="new",
                     created_at=now_utc(),
+                    platform=platform,
                 )
             )
-        if self.enrollments.active_for(user.id, course.id) is not None:
+        if self.enrollments.active_for(user.id, course.id, platform) is not None:
             raise AlreadyEnrolledError()
         if course.status == "closed":
             raise EnrollmentClosedError()
 
-        lead = self.leads.open_for(user.id, course.id)
+        lead = self.leads.open_for(user.id, course.id, platform)
         if lead is not None:
             # Повторная кнопка — напоминание админу, а не дубль заявки
             lead.reminded_at = now_utc()
             return self._lead_out(lead)
 
-        lead = self.leads.create(user.id, course.id, course.price)
+        lead = self.leads.create(user.id, course.id, course.price, platform)
         self.commit()
         try:
             # Без ФИО и телефона: подробности админ откроет по кнопке в
@@ -194,8 +195,16 @@ class LeadsService:
     # -- выдача доступа -------------------------------------------------
 
     def grant(
-        self, admin: User, user_id: int, course_id: int, paid: bool, note: str | None
+        self,
+        admin: User,
+        user_id: int,
+        course_id: int,
+        paid: bool,
+        note: str | None,
+        platform: str,
     ) -> dict:
+        # Площадка приходит из тела запроса, а не из `Origin`: админка одна
+        # на обе, и её источник платформы не несёт (решение владельца).
         teacher = self.users.by_id(user_id)
         if teacher is None:
             raise NotFoundError("Учитель не найден")
@@ -203,15 +212,16 @@ class LeadsService:
         if course is None:
             raise NotFoundError("Курс не найден")
 
-        existing = self.enrollments.by_user_course(user_id, course_id)
+        existing = self.enrollments.by_user_course(user_id, course_id, platform)
         if existing is not None and existing.revoked_at is None:
             raise AlreadyEnrolledError()
 
         # Непустой paid_note (хотя бы "") и есть отметка «оплата получена»
         paid_note = (note or "") if paid else None
         if existing is not None:
-            # Повторная выдача после отзыва доступа: строка одна на пару
-            # user+course (unique), поэтому снимаем revoked_at, а не плодим новую
+            # Повторная выдача после отзыва доступа: строка одна на тройку
+            # user+course+platform (unique), поэтому снимаем revoked_at,
+            # а не плодим новую
             existing.revoked_at = None
             existing.granted_by = admin.id
             existing.granted_at = now_utc()
@@ -219,26 +229,30 @@ class LeadsService:
             enrollment = existing
         else:
             enrollment = self.enrollments.create(
-                user_id, course_id, granted_by=admin.id, paid_note=paid_note
+                user_id, course_id, platform, granted_by=admin.id, paid_note=paid_note
             )
 
-        lead = self.leads.open_for(user_id, course_id)
+        lead = self.leads.open_for(user_id, course_id, platform)
         if lead is not None:
             lead.status = "granted"
             if not paid and note:
                 # Оплаты нет — комментарий остаётся в заявке, а не в enrollment
                 lead.note = f"{lead.note}\n{note}" if lead.note else note
 
-        # Учителю — колокольчик; текст не хранится, соберётся на его языке
+        # Учителю — колокольчик; текст не хранится, соберётся на его языке.
+        # Площадка — у созданного доступа: ссылка ведёт на тот сайт, где курс
+        # и открылся
         self.notifications.create(
             user_id,
             "access_granted",
             {"course_id": course_id, "course_title": course.title},
+            enrollment.platform,
         )
         return {
             "id": enrollment.id,
             "user_id": user_id,
             "course_id": course_id,
+            "platform": enrollment.platform,
             "granted_at": enrollment.granted_at,
             "paid": enrollment.paid_note is not None,
             "note": enrollment.paid_note,

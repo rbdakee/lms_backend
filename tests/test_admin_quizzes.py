@@ -75,6 +75,7 @@ def attempted(quiz, questions, user):
             finished_at=now_utc(),
             score=1,
             passed=True,
+            platform="p1",
         )
     )
 

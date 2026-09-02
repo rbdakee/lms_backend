@@ -264,8 +264,9 @@ def test_second_counted_attempt_blocked_by_index(client, sms):
 
     with OrmSession(get_engine()) as db:
         repo = AttemptRepo(db)
-        first = repo.create(uid, quiz.id, [single.id], is_counted=True)
-        second = repo.create(uid, quiz.id, [single.id], is_counted=True)
+        # Обе строки на одной площадке: индекс проверяется именно так
+        first = repo.create(uid, quiz.id, [single.id], "p1", is_counted=True)
+        second = repo.create(uid, quiz.id, [single.id], "p1", is_counted=True)
         db.commit()
 
     assert first is not None
@@ -577,6 +578,7 @@ def test_certificate_closes_new_attempts(client, sms):
             holder_name="Тестова Тест Тестовна",
             course_title="Курс",
             hours=72,
+            platform="p1",
         )
     )
 
@@ -611,6 +613,7 @@ def test_certificate_closes_retake_after_finish(client, sms):
             holder_name="Тестова Тест Тестовна",
             course_title="Курс",
             hours=72,
+            platform="p1",
         )
     )
 
@@ -846,8 +849,9 @@ def test_second_active_attempt_blocked_by_index(client, sms):
 
     with OrmSession(get_engine()) as db:
         repo = AttemptRepo(db)
-        first = repo.create(uid, quiz.id, [single.id], is_counted=False)
-        second = repo.create(uid, quiz.id, [single.id], is_counted=False)
+        # Обе строки на одной площадке: индекс проверяется именно так
+        first = repo.create(uid, quiz.id, [single.id], "p1", is_counted=False)
+        second = repo.create(uid, quiz.id, [single.id], "p1", is_counted=False)
         db.commit()
 
     assert first is not None

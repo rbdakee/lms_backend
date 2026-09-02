@@ -37,10 +37,11 @@ def patch_me(
 @router.get("/courses")
 def my_courses(
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CoursesService, Depends(deps.get_courses_service)],
 ) -> MyCoursesOut:
     # Курсы с прогрессом и открытые заявки — один ответ на весь экран /my
-    return MyCoursesOut(**svc.my_courses(user))
+    return MyCoursesOut(**svc.my_courses(user, platform))
 
 
 @router.get("/sessions")

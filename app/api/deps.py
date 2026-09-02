@@ -74,10 +74,13 @@ from app.application.telegram_bind import TelegramBindService
 from app.application.users import UsersService
 from app.config import Settings, get_settings
 from app.domain.errors import BlockedError, ForbiddenError, UnauthorizedError
+from app.domain.platform import DEFAULT_PLATFORM
 
 # Имя куки сессии зависит от приложения: у кабинета учителя и у админки
-# они разные, и на общем родительском домене два входа живут одновременно —
-# админом с одного номера, учителем с другого. Какое приложение спрашивает,
+# они разные, и в одном браузере два входа живут одновременно — админом
+# с одного номера, учителем с другого. Разные имена нужны и после перехода
+# на host-only куку: порт в домен куки не входит, и локально `localhost:3000`
+# с `localhost:3001` по-прежнему делят одну банку. Какое приложение спрашивает,
 # видно по `Origin`: он приходит от браузера на каждый запрос фронта
 # (все они кросс-доменные) и уже проверен CORS.
 COOKIE_NAME = "sid"
@@ -91,6 +94,17 @@ def cookie_name(request: Request) -> str:
     if origin and origin in get_settings().admin_origins:
         return ADMIN_COOKIE_NAME
     return COOKIE_NAME
+
+
+def platform_of(request: Request) -> str:
+    """Код площадки для этого запроса — по тому же `Origin`, что и имя куки.
+
+    Неизвестный источник и его отсутствие — первая площадка: так ходят curl,
+    тесты и админка, у которой площадки нет вовсе (она одна на обе). Дальше
+    платформа передаётся в сценарии параметром: домен не знает про запрос.
+    """
+    origin = request.headers.get("origin") or ""
+    return get_settings().platform_origins.get(origin, DEFAULT_PLATFORM)
 
 
 # last_seen_at пишем не чаще раза в 5 минут — не превращать каждый GET в UPDATE
@@ -676,6 +690,10 @@ def get_reports_service(
     )
 
 
+# Кука host-only: `domain` не задаётся вовсе. Общего родительского домена
+# у площадок больше нет, и каждая держит свою куку на своём домене
+# (PLATFORMS_BRIEF, решение 13). Аккаунт при этом один — вход тем же
+# телефоном и кодом, просто отдельный на каждом домене; SSO не делаем.
 def set_session_cookie(request: Request, response: Response, token: str, cfg: Settings) -> None:
     response.set_cookie(
         cookie_name(request),
@@ -684,7 +702,6 @@ def set_session_cookie(request: Request, response: Response, token: str, cfg: Se
         httponly=True,
         samesite="lax",
         secure=cfg.cookie_secure,
-        domain=cfg.cookie_domain,
         path="/",
     )
 
@@ -695,6 +712,5 @@ def clear_session_cookie(request: Request, response: Response, cfg: Settings) ->
         httponly=True,
         samesite="lax",
         secure=cfg.cookie_secure,
-        domain=cfg.cookie_domain,
         path="/",
     )
