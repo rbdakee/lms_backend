@@ -260,6 +260,9 @@ class TeachersAdminService:
                     "task_id": task.id,
                     "task_title": task.title,
                     "course_id": course_id,
+                    # Площадка сдачи: одно задание, сданное на обеих, — две
+                    # разные работы с разной судьбой проверки
+                    "platform": submission.platform,
                     "status": submission.status,
                     "created_at": submission.created_at,
                     "reviewed_at": submission.reviewed_at,
@@ -276,14 +279,17 @@ class TeachersAdminService:
         enrollment: Enrollment,
         course: Course,
         totals: dict[int, tuple[int, int]],
-        done: dict[int, tuple[int, int]],
+        done: dict[tuple[int, str], tuple[int, int]],
         granted_by_admins: set[int],
     ) -> dict:
         lessons_total, items_total = totals.get(course.id, (0, 0))
-        lessons_done, items_done = done.get(course.id, (0, 0))
+        # Прогресс берётся у пары «курс и площадка»: у человека с доступом
+        # на обеих их два, и сложенные вместе они дали бы больше ста процентов
+        lessons_done, items_done = done.get((course.id, enrollment.platform), (0, 0))
         return {
             "enrollment_id": enrollment.id,
             "course": {"id": course.id, "lang": course.lang, "title": course.title},
+            "platform": enrollment.platform,
             "granted_at": enrollment.granted_at,
             # Признак, а не имя выдавшего: ФИО админа карточке ни к чему,
             # actor_id остаётся в базе
@@ -299,23 +305,33 @@ class TeachersAdminService:
     def _quizzes_out(
         self, attempts: list[tuple[QuizAttempt, Quiz, Course]], certificates: list[Certificate]
     ) -> list[dict]:
-        """Вкладка «Тесты»: по строке на тест, внутри — все попытки.
+        """Вкладка «Тесты»: по строке на **тест и площадку**, внутри — попытки
+        этой площадки.
+
+        Строка не может быть просто тестом: доступ, прогресс и попытка
+        раздельные, и у купившего общий курс дважды один тест живёт двумя
+        независимыми жизнями — с разным итогом и разной судьбой пересдачи.
+        Сложенные в одну строку, они дали бы кнопку, которая горит зелёным
+        там, где сервер ответит 409.
 
         Тесты берутся из попыток: у теста, который человек не открывал,
         показывать нечего, и разрешать там тоже нечего.
         """
         issued = {
-            certificate.course_id
+            (certificate.course_id, certificate.platform)
             for certificate in certificates
             if certificate.revoked_at is None
         }
         max_scores = self.attempts.max_scores([attempt for attempt, _, _ in attempts])
-        by_quiz: dict[int, tuple[Quiz, Course, list[QuizAttempt]]] = {}
+        by_quiz: dict[tuple[int, str], tuple[Quiz, Course, list[QuizAttempt]]] = {}
         for attempt, quiz, course in attempts:
-            by_quiz.setdefault(quiz.id, (quiz, course, []))[2].append(attempt)
+            key = (quiz.id, attempt.platform)
+            by_quiz.setdefault(key, (quiz, course, []))[2].append(attempt)
         return [
-            self._quiz_out(quiz, course, rows, max_scores, course.id in issued)
-            for quiz, course, rows in by_quiz.values()
+            self._quiz_out(
+                quiz, course, platform, rows, max_scores, (course.id, platform) in issued
+            )
+            for (_, platform), (quiz, course, rows) in by_quiz.items()
         ]
 
     @classmethod
@@ -323,6 +339,7 @@ class TeachersAdminService:
         cls,
         quiz: Quiz,
         course: Course,
+        platform: str,
         attempts: list[QuizAttempt],
         max_scores: dict[int, int],
         certificate_issued: bool,
@@ -333,6 +350,9 @@ class TeachersAdminService:
             "title": quiz.title,
             "course_id": course.id,
             "course_title": course.title,
+            # Площадка строки: она же уходит телом пересдачи — то, что показано,
+            # и то, что ответит сервер, считаются по одной и той же площадке
+            "platform": platform,
             "retakable": quiz.retakable,
             "pass_score": quiz.pass_score,
             "can_allow_retake": blocker is None,
@@ -387,6 +407,8 @@ class TeachersAdminService:
             "id": certificate.id,
             "number": certificate.number,
             "course_id": certificate.course_id,
+            # Документов по одному курсу может быть два — по одному на площадку
+            "platform": certificate.platform,
             # Снимок на момент выдачи: курс переименуют — документ прежний
             "course_title": certificate.course_title,
             "hours": certificate.hours,

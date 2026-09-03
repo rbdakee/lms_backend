@@ -3110,9 +3110,15 @@ class TeacherAdminRepo:
         )
         return self._by_course(rows.all())
 
-    def done_counts(self, user_id: int, course_ids: list[int]) -> dict[int, tuple[int, int]]:
+    def done_counts(
+        self, user_id: int, course_ids: list[int]
+    ) -> dict[tuple[int, str], tuple[int, int]]:
         """Сколько видимых уроков и элементов программы человек прошёл в каждом
-        курсе — {course_id: (lessons, items)}.
+        курсе на каждой площадке — {(course_id, platform): (lessons, items)}.
+
+        Площадка в ключе потому, что прогресс раздельный: купивший общий курс
+        дважды проходит его на каждой площадке заново, и сложенные вместе
+        проценты показали бы 120% там, где на каждой площадке по 60.
 
         Правила пройденности те же, что у `ProgressRepo.done_keys`: отмеченный
         урок, тест со сданной зачётной попыткой, зачтённое задание. Иначе
@@ -3122,11 +3128,11 @@ class TeacherAdminRepo:
             return {}
         done = self._done_items(user_id, course_ids)
         rows = self.db.execute(
-            select(done.c.course_id, done.c.kind, func.count()).group_by(
-                done.c.course_id, done.c.kind
+            select(done.c.course_id, done.c.platform, done.c.kind, func.count()).group_by(
+                done.c.course_id, done.c.platform, done.c.kind
             )
         )
-        return self._by_course(rows.all())
+        return self._by_course_platform(rows.all())
 
     @staticmethod
     def _by_course(rows: list[tuple[int, str, int]]) -> dict[int, tuple[int, int]]:
@@ -3135,6 +3141,20 @@ class TeacherAdminRepo:
         for course_id, kind, count in rows:
             lessons, items = counts.get(course_id, (0, 0))
             counts[course_id] = (lessons + (count if kind == "lesson" else 0), items + count)
+        return counts
+
+    @staticmethod
+    def _by_course_platform(
+        rows: list[tuple[int, str, str, int]],
+    ) -> dict[tuple[int, str], tuple[int, int]]:
+        """То же, но ключом пара «курс и площадка»."""
+        counts: dict[tuple[int, str], tuple[int, int]] = {}
+        for course_id, platform, kind, count in rows:
+            lessons, items = counts.get((course_id, platform), (0, 0))
+            counts[(course_id, platform)] = (
+                lessons + (count if kind == "lesson" else 0),
+                items + count,
+            )
         return counts
 
     def _program_items(self, course_ids: list[int]):
@@ -3176,7 +3196,11 @@ class TeacherAdminRepo:
         return union_all(lessons, quizzes, tasks).subquery()
 
     def _done_items(self, user_id: int, course_ids: list[int]):
-        """Пройденное человеком в этих курсах — строки (course_id, kind, item_id).
+        """Пройденное человеком в этих курсах — строки (course_id, platform,
+        kind, item_id).
+
+        Площадка берётся у самой отметки, а не у доступа: одно и то же задание,
+        сданное на двух площадках, — два разных пройденных элемента.
 
         UNION, а не UNION ALL: две зачтённые сдачи одного задания — это всё
         равно одно пройденное задание, как и в множестве `done_keys`.
@@ -3184,6 +3208,7 @@ class TeacherAdminRepo:
         lessons = (
             select(
                 Module.course_id.label("course_id"),
+                LessonProgress.platform.label("platform"),
                 literal("lesson").label("kind"),
                 LessonProgress.lesson_id.label("item_id"),
             )
@@ -3199,6 +3224,7 @@ class TeacherAdminRepo:
         quizzes = (
             select(
                 Module.course_id.label("course_id"),
+                QuizAttempt.platform.label("platform"),
                 literal("quiz").label("kind"),
                 QuizAttempt.quiz_id.label("item_id"),
             )
@@ -3218,6 +3244,7 @@ class TeacherAdminRepo:
         tasks = (
             select(
                 Module.course_id.label("course_id"),
+                Submission.platform.label("platform"),
                 literal("task").label("kind"),
                 Submission.task_id.label("item_id"),
             )

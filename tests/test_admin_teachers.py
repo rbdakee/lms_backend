@@ -300,6 +300,7 @@ def test_card_shows_profile_and_four_tabs(client, sms):
             {
                 "enrollment_id": enrollment.id,
                 "course": {"id": course.id, "lang": "ru", "title": "Критериальное оценивание"},
+                "platform": "p1",
                 "granted_by_admin": True,
                 "paid_note": "Каспи, 45 000, 31 января",
                 "revoked_at": None,
@@ -316,6 +317,7 @@ def test_card_shows_profile_and_four_tabs(client, sms):
                 "title": "Тест модуля 1",
                 "course_id": course.id,
                 "course_title": "Критериальное оценивание",
+                "platform": "p1",
                 "retakable": False,
                 "pass_score": 70,
                 "can_allow_retake": True,
@@ -339,6 +341,7 @@ def test_card_shows_profile_and_four_tabs(client, sms):
                 "task_id": task.id,
                 "task_title": "Составьте дескрипторы",
                 "course_id": course.id,
+                "platform": "p1",
                 "status": "rework",
             }
         ],
@@ -347,6 +350,7 @@ def test_card_shows_profile_and_four_tabs(client, sms):
                 "id": certificate.id,
                 "number": "KZ-2026-XB7K2M",
                 "course_id": other.id,
+                "platform": "p1",
                 "course_title": "Информационная безопасность",
                 "hours": 36,
                 "revoked_at": None,
@@ -370,6 +374,97 @@ def test_card_keeps_revoked_access_with_its_progress(client, sms):
     assert row["revoked_at"] is not None
     assert row["lessons_done"] == 1
     assert row["progress_percent"] == 25
+
+
+def test_card_splits_the_quiz_row_by_platform(client, sms):
+    """Купивший общий курс дважды проходит тест на каждой площадке заново:
+    строк вкладки «Тесты» две, и попытки в них не перемешаны."""
+    login_admin(client, sms)
+    course, _, _, _, quiz, questions = teacher_course()
+    person = teacher(1)
+    make_enrollment(person.id, course.id, platform="p1")
+    make_enrollment(person.id, course.id, platform="p2")
+    first = attempt(person.id, quiz, questions, platform="p1", score=1, passed=False)
+    second = attempt(person.id, quiz, questions, platform="p2", score=2, passed=True)
+
+    rows = client.get(f"/admin/teachers/{person.id}").json()["quizzes"]
+    assert len(rows) == 2
+    by_platform = {row["platform"]: row for row in rows}
+    assert [a["id"] for a in by_platform["p1"]["attempts"]] == [first.id]
+    assert [a["id"] for a in by_platform["p2"]["attempts"]] == [second.id]
+    # Балл свой у каждой строки: одна и та же строка теста показала бы один
+    assert by_platform["p1"]["attempts"][0]["score"] == 50
+    assert by_platform["p2"]["attempts"][0]["score"] == 100
+
+
+def test_card_retake_button_agrees_with_the_server_on_each_platform(client, sms):
+    """Главное, ради чего строка стала попыткой на площадке: сертификат выдан
+    на p1 — там пересдача закрыта, а на p2 открыта. То, что показано в строке,
+    обязано совпасть с тем, что ответит сервер на этой же площадке."""
+    login_admin(client, sms)
+    course, _, _, _, quiz, questions = teacher_course()
+    person = teacher(1)
+    make_enrollment(person.id, course.id, platform="p1")
+    make_enrollment(person.id, course.id, platform="p2")
+    attempt(person.id, quiz, questions, platform="p1")
+    attempt(person.id, quiz, questions, platform="p2")
+    make_certificate(person.id, course.id, platform="p1")
+
+    rows = {
+        row["platform"]: row
+        for row in client.get(f"/admin/teachers/{person.id}").json()["quizzes"]
+    }
+    assert rows["p1"]["can_allow_retake"] is False
+    assert rows["p1"]["retake_blocker"] == "certificate_issued"
+    assert rows["p2"]["can_allow_retake"] is True
+    assert rows["p2"]["retake_blocker"] is None
+
+    # И сервер отвечает ровно то же самое
+    blocked = client.post(
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": quiz.id, "platform": "p1", "reason": "интернет"},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "certificate_issued"
+    allowed = client.post(
+        f"/admin/teachers/{person.id}/retakes",
+        json={"quiz_id": quiz.id, "platform": "p2", "reason": "интернет"},
+    )
+    assert allowed.status_code == 200
+
+
+def test_card_counts_progress_per_platform(client, sms):
+    """Прогресс раздельный: урок, пройденный на p1, не двигает процент на p2.
+    Сложенные вместе, две площадки дали бы 50% там, где на каждой по 25."""
+    login_admin(client, sms)
+    course, lesson, _, task, _, _ = teacher_course()
+    person = teacher(1)
+    make_enrollment(person.id, course.id, platform="p1")
+    make_enrollment(person.id, course.id, platform="p2")
+    make_progress(person.id, lesson.id, platform="p1")
+    make_submission(person.id, task.id, platform="p2", status="accepted")
+
+    rows = {
+        row["platform"]: row for row in client.get(f"/admin/teachers/{person.id}").json()["courses"]
+    }
+    assert (rows["p1"]["lessons_done"], rows["p1"]["progress_percent"]) == (1, 25)
+    # На p2 пройден не урок, а задание: процент тот же, счётчик уроков нулевой
+    assert (rows["p2"]["lessons_done"], rows["p2"]["progress_percent"]) == (0, 25)
+
+
+def test_card_shows_platform_on_submissions_and_certificates(client, sms):
+    """Вкладки «Работы» и «Документы» тоже площадку называют: одно задание,
+    сданное на обеих, — две разные работы, и сертификатов по курсу два."""
+    login_admin(client, sms)
+    course, _, _, task, _, _ = teacher_course()
+    person = teacher(1)
+    make_submission(person.id, task.id, platform="p1")
+    make_submission(person.id, task.id, platform="p2")
+    make_certificate(person.id, course.id, platform="p2", number="KZ-2026-SECOND")
+
+    card = client.get(f"/admin/teachers/{person.id}").json()
+    assert sorted(row["platform"] for row in card["submissions"]) == ["p1", "p2"]
+    assert [row["platform"] for row in card["certificates"]] == ["p2"]
 
 
 def test_card_does_not_scale_with_courses(client, sms):

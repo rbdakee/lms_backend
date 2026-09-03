@@ -1788,6 +1788,9 @@ class AdminTeacherEnrollmentOut(BaseModel):
 
     enrollment_id: int
     course: AdminTeacherCourseOut
+    # Площадка доступа: у купившего общий курс дважды строк две, и прогресс
+    # у каждой свой
+    platform: Platform
     granted_at: datetime
     granted_by_admin: bool
     # Комментарий выдачи: сумма, способ, дата — для истории. null — оплату
@@ -1817,16 +1820,22 @@ class AdminTeacherAttemptOut(BaseModel):
 
 
 class AdminTeacherQuizOut(BaseModel):
-    """Строка вкладки «Тесты»: тест и все попытки человека по нему.
+    """Строка вкладки «Тесты»: тест **на одной площадке** и попытки человека
+    по нему на ней.
 
-    `retake_blocker` объясняет отказ заранее, чтобы экран не показывал живую
-    кнопку, которая ответит 409; коды те же, что у ошибок пересдачи.
+    Строк у одного теста может быть две: доступ и попытка раздельные, и общий
+    курс, купленный дважды, проходится на каждой площадке заново.
+
+    `can_allow_retake` и `retake_blocker` считаются по попыткам этой строки —
+    той же площадки, которую экран пошлёт телом пересдачи. Иначе кнопка горела
+    бы там, где сервер ответит 409, и не горела там, где пересдача возможна.
     """
 
     quiz_id: int
     title: str
     course_id: int
     course_title: str
+    platform: Platform
     retakable: bool
     pass_score: int
     can_allow_retake: bool
@@ -1842,6 +1851,8 @@ class AdminTeacherSubmissionOut(BaseModel):
     task_id: int
     task_title: str
     course_id: int
+    # Площадка сдачи: одно задание, сданное на обеих, — две разные работы
+    platform: Platform
     status: Literal["pending", "accepted", "rework"]
     created_at: datetime
     # null — работа ещё в очереди
@@ -1852,6 +1863,8 @@ class AdminTeacherCertificateOut(BaseModel):
     id: int
     number: str
     course_id: int
+    # Документов по одному курсу может быть два — по одному на площадку
+    platform: Platform
     # Снимок на момент выдачи, а не текущее название курса
     course_title: str
     hours: int
