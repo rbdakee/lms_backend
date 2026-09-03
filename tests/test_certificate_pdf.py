@@ -396,13 +396,16 @@ def test_the_code_carries_the_address_of_this_very_certificate():
     assert drawn != build_qr("https://domain.kz/verify/KZ-2026-XB7K2M", number=number)
 
 
-def verify_url_for(base: str, number: str) -> str | None:
+def verify_url_for(
+    base: str, number: str, platform: str = "p1", by_platform: dict | None = None
+) -> str | None:
     """Ссылка так, как её собирает сценарий. Репозиторий для этого не нужен —
-    только конфигурация и номер."""
+    только конфигурация, номер и площадка документа."""
     service = CertificatePdfService(certificates=None, cfg=get_settings())
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(get_settings(), "verify_base_url", base)
-        return service._verify_url(Certificate(number=number))
+        patch.setattr(get_settings(), "platform_verify_urls", by_platform or {})
+        return service._verify_url(Certificate(number=number, platform=platform))
 
 
 def test_the_address_in_the_code_is_assembled_exactly():
@@ -418,6 +421,44 @@ def test_the_address_in_the_code_is_assembled_exactly():
     # Пусто и пробелы — кода нет вовсе
     assert verify_url_for("", "KZ-2026-XB7K2M") is None
     assert verify_url_for("   ", "KZ-2026-XB7K2M") is None
+
+
+def test_the_code_of_each_platform_leads_to_its_own_domain():
+    """Проверка номера отвечает только по своей площадке, поэтому QR второй
+    площадки обязан вести на её домен. Общий адрес увёл бы человека
+    на первую площадку, и там он честно прочитал бы «не найдено» — с бумаги,
+    которую уже не исправить.
+    """
+    by_platform = {"p1": "https://lms.kz", "p2": "https://second.kz"}
+    number = "KZ-2026-XB7K2M"
+
+    first = verify_url_for("https://lms.kz", number, "p1", by_platform)
+    second = verify_url_for("https://lms.kz", number, "p2", by_platform)
+
+    assert first == f"https://lms.kz/verify/{number}"
+    assert second == f"https://second.kz/verify/{number}"
+    assert _verify_host(first) != _verify_host(second)
+
+
+def test_a_platform_without_its_own_address_gets_the_common_one():
+    """Пока площадка одна, ключа у неё нет вовсе, и работает общая настройка:
+    так же собирается ссылка у документов, выданных до разделения площадок."""
+    assert (
+        verify_url_for("https://lms.kz", "KZ-2026-XB7K2M", "p2", {"p1": "https://lms.kz"})
+        == "https://lms.kz/verify/KZ-2026-XB7K2M"
+    )
+
+
+def test_an_empty_address_of_one_platform_leaves_the_other_with_its_code():
+    """Пустой адрес — «QR не печатать», и это решение одной площадки:
+    у второй код остаётся на месте."""
+    by_platform = {"p1": "", "p2": "https://second.kz"}
+
+    assert verify_url_for("https://lms.kz", "KZ-2026-XB7K2M", "p1", by_platform) is None
+    assert (
+        verify_url_for("https://lms.kz", "KZ-2026-XB7K2M", "p2", by_platform)
+        == "https://second.kz/verify/KZ-2026-XB7K2M"
+    )
 
 
 def test_the_printed_address_carries_no_number():

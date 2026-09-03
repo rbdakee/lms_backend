@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     # настроек админом, поэтому он здесь, а не в настройках площадки.
     # Пусто — QR не печатается: код, ведущий в никуда, с бумаги не исправить.
     verify_base_url: str = "http://localhost:3000"
+    # Тот же адрес, когда площадок несколько: у каждой свой домен, а проверка
+    # номера отвечает только по своей площадке. Общий адрес на обеих означал
+    # бы, что QR с бумаги второй площадки уводит на первую и там честно
+    # пишется «не найдено» — а увидели бы мы это через недели, когда бумага
+    # уже на руках. Ключ — код площадки, значение — её адрес; площадки, для
+    # которой ключа нет, документ получает `verify_base_url`.
+    platform_verify_urls: dict[str, str] = {}
     # Куда ведёт кнопка «Открыть в админке» в уведомлениях бота. Свой адрес,
     # а не public_base_url: админка — третий, отдельный деплой, не API.
     # `127.0.0.1`, а не `localhost` — Bot API отказывает кнопке (и всему
@@ -147,6 +154,15 @@ class Settings(BaseSettings):
     # взять неоткуда, — при SMS_PROVIDER=log. С работающим WhatsApp
     # оставлять его незачем: пустое значение выключает.
     auth_bootstrap_code: str = ""
+
+    def verify_base(self, platform: str) -> str:
+        """Адрес страницы проверки для площадки документа.
+
+        Своего адреса у площадки может не быть — пока она одна, ключа
+        в `platform_verify_urls` нет вовсе, и работает общий `verify_base_url`.
+        Это же значение получает документ, заведённый до разделения площадок.
+        """
+        return self.platform_verify_urls.get(platform, self.verify_base_url)
 
 
 # Значения провайдеров, под которые в коде есть адаптер. Опечатка в них
@@ -223,6 +239,7 @@ def check_providers(cfg: Settings) -> None:
     check_bootstrap_login(cfg)
     check_admin_origins(cfg)
     check_platform_origins(cfg)
+    check_platform_verify_urls(cfg)
 
 
 def check_admin_origins(cfg: Settings) -> None:
@@ -284,6 +301,41 @@ def check_platform_origins(cfg: Settings) -> None:
             " не дойдёт вовсе, и площадкой у него останется %s",
             ", ".join(outside),
             DEFAULT_PLATFORM,
+        )
+
+
+def check_platform_verify_urls(cfg: Settings) -> None:
+    """Адрес проверки по площадкам: неизвестный код — отказ, забытая
+    площадка — предупреждение.
+
+    Цена разная, как и у `check_platform_origins`. Код вне `PLATFORMS` значит,
+    что адрес не достанется никому: сервис поднялся бы здоровым, а QR печатался
+    бы с общего адреса — то есть чужого. Это опечатка, и она роняет старт.
+
+    А забытая площадка — не отказ: сегодня площадка одна и общего адреса
+    хватает. Но если сервис уже знает вторую по `PLATFORM_ORIGINS`, а адреса
+    проверки у неё нет, её сертификаты уводят на чужой домен — и заметно это
+    станет через недели, с уже напечатанной бумаги. Поэтому предупреждение
+    говорит громко и называет площадку.
+    """
+    unknown = sorted({code for code in cfg.platform_verify_urls if code not in PLATFORMS})
+    if unknown:
+        raise RuntimeError(
+            f"PLATFORM_VERIFY_URLS: неизвестные коды площадок — {', '.join(unknown)}."
+            f" Допустимые значения: {', '.join(PLATFORMS)}"
+        )
+    # Площадки, которые сервис действительно обслуживает, — те, что названы
+    # в PLATFORM_ORIGINS. Пока она одна, предупреждать не о чем.
+    missing = sorted(
+        {code for code in cfg.platform_origins.values() if code not in cfg.platform_verify_urls}
+    )
+    if missing:
+        log.warning(
+            "PLATFORM_VERIFY_URLS: у площадок %s нет своего адреса проверки —"
+            " QR на их сертификатах уведёт на %s, и если это домен другой площадки,"
+            " проверка ответит «не найдено»",
+            ", ".join(missing),
+            cfg.verify_base_url or "пустой адрес (QR не печатается)",
         )
 
 

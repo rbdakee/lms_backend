@@ -15,6 +15,7 @@ from app.config import (
     TELEGRAM_UPDATES_MODES,
     Settings,
     check_platform_origins,
+    check_platform_verify_urls,
     check_providers,
     get_settings,
 )
@@ -207,3 +208,75 @@ def test_the_shipped_platform_defaults_do_not_raise():
     """Голые умолчания — рабочая конфигурация: проверка не мешает старту."""
     check_platform_origins(Settings())
     check_platform_origins(get_settings())
+
+
+def test_a_platform_without_its_own_verify_address_warns(caplog):
+    """Сервис знает вторую площадку, а адреса проверки у неё нет — её QR
+    уводят на чужой домен. Отказывать за это нельзя (площадка может быть
+    и одна), а молчать нельзя тем более: заметно это станет с уже
+    напечатанной бумаги."""
+    cfg = Settings(
+        cors_origins=["https://lms.kz", "https://second.kz"],
+        platform_origins={"https://lms.kz": "p1", "https://second.kz": "p2"},
+        platform_verify_urls={"p1": "https://lms.kz"},
+        verify_base_url="https://lms.kz",
+    )
+    with caplog.at_level(logging.WARNING):
+        check_platform_verify_urls(cfg)
+    assert "PLATFORM_VERIFY_URLS" in caplog.text
+    assert "p2" in caplog.text
+    assert "https://lms.kz" in caplog.text
+
+
+def test_every_served_platform_with_its_own_address_warns_about_nothing(caplog):
+    cfg = Settings(
+        cors_origins=["https://lms.kz", "https://second.kz"],
+        platform_origins={"https://lms.kz": "p1", "https://second.kz": "p2"},
+        platform_verify_urls={"p1": "https://lms.kz", "p2": "https://second.kz"},
+    )
+    with caplog.at_level(logging.WARNING):
+        check_platform_verify_urls(cfg)
+    assert caplog.text == ""
+
+
+def test_an_unknown_platform_code_in_verify_urls_stops_the_service_at_start():
+    """Опечатка в коде площадки значит, что адрес не достанется никому,
+    и QR печатался бы с общего — то есть с чужого — домена."""
+    cfg = Settings(platform_verify_urls={"p3": "https://third.kz"})
+    with pytest.raises(RuntimeError) as failed:
+        check_platform_verify_urls(cfg)
+    message = str(failed.value)
+    assert "PLATFORM_VERIFY_URLS" in message
+    assert "p3" in message
+    assert DEFAULT_PLATFORM in message
+
+
+def test_one_platform_on_the_common_address_stays_quiet(caplog):
+    """Пока сервис знает одну площадку, общего адреса ей хватает: ни отказа,
+    ни предупреждения на каждый старт.
+
+    `_env_file=None` — не украшение: `.env` разработчика уже описывает две
+    площадки, а словарь из файла с пустым словарём из аргументов сливается,
+    а не заменяется им. Без этого тест проверял бы чужую машину.
+    """
+    cfg = Settings(_env_file=None, platform_origins={}, platform_verify_urls={})
+    with caplog.at_level(logging.WARNING):
+        check_platform_verify_urls(cfg)
+    assert caplog.text == ""
+
+
+def test_the_shipped_verify_defaults_do_not_raise():
+    """Голые умолчания — рабочая конфигурация: проверка не мешает старту."""
+    check_platform_verify_urls(Settings())
+    check_platform_verify_urls(get_settings())
+
+
+def test_the_address_of_a_platform_falls_back_to_the_common_one():
+    """Пока площадка одна, ключа у неё нет вовсе — и работает `verify_base_url`.
+    Тот же адрес получает документ, выданный до разделения площадок."""
+    cfg = Settings(
+        verify_base_url="https://lms.kz",
+        platform_verify_urls={"p2": "https://second.kz"},
+    )
+    assert cfg.verify_base("p1") == "https://lms.kz"
+    assert cfg.verify_base("p2") == "https://second.kz"
