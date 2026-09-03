@@ -273,7 +273,12 @@ def test_submit_text(client, sms, storage, telegram):
     assert len(telegram.sent) == 1
     card = telegram.sent[0]
     assert card.title == "Работа на проверку"
-    assert card.lines == ["Задание: Составьте дескрипторы", "Курс: Критериальное оценивание"]
+    # Площадка-источник — первой строкой, до курса: чат один на обе
+    assert card.lines == [
+        "Площадка: Площадка 1",
+        "Задание: Составьте дескрипторы",
+        "Курс: Критериальное оценивание",
+    ]
     assert card.link_url.endswith(f"/submissions/{body['id']}")
 
 

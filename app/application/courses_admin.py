@@ -10,7 +10,7 @@
 """
 
 from app.adapters.db.models import Course, Lesson, Module, Quiz, Task
-from app.adapters.db.repos import CategoryRepo, CourseAdminRepo
+from app.adapters.db.repos import CategoryRepo, CourseAdminRepo, CoursePlatformRepo
 from app.application.courses import cover_url
 from app.application.files import safe_name
 from app.application.ports import StoragePort
@@ -24,6 +24,7 @@ from app.domain.errors import (
     VersionExistsError,
 )
 from app.domain.image import HEAD_SIZE, image_mime
+from app.domain.platform import PLATFORMS
 from app.domain.plural import plural
 from app.domain.program import LESSON_KINDS, item_key
 
@@ -50,13 +51,14 @@ PLAIN_FIELDS = (
     "cert_require_final_quiz",
 )
 
-# Поля, у которых null — значение: «цена по запросу», «даты нет». Обложки
-# здесь нет: она приходит объектом и ложится в две колонки — см. patch.
-NULLABLE_FIELDS = ("duration_text", "price", "starts_at")
+# Поля, у которых null — значение: «текста нет», «даты нет». Обложки здесь
+# нет: она приходит объектом и ложится в две колонки — см. patch. Цены тоже
+# нет: она живёт строкой площадки, а не колонкой курса.
+NULLABLE_FIELDS = ("duration_text", "starts_at")
 
-# Поля, которые переезжают в языковую версию и в дубликат. Цена, дата старта
-# и статус — не переезжают: цену на казахскую версию ставят отдельно, и молча
-# продублировать её нельзя.
+# Поля, которые переезжают в языковую версию и в дубликат. Публикация, дата
+# старта и статус — не переезжают: галочку площадки и цену на казахскую версию
+# ставят отдельно, и молча продублировать их нельзя.
 COPIED_FIELDS = (
     "title",
     "short",
@@ -134,6 +136,20 @@ def _checked_title(raw: str) -> str:
     if not title:
         raise FieldError("title", "Без названия курс не сохранить")
     return title
+
+
+def _checked_platforms(rows: list[dict]) -> list[tuple[str, int | None]]:
+    """Присланный набор галочек — в пары для `set_for`.
+
+    Одна площадка дважды — отказ, а не «побеждает последняя»: две цены на
+    одну галочку означают, что экран прислал противоречие, и выбирать
+    за него нельзя.
+    """
+    codes = [row["platform"] for row in rows]
+    twice = next((code for code in codes if codes.count(code) > 1), None)
+    if twice is not None:
+        raise FieldError("platforms", f"Площадка в списке дважды: {twice}")
+    return [(row["platform"], row["price"]) for row in rows]
 
 
 def _version_conflict(lang: str, existing: Course) -> VersionExistsError:
@@ -293,11 +309,15 @@ class CoursesAdminService:
     def __init__(
         self,
         courses: CourseAdminRepo,
+        platforms: CoursePlatformRepo,
         categories: CategoryRepo,
         storage: StoragePort,
         cfg: Settings,
     ):
         self.courses = courses
+        # Публикация и цена лежат отдельной таблицей, и репозиторий у них свой:
+        # редактор ставит галочку площадки, а не правит колонку курса
+        self.platforms = platforms
         # Категории с сессии 7б живут в таблице: справочник правит админ,
         # и сверять category_id больше не с чем, кроме неё
         self.categories = categories
@@ -328,6 +348,9 @@ class CoursesAdminService:
         leads = self.courses.open_leads_count(ids)
         enrollments = self.courses.enrollment_counts(ids)
         versions = self.courses.group_versions([course.group_id for course in rows])
+        # Запрос на площадку, а не на курс: страница бывает и на сто строк.
+        # Порядок ключей — порядок PLATFORMS, он же порядок в ответе
+        prices = {platform: self.platforms.prices(ids, platform) for platform in PLATFORMS}
         items = []
         for course in rows:
             students, completed = enrollments.get(course.id, (0, 0))
@@ -340,7 +363,11 @@ class CoursesAdminService:
                     "cover": cover_url(course, self.cfg.public_base_url),
                     "category_id": course.category_id,
                     "hours": course.hours,
-                    "price": course.price,
+                    "platforms": [
+                        {"platform": platform, "price": on_platform[course.id]}
+                        for platform, on_platform in prices.items()
+                        if course.id in on_platform
+                    ],
                     "status": course.status,
                     "starts_at": course.starts_at,
                     "modules_count": modules.get(course.id, 0),
@@ -382,6 +409,11 @@ class CoursesAdminService:
             fields = {**fields, "title": _checked_title(fields["title"])}
         if "category_id" in fields and fields["category_id"] is not None:
             self._check_category(fields["category_id"])
+        # Галочки заменяются целиком: чего в списке нет — снято. Отказа здесь
+        # нет даже у курса, где учатся: снятая галочка убирает курс из каталога
+        # площадки, а не отбирает чужую учёбу (PLATFORMS_BRIEF, решение 12)
+        if fields.get("platforms") is not None:
+            self.platforms.set_for(course.id, _checked_platforms(fields["platforms"]))
         for field in PLAIN_FIELDS:
             if fields.get(field) is not None:
                 setattr(course, field, fields[field])
@@ -579,10 +611,10 @@ class CoursesAdminService:
     @staticmethod
     def _copied_fields(source: Course) -> dict:
         """Поля, переезжающие в языковую версию и в дубликат. Новая строка
-        всегда черновик: показывать её людям решают отдельно."""
+        всегда черновик и без единой площадки: галочку публикации и цену
+        на казахскую версию ставят отдельно, молча продублировать их нельзя."""
         return {field: getattr(source, field) for field in COPIED_FIELDS} | {
             "status": "draft",
-            "price": None,
             "starts_at": None,
         }
 
@@ -610,7 +642,10 @@ class CoursesAdminService:
             "category_id": course.category_id,
             "hours": course.hours,
             "duration_text": course.duration_text,
-            "price": course.price,
+            "platforms": [
+                {"platform": row.platform, "price": row.price}
+                for row in self.platforms.list_for(course.id)
+            ],
             "status": course.status,
             "starts_at": course.starts_at,
             "strict_order": course.strict_order,

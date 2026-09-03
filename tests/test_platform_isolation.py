@@ -333,7 +333,8 @@ def test_a_lead_is_filed_separately_on_each_platform(client, sms, telegram):
     оплатил один курс, а получил другой. Здесь же единственная проверка,
     что запись вообще не сломана: колонка `platform` у заявки NOT NULL,
     и забытая площадка не сохранила бы строку вовсе."""
-    course = make_course(title="Оценивание для учителей")
+    # Курс выложен на обеих: заявку на курс чужой площадки подать нельзя
+    course = make_course(title="Оценивание для учителей", platforms={"p1": 45000, "p2": 60000})
     login_named(client, sms)
 
     first = client.post(f"/courses/{course.id}/lead", headers=P1)

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, status
 from app.adapters.db.models import User
 from app.api import deps
 from app.api.pagination import PageParams, page_out
+from app.api.routers.admin import platform_filter
 from app.api.schemas import (
     AdminQuestionsPageOut,
     QuestionsPageOut,
@@ -53,11 +54,14 @@ def admin_questions(
     answered: Annotated[bool | None, Query()] = None,
     course_id: Annotated[int | None, Query()] = None,
     q: Annotated[str | None, Query(max_length=100)] = None,
+    # Одно значение; параметра нет — обе площадки
+    platform: Annotated[str | None, Query()] = None,
 ) -> AdminQuestionsPageOut:
     data = svc.admin_list(
         answered=answered,
         course_id=course_id,
         q=q,
+        platform=platform_filter(platform),
         offset=params.offset,
         limit=params.per_page,
     )

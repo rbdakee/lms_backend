@@ -107,7 +107,8 @@ class Course(Base):
     category_id: Mapped[int] = mapped_column(Integer)  # справочник в domain/dictionaries.py
     hours: Mapped[int] = mapped_column(Integer)
     duration_text: Mapped[str | None] = mapped_column(Text)
-    price: Mapped[int | None] = mapped_column(Integer)  # тенге; эквайринга нет, цена — число
+    # Цены здесь нет: она своя у каждой площадки и лежит в course_platform
+    # (PLATFORMS_BRIEF, решение 3). Колонку убрала ревизия e6a41d0c7b58.
     status: Mapped[str] = mapped_column(Text, default="draft", server_default="draft")
     starts_at: Mapped[datetime | None] = mapped_column(Date)
     # Строгий порядок прохождения: элемент открывается после предыдущего.
@@ -146,12 +147,12 @@ class CoursePlatform(Base):
     """Публикация курса на площадке и его цена там.
 
     Строка есть — курс выложен на этой площадке по этой цене; галочка
-    в редакторе курса это строку и создаёт. Цена бывает пустой ровно так же,
-    как пустой бывает `course.price`.
+    в редакторе курса эту строку и создаёт. Снятая галочка убирает курс
+    из каталога площадки, но доступа не отбирает: тот, кто уже учится,
+    доучивается и получает сертификат (PLATFORMS_BRIEF, решение 12).
 
-    `course.price` пока остаётся на месте и продолжает читаться: чтение
-    переключает сессия 2, она же убирает колонку. Сломанного каталога между
-    сессиями быть не должно — он в бою.
+    Пустая цена — «Цена по запросу», как и раньше у курса: эквайринга нет,
+    цена здесь просто число.
     """
 
     __tablename__ = "course_platform"

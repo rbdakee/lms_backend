@@ -273,6 +273,9 @@ class TasksService:
                     link_url=f"{self.cfg.admin_base_url}/submissions/{submission.id}",
                 ),
                 kind="submission",
+                # Площадка сдачи, а не запроса: строку в текст ставит сам
+                # notifier — см. AdminNotifier.notify_admins
+                platform=submission.platform,
             )
         except Exception:
             log.exception("Telegram-уведомление о работе %s не ушло", submission.id)

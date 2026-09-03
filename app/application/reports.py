@@ -8,7 +8,7 @@
 эндпоинт только для админа.
 """
 
-from app.adapters.db.models import Course, QuizAttempt, User
+from app.adapters.db.models import Course, QuizAttempt
 from app.adapters.db.repos import (
     AttemptRepo,
     CertificateRepo,
@@ -61,7 +61,21 @@ class ReportsService:
 
     # -- GET /admin/reports/{course_id} ----------------------------------
 
-    def report(self, course_id: int, *, q: str | None, offset: int, limit: int) -> dict:
+    def report(
+        self,
+        course_id: int,
+        *,
+        platform: str | None,
+        q: str | None,
+        offset: int,
+        limit: int,
+    ) -> dict:
+        """Строка отчёта — это доступ, а не человек: курс, выложенный на обеих
+        площадках, на каждой изучается заново (PLATFORMS_BRIEF, решение 2),
+        и у человека с двумя доступами две строки со своими процентами.
+        Без фильтра приходят обе, с фильтром — только его площадка
+        (решение оркестратора, сессия 2).
+        """
         # Видимость курса не проверяется: черновик и скрытый админу видны,
         # отчёт по ним и открывают из редактора (CONTRACT, сессия 6)
         course = self.courses.by_id(course_id)
@@ -74,7 +88,7 @@ class ReportsService:
             for module in build_program(self.courses, course.id)
             for item in module["items"]
         ]
-        done_by_user = self.progress.done_by_user(course.id)
+        done_by_access = self.progress.done_by_access(course.id, platform)
         # Условия сертификата считаются на каждую строку таблицы, а участников
         # на странице до сотни: состав курса и пройденное грузим один раз.
         # Скрытое приходит вместе со всем — чек-лист оставит из него то,
@@ -84,19 +98,20 @@ class ReportsService:
             "tasks": self.courses.tasks(course.id, include_hidden=True),
             "quizzes": self.courses.quizzes(course.id, include_hidden=True),
         }
-        done_items = self.progress.done_items_by_user(course.id)
+        done_items = self.progress.done_items_by_access(course.id, platform)
         return {
             "course": {"id": course.id, "lang": course.lang, "title": course.title},
             # Отчёт считается на лету: момент запроса и есть его дата
             "generated_at": now_utc(),
-            "summary": self._summary(course, items, done_by_user),
-            "funnel": self._funnel(course, items),
+            "summary": self._summary(course, items, done_by_access, platform),
+            "funnel": self._funnel(course, items, platform),
             "participants": self._participants(
                 course,
                 items,
-                done_by_user,
+                done_by_access,
                 course_items=course_items,
                 done_items=done_items,
+                platform=platform,
                 q=q,
                 offset=offset,
                 limit=limit,
@@ -105,28 +120,40 @@ class ReportsService:
 
     # -- сводка ------------------------------------------------------------
 
-    def _summary(self, course: Course, items: list[dict], done_by_user: dict[int, int]) -> dict:
-        granted = self.enrollments.participants_count(course.id)
-        spans = self.enrollments.completed_spans(course.id)
+    def _summary(
+        self,
+        course: Course,
+        items: list[dict],
+        done_by_access: dict[tuple[int, str], int],
+        platform: str | None,
+    ) -> dict:
+        """Все числа сводки — по доступам: и `granted`, и начавшие, и среднее.
+        Человек с доступом на обеих площадках считается дважды ровно потому,
+        что учится дважды, и иначе средний процент делился бы не на то число.
+        """
+        granted = self.enrollments.participants_count(course.id, platform)
+        spans = self.enrollments.completed_spans(course.id, platform)
         days = [waiting_days(granted_at, completed_at) for granted_at, completed_at in spans]
         # Не начавшие входят в среднее нулями: они такие же участники курса,
         # и без них средний прогресс выглядел бы лучше, чем есть
         progress_sum = sum(
-            _percent(done_count, len(items)) for done_count in done_by_user.values()
+            _percent(done_count, len(items)) for done_count in done_by_access.values()
         )
         return {
             "granted": granted,
-            # Начал — у кого есть хоть один пройденный элемент программы;
-            # в done_by_user другие и не попадают
-            "started": len(done_by_user),
+            # Начал — доступ, по которому пройден хоть один элемент программы;
+            # в done_by_access другие и не попадают
+            "started": len(done_by_access),
             "completed": len(spans),
             "avg_progress_percent": round(progress_sum / granted) if granted else None,
-            "avg_final_score": self._avg_final_score(course, items),
-            "certificates": self.certificates.active_count(course.id),
+            "avg_final_score": self._avg_final_score(course, items, platform),
+            "certificates": self.certificates.active_count(course.id, platform),
             "avg_days_to_complete": round(sum(days) / len(days)) if days else None,
         }
 
-    def _avg_final_score(self, course: Course, items: list[dict]) -> int | None:
+    def _avg_final_score(
+        self, course: Course, items: list[dict], platform: str | None
+    ) -> int | None:
         """Средний балл итогового теста — процентами, как на экране результата.
 
         Процент считает Python той же функцией, что и сам тест: максимум
@@ -136,7 +163,7 @@ class ReportsService:
         final = _final_quiz(items)
         if final is None:
             return None
-        attempts = self.attempts.counted_for_quiz(course.id, final["id"])
+        attempts = self.attempts.counted_for_quiz(course.id, final["id"], platform)
         if not attempts:
             return None
         max_scores = self.attempts.max_scores(attempts)
@@ -147,10 +174,14 @@ class ReportsService:
 
     # -- воронка -----------------------------------------------------------
 
-    def _funnel(self, course: Course, items: list[dict]) -> list[dict]:
+    def _funnel(self, course: Course, items: list[dict], platform: str | None) -> list[dict]:
         """Все видимые элементы программы в сквозном порядке. Не выборка:
-        решение, какие показать, принимает экран (CONTRACT, сессия 6)."""
-        reached = self.progress.done_by_item(course.id)
+        решение, какие показать, принимает экран (CONTRACT, сессия 6).
+
+        `reached` считает доступы, а не людей: воронка стоит под `granted`,
+        и оба числа обязаны мерить одно и то же.
+        """
+        reached = self.progress.done_by_item(course.id, platform)
         return [
             {
                 "kind": item["kind"],
@@ -168,27 +199,33 @@ class ReportsService:
         self,
         course: Course,
         items: list[dict],
-        done_by_user: dict[int, int],
+        done_by_access: dict[tuple[int, str], int],
         *,
         course_items: dict[str, list],
-        done_items: dict[int, set[tuple[str, int]]],
+        done_items: dict[tuple[int, str], set[tuple[str, int]]],
+        platform: str | None,
         q: str | None,
         offset: int,
         limit: int,
     ) -> dict:
-        users, total = self.enrollments.participants_page(
-            course.id, q=q, offset=offset, limit=limit
+        """Строка — доступ: у человека, купившего общий курс дважды, их две,
+        и всё в них своё. Поэтому и попытки, и сертификаты, и пройденное
+        раскладываются по паре (учитель, площадка), а не по одному user_id.
+        """
+        accesses, total = self.enrollments.participants_page(
+            course.id, platform=platform, q=q, offset=offset, limit=limit
         )
-        user_ids = [user.id for user in users]
+        # Список для IN: у человека с двумя доступами id на странице повторится
+        user_ids = sorted({user.id for user, _ in accesses})
         # Попытки и выданные сертификаты — по запросу на страницу, а не на строку
         attempts = self.attempts.course_attempts(course.id, user_ids)
         max_scores = self.attempts.max_scores(attempts)
-        by_user: dict[int, dict[int, list[QuizAttempt]]] = {}
+        by_access: dict[tuple[int, str], dict[int, list[QuizAttempt]]] = {}
         for attempt in attempts:
-            by_user.setdefault(attempt.user_id, {}).setdefault(attempt.quiz_id, []).append(
-                attempt
-            )
-        issued = self.certificates.active_user_ids(course.id, user_ids)
+            by_access.setdefault((attempt.user_id, attempt.platform), {}).setdefault(
+                attempt.quiz_id, []
+            ).append(attempt)
+        issued = self.certificates.active_access_ids(course.id, user_ids)
         module_quizzes = [
             item for item in items if item["kind"] == "quiz" and not item["is_final"]
         ]
@@ -197,31 +234,45 @@ class ReportsService:
             "items": [
                 {
                     "user_id": user.id,
+                    # Метка площадки: строка — доступ, и без неё две строки
+                    # одного человека были бы неотличимы
+                    "platform": access_platform,
                     "last_name": user.last_name,
                     "first_name": user.first_name,
                     "middle_name": user.middle_name,
                     "school": user.school,
                     "region": user.region,
-                    "progress_percent": _percent(done_by_user.get(user.id, 0), len(items)),
+                    "progress_percent": _percent(
+                        done_by_access.get((user.id, access_platform), 0), len(items)
+                    ),
                     "module_quizzes": [
                         {
                             "quiz_id": quiz["id"],
                             "title": quiz["title"],
                             "score": self._score(
-                                by_user.get(user.id, {}).get(quiz["id"], []), max_scores
+                                by_access.get((user.id, access_platform), {}).get(
+                                    quiz["id"], []
+                                ),
+                                max_scores,
                             ),
                         }
                         for quiz in module_quizzes
                     ],
                     "final_quiz": self._final_state(
-                        by_user.get(user.id, {}).get(final["id"], []) if final else [],
+                        by_access.get((user.id, access_platform), {}).get(final["id"], [])
+                        if final
+                        else [],
                         max_scores,
                     ),
                     "certificate": self._certificate_state(
-                        course, user, issued, course_items, done_items
+                        course,
+                        (user.id, access_platform),
+                        issued,
+                        course_items,
+                        done_items,
                     ),
                 }
-                for user in users
+                for user, access_platform in accesses
             ],
             "total": total,
         }
@@ -261,16 +312,19 @@ class ReportsService:
     @staticmethod
     def _certificate_state(
         course: Course,
-        user: User,
-        issued: set[int],
+        access: tuple[int, str],
+        issued: set[tuple[int, str]],
         course_items: dict[str, list],
-        done_items: dict[int, set[tuple[str, int]]],
+        done_items: dict[tuple[int, str], set[tuple[str, int]]],
     ) -> str:
-        if user.id in issued:
+        """Состояние документа считается по доступу: сертификат свой на каждой
+        площадке (PLATFORMS_BRIEF, решение 2), и выданный на первой не делает
+        строку второй «выданной»."""
+        if access in issued:
             return "issued"
         # «Условия выполнены, но документ не выдан» — тот же чек-лист, что
         # у учителя на экране завершения; второй копии правил быть не должно
         conditions = course_conditions(
-            course, **course_items, done=done_items.get(user.id, set())
+            course, **course_items, done=done_items.get(access, set())
         )
         return "ready" if all_done(conditions) else "in_progress"

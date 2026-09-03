@@ -95,13 +95,14 @@ class CoursesService:
     # -- каталог --------------------------------------------------------
 
     def catalog(self, platform: str) -> list[dict]:
-        versions = self.courses.catalog()
+        versions = self.courses.catalog(platform)
         if not versions:
             return []
         ids = [c.id for c in versions]
         lessons = self.courses.lessons_count(ids)
         students = self.courses.students_count(ids, platform)
-        ratings = self.courses.group_ratings(list({c.group_id for c in versions}))
+        prices = self.courses.platforms.prices(ids, platform)
+        ratings = self.courses.group_ratings(list({c.group_id for c in versions}), platform)
 
         groups: dict[int, list[Course]] = {}
         for course in versions:
@@ -121,13 +122,17 @@ class CoursesService:
                     "langs": [c.lang for c in group],
                     "rating": rating,
                     "reviews_count": reviews_count,
-                    "versions": [self._card(c, lessons, students) for c in group],
+                    "versions": [self._card(c, lessons, students, prices) for c in group],
                 }
             )
         return items
 
     def _card(
-        self, course: Course, lessons_count: dict[int, int], students_count: dict[int, int]
+        self,
+        course: Course,
+        lessons_count: dict[int, int],
+        students_count: dict[int, int],
+        prices: dict[int, int | None],
     ) -> dict:
         return {
             "id": course.id,
@@ -137,7 +142,9 @@ class CoursesService:
             "cover": cover_url(course, self.cfg.public_base_url),
             "hours": course.hours,
             "duration_text": course.duration_text,
-            "price": course.price,
+            # Цена у каждой площадки своя, и её нет вовсе, если курс с площадки
+            # сняли: на экране это «Цена по запросу» (PLATFORMS_BRIEF, решение 3)
+            "price": prices.get(course.id),
             "status": course.status,
             "starts_at": course.starts_at,
             "created_at": course.created_at,
@@ -171,26 +178,47 @@ class CoursesService:
 
     # -- страница курса -------------------------------------------------
 
-    def _visible(self, course_id: int) -> Course:
-        course = self.courses.visible_by_id(course_id)
-        if course is None:
-            raise NotFoundError("Курс не найден")
-        return course
+    def _visible(self, course_id: int, platform: str, user: User | None = None) -> Course:
+        """Курс, существующий для площадки: он на ней выложен — или у человека
+        есть действующий доступ на ней.
+
+        Вторая половина правила живёт здесь, а не в репозитории: снятая
+        галочка публикации доступа не отбирает (PLATFORMS_BRIEF, решение 12),
+        а про пользователя репозиторий не знает. Без входа правило строгое —
+        не выложен, значит на этой площадке курса нет.
+        """
+        course = self.courses.published_by_id(course_id, platform)
+        if course is not None:
+            return course
+        if user is not None:
+            course = self.courses.visible_by_id(course_id)
+            if (
+                course is not None
+                and self.enrollments.active_for(user.id, course.id, platform) is not None
+            ):
+                return course
+        raise NotFoundError("Курс не найден")
 
     def course_page(self, course_id: int, user: User | None, platform: str) -> dict:
-        course = self._visible(course_id)
+        course = self._visible(course_id, platform, user)
         lessons = self.courses.lessons_count([course.id])
         students = self.courses.students_count([course.id], platform)
-        rating, reviews_count = self.courses.group_ratings([course.group_id]).get(
+        prices = self.courses.platforms.prices([course.id], platform)
+        rating, reviews_count = self.courses.group_ratings([course.group_id], platform).get(
             course.group_id, (None, 0)
         )
+        versions = self.courses.group_versions(course.group_id, platform)
+        if all(c.id != course.id for c in versions):
+            # Курс сняли с площадки, а человек открыл страницу по своему
+            # доступу: без этой версии чипам нечего подсветить
+            versions.append(course)
         chips = [
             {"id": c.id, "lang": c.lang, "title": c.title, "status": c.status}
-            for c in _lang_order(self.courses.group_versions(course.group_id))
+            for c in _lang_order(versions)
         ]
         # Программа собирается один раз: она же нужна счётчикам прогресса
         program = build_program(self.courses, course.id)
-        data = self._card(course, lessons, students)
+        data = self._card(course, lessons, students, prices)
         data.update(
             {
                 "short": course.short,
@@ -210,7 +238,7 @@ class CoursesService:
     def program_page(self, user: User, course_id: int, platform: str) -> dict:
         """Сайдбар экрана урока. Порядок проверок общий: вход (роутер),
         существование курса, потом доступ."""
-        course = self._visible(course_id)
+        course = self._visible(course_id, platform, user)
         if self.enrollments.active_for(user.id, course.id, platform) is None:
             raise ForbiddenError("Доступ к курсу не открыт")
         program = build_program(self.courses, course.id)
@@ -254,9 +282,11 @@ class CoursesService:
 
     # -- отзывы ---------------------------------------------------------
 
-    def reviews_page(self, course_id: int, offset: int, limit: int) -> dict:
-        self._visible(course_id)
-        breakdown = self.reviews.breakdown(course_id)
+    def reviews_page(self, course_id: int, offset: int, limit: int, platform: str) -> dict:
+        # Лента публичная, пользователя у неё нет: курс, не выложенный
+        # на площадке, отвечает 404 и здесь
+        self._visible(course_id, platform)
+        breakdown = self.reviews.breakdown(course_id, platform)
         authors_total = sum(breakdown.values())
         rating = (
             round(sum(star * n for star, n in breakdown.items()) / authors_total, 1)
@@ -266,9 +296,9 @@ class CoursesService:
         return {
             "items": [
                 _review_out(review, author)
-                for review, author in self.reviews.page(course_id, offset, limit)
+                for review, author in self.reviews.page(course_id, offset, limit, platform)
             ],
-            "total": self.reviews.count(course_id),
+            "total": self.reviews.count(course_id, platform),
             "rating": rating,
             "breakdown": {str(star): breakdown.get(star, 0) for star in (5, 4, 3, 2, 1)},
         }
@@ -276,7 +306,7 @@ class CoursesService:
     def add_review(
         self, user: User, course_id: int, rating: int, text: str, platform: str
     ) -> dict:
-        self._visible(course_id)
+        self._visible(course_id, platform, user)
         if self.enrollments.active_for(user.id, course_id, platform) is None:
             raise ForbiddenError("Отзыв может оставить только учитель с доступом к курсу")
         if course_id == self.preview_course_id:
@@ -305,7 +335,9 @@ class CoursesService:
         items = []
         # Доступы и заявки — обе половины одного экрана, поэтому площадка
         # отсекается у обеих: иначе курса в «Моих» нет, а заявка на него висит
-        for enrollment, course in self.enrollments.active_for_user(user.id, platform):
+        enrollments = self.enrollments.active_for_user(user.id, platform)
+        prices = self.courses.platforms.prices([c.id for _, c in enrollments], platform)
+        for enrollment, course in enrollments:
             items.append(
                 {
                     "id": course.id,
@@ -314,7 +346,9 @@ class CoursesService:
                     "category_id": course.category_id,
                     "cover": cover_url(course, self.cfg.public_base_url),
                     "hours": course.hours,
-                    "price": course.price,
+                    # Курс могли снять с площадки, пока человек учится: цены
+                    # на ней у него больше нет, а доступ остался
+                    "price": prices.get(course.id),
                     "status": course.status,
                     **course_progress(
                         self.courses, self.progress, course, user.id, platform

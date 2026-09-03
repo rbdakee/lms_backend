@@ -19,6 +19,7 @@ from app.adapters.db.repos import (
     CategoryRepo,
     CertificateRepo,
     CourseAdminRepo,
+    CoursePlatformRepo,
     CourseRepo,
     EnrollmentRepo,
     LeadRepo,
@@ -556,6 +557,9 @@ def get_courses_admin_service(
     # что объект есть и что это картинка, сервер берёт у него
     return CoursesAdminService(
         courses=CourseAdminRepo(db),
+        # Публикация и цена — отдельный репозиторий, а не поле внутри курса:
+        # сценарий берёт то, что ему нужно, явно
+        platforms=CoursePlatformRepo(db),
         categories=CategoryRepo(db),
         storage=storage,
         cfg=get_settings(),
@@ -626,28 +630,21 @@ def get_categories_service(db: Annotated[DbSession, Depends(get_db)]) -> Categor
     return CategoriesService(categories=CategoryRepo(db))
 
 
-def get_settings_service(
-    db: Annotated[DbSession, Depends(get_db)],
-    storage: Annotated[StoragePort, Depends(get_storage)],
-) -> SettingsService:
-    # Хранилище нужно картинкам настроек: наличие объекта и его размер сервер
-    # берёт у него, а не у браузера
-    return SettingsService(settings=SettingRepo(db), storage=storage, cfg=get_settings())
+def get_settings_service(db: Annotated[DbSession, Depends(get_db)]) -> SettingsService:
+    # Хранилище больше не нужно: бренд лежит константами и файлами в коде,
+    # а из таблицы настроек читается одна привязка бота
+    return SettingsService(settings=SettingRepo(db), cfg=get_settings())
 
 
 def get_certificate_pdf_service(
     db: Annotated[DbSession, Depends(get_db)],
-    storage: Annotated[StoragePort, Depends(get_storage)],
-    site: Annotated[SettingsService, Depends(get_settings_service)],
 ) -> CertificatePdfService:
     # Настоящий репозиторий, не подменённый предпросмотром: бумагой печатается
     # выданный документ, а в режиме предпросмотра документов не заводится вовсе
     return CertificatePdfService(
         certificates=CertificateRepo(db),
-        settings=site,
-        storage=storage,
-        # Адрес страницы проверки для QR живёт в конфигурации, а не в настройках
-        # площадки: он про домен, а не про то, что правит админ
+        # Адрес страницы проверки для QR живёт в конфигурации: он про домен,
+        # а не про бренд
         cfg=get_settings(),
     )
 

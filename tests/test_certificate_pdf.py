@@ -3,7 +3,13 @@
 Содержимое документа глазами тут никто не читает: текст в PDF лежит
 глифами подмножества шрифта, и обратно в строку он не разбирается. Поэтому
 проверяем то, что проверяемо: право на документ, валидность байтов, влияние
-картинок настроек и дату по Алматы — её видно сравнением двух сборок.
+картинок бренда и дату по Алматы — её видно сравнением двух сборок.
+
+Картинки берутся у площадки самого документа: бумагу открывает браузер прямой
+ссылкой, `Origin` в такой запрос не приходит, и площадки у запроса нет вовсе.
+Лежат они файлами в `app/assets/brands/<площадка>/`, но самих файлов
+в репозитории нет — их кладёт владелец, — поэтому тест подставляет свою
+директорию фикстурой `brand_file`.
 """
 
 import re
@@ -16,8 +22,11 @@ import pytest
 from app.adapters.db.models import Certificate
 from app.adapters.db.repos import now_utc
 from app.adapters.pdf.certificate import _verify_host, render_certificate
+from app.application import settings as settings_module
 from app.application.certificate_pdf import CertificatePdfService
 from app.config import get_settings
+from app.domain import brands
+from app.domain.brands import CERT_SLOTS
 from tests.conftest import (
     login_admin,
     login_named,
@@ -65,16 +74,33 @@ def get_pdf(client, certificate_id):
     return client.get(f"/certificates/{certificate_id}/pdf")
 
 
-def set_images(admin, files: dict[str, bytes]):
-    """Картинки сертификата в настройках: файл кладётся настоящим POST /files,
-    как это делает браузер админа."""
-    images = {}
-    for field, content in files.items():
-        resp = admin.post("/files", files={"file": (f"{field}.png", content, "image/png")})
-        assert resp.status_code == 200, resp.text
-        images[field] = {"key": resp.json()["key"], "name": f"{field}.png"}
-    resp = admin.patch("/admin/settings", json={"certificate_images": images})
-    assert resp.status_code == 200, resp.text
+@pytest.fixture
+def brand_file(tmp_path, monkeypatch):
+    """Кладёт картинку площадке. Директория подменяется на временную: класть
+    файлы в `app/assets/brands/` значило бы оставлять их в репозитории."""
+    monkeypatch.setattr(settings_module, "BRANDS_DIR", tmp_path)
+
+    def put(platform: str, slot: str, content: bytes) -> None:
+        directory = tmp_path / platform
+        directory.mkdir(exist_ok=True)
+        (directory / brands.BRANDS[platform].images[slot]).write_bytes(content)
+
+    return put
+
+
+# Картинки в трёх слотах разные: одинаковую fpdf2 кладёт в документ один раз,
+# и по весу бумаги было бы не видно, попали все три или только одна.
+CERT_PICTURES = {
+    "cert_logo": (120, 60, (31, 56, 100)),
+    "cert_sign": (160, 60, (20, 20, 60)),
+    "cert_stamp": (120, 120, (150, 30, 30)),
+}
+
+
+def put_stamps(brand_file, platform: str, *slots: str) -> None:
+    """Картинки сертификата у площадки: логотип, подпись и печать."""
+    for slot in slots or tuple(CERT_SLOTS.values()):
+        brand_file(platform, slot, png(*CERT_PICTURES[slot]))
 
 
 # -- права ---------------------------------------------------------------
@@ -212,20 +238,12 @@ def test_document_without_images_is_still_issued(client, sms, storage):
     assert resp.content.startswith(b"%PDF")
 
 
-def test_images_from_settings_get_into_document(client, client2, sms, storage):
-    """Три картинки настроек попадают на бумагу: документ заметно тяжелеет."""
+def test_brand_images_get_into_document(client, sms, storage, brand_file):
+    """Три картинки бренда попадают на бумагу: документ заметно тяжелеет."""
     certificate_id = own_certificate(client, sms)
     plain = get_pdf(client, certificate_id).content
 
-    login_admin(client2, sms)
-    set_images(
-        client2,
-        {
-            "logo": png(120, 60, (31, 56, 100)),
-            "sign": png(160, 60, (20, 20, 60)),
-            "stamp": png(120, 120, (150, 30, 30)),
-        },
-    )
+    put_stamps(brand_file, "p1")
 
     resp = get_pdf(client, certificate_id)
 
@@ -233,12 +251,27 @@ def test_images_from_settings_get_into_document(client, client2, sms, storage):
     assert len(resp.content) > len(plain) + 1000
 
 
-def test_broken_image_does_not_stop_the_document(client, client2, sms, storage):
+def test_the_document_takes_the_images_of_its_own_platform(client, sms, storage, brand_file):
+    """Сертификат выдан на второй площадке, а запрос за бумагой приходит без
+    `Origin`: картинки берутся у документа, а не у площадки запроса. Печать
+    соседней площадки на чужом сертификате — это чужая организация на бумаге.
+    """
+    certificate_id = own_certificate(client, sms, platform="p2")
+    plain = get_pdf(client, certificate_id).content
+
+    # Картинки лежат только у первой площадки — документ второй их не берёт
+    put_stamps(brand_file, "p1")
+    assert same_paper(get_pdf(client, certificate_id).content, plain)
+
+    put_stamps(brand_file, "p2")
+    assert len(get_pdf(client, certificate_id).content) > len(plain) + 1000
+
+
+def test_broken_image_does_not_stop_the_document(client, sms, storage, brand_file):
     """В слоте печати лежит не картинка: место остаётся пустым, а документ
     всё равно выдаётся."""
     certificate_id = own_certificate(client, sms)
-    login_admin(client2, sms)
-    set_images(client2, {"stamp": BROKEN_PNG})
+    brand_file("p1", "cert_stamp", BROKEN_PNG)
 
     resp = get_pdf(client, certificate_id)
 
@@ -246,21 +279,35 @@ def test_broken_image_does_not_stop_the_document(client, client2, sms, storage):
     assert resp.content.startswith(b"%PDF")
 
 
-def test_lost_image_object_does_not_stop_the_document(client, client2, sms, storage):
-    """Ключ в настройках есть, а объекта в хранилище уже нет: для документа
-    это то же самое, что не поставленная картинка."""
+def test_a_missing_file_leaves_only_its_own_place_empty(client, sms, storage, brand_file):
+    """Файла подписи и печати у площадки нет, а логотип есть: пустой слот —
+    не ошибка, и остальные картинки на бумагу всё равно попадают."""
     certificate_id = own_certificate(client, sms)
-    login_admin(client2, sms)
-    set_images(client2, {"stamp": png(60, 60, (150, 30, 30))})
-    storage.objects.clear()
+    plain = get_pdf(client, certificate_id).content
+    put_stamps(brand_file, "p1", "cert_logo")
 
     resp = get_pdf(client, certificate_id)
 
     assert resp.status_code == 200, resp.text
-    assert resp.content.startswith(b"%PDF")
+    assert not same_paper(resp.content, plain)
 
 
 # -- дата на бумаге --------------------------------------------------------
+
+
+# Идентификатор файла fpdf2 считает вместе с отметкой времени сборки: две
+# сборки одного и того же различаются и им тоже.
+FILE_ID = re.compile(rb"/ID \[<[0-9A-F]+><[0-9A-F]+>\]")
+
+
+def same_paper(first: bytes, second: bytes) -> bool:
+    """Два документа — один и тот же лист, если различаются только отметкой
+    времени сборки и посчитанным по ней идентификатором файла."""
+
+    def stable(document: bytes) -> bytes:
+        return FILE_ID.sub(b"", CREATION_DATE.sub(b"", document))
+
+    return stable(first) == stable(second)
 
 
 def build(issued_at: datetime) -> bytes:
@@ -350,11 +397,9 @@ def test_the_code_carries_the_address_of_this_very_certificate():
 
 
 def verify_url_for(base: str, number: str) -> str | None:
-    """Ссылка так, как её собирает сценарий. Репозиторий, настройки
-    и хранилище для этого не нужны — только конфигурация и номер."""
-    service = CertificatePdfService(
-        certificates=None, settings=None, storage=None, cfg=get_settings()
-    )
+    """Ссылка так, как её собирает сценарий. Репозиторий для этого не нужен —
+    только конфигурация и номер."""
+    service = CertificatePdfService(certificates=None, cfg=get_settings())
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(get_settings(), "verify_base_url", base)
         return service._verify_url(Certificate(number=number))

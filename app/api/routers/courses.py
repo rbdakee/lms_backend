@@ -86,9 +86,10 @@ def course_program(
 def course_reviews(
     course_id: int,
     params: Annotated[PageParams, Depends()],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CoursesService, Depends(deps.get_courses_service)],
 ) -> ReviewsPageOut:
-    data = svc.reviews_page(course_id, params.offset, params.per_page)
+    data = svc.reviews_page(course_id, params.offset, params.per_page, platform)
     return ReviewsPageOut(
         **page_out(data["items"], data["total"], params),
         rating=data["rating"],

@@ -12,26 +12,31 @@ class NotificationsService:
 
     # -- GET /notifications ---------------------------------------------
 
-    def page(self, user: User, offset: int, limit: int) -> dict:
-        rows = self.notifications.page(user.id, offset, limit)
+    def page(self, user: User, offset: int, limit: int, platform: str) -> dict:
+        rows = self.notifications.page(user.id, offset, limit, platform)
         return {
             "items": [self._out(notification, user.lang) for notification in rows],
             # Счётчик идёт сверх страницы: он нужен шапке на каждом экране,
-            # и панель колокольчика берёт его тем же запросом (CONTRACT, сессия 6)
-            "unread_count": self.notifications.unread_count(user.id),
-            "total": self.notifications.count(user.id),
+            # и панель колокольчика берёт его тем же запросом (CONTRACT, сессия 6).
+            # Площадка у всех трёх чисел одна — своя: иначе на колокольчике
+            # горело бы число, которого нет в списке
+            "unread_count": self.notifications.unread_count(user.id, platform),
+            "total": self.notifications.count(user.id, platform),
         }
 
     # -- POST /notifications/read ---------------------------------------
 
-    def mark_read(self, user: User, ids: list[int] | None, all_: bool | None) -> None:
+    def mark_read(
+        self, user: User, ids: list[int] | None, all_: bool | None, platform: str
+    ) -> None:
         if (ids is None) == (all_ is None):
             raise FieldError("ids", "Нужно указать ids или all")
         if all_ is False:
             # Поле прислано, но отмечать нечего — это не ошибка
             return
         # all=true — ids здесь None, и репозиторий понимает это как «все свои»
-        self.notifications.mark_read(user.id, ids)
+        # на этой площадке: соседний список гасится со своего домена
+        self.notifications.mark_read(user.id, ids, platform)
 
     # -- сборка ответа ---------------------------------------------------
 

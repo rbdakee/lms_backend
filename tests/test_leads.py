@@ -24,7 +24,12 @@ def test_create_lead(client, sms, telegram):
     assert len(telegram.sent) == 1
     card = telegram.sent[0]
     assert card.title == "Новая заявка"
-    assert card.lines == ["Курс: Оценивание для учителей", "Цена: 45 000 ₸"]
+    # Площадка-источник — первой строкой, до курса: чат один на обе
+    assert card.lines == [
+        "Площадка: Площадка 1",
+        "Курс: Оценивание для учителей",
+        "Цена: 45 000 ₸",
+    ]
     assert card.link_url.endswith(f"/leads/{body['id']}")
     whole = card.title + " ".join(card.lines) + card.link_text + card.link_url
     assert "Нурланова" not in whole

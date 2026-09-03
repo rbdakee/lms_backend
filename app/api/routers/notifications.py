@@ -15,10 +15,11 @@ router = APIRouter(prefix="/notifications")
 def notifications(
     user: Annotated[User, Depends(deps.get_current_user)],
     params: Annotated[PageParams, Depends()],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[NotificationsService, Depends(deps.get_notifications_service)],
 ) -> NotificationsPageOut:
     # Панель колокольчика берёт ?per_page=4 и получает и список, и счётчик
-    data = svc.page(user, params.offset, params.per_page)
+    data = svc.page(user, params.offset, params.per_page, platform)
     return NotificationsPageOut(
         **page_out(data["items"], data["total"], params), unread_count=data["unread_count"]
     )
@@ -28,6 +29,7 @@ def notifications(
 def read_notifications(
     body: NotificationsReadIn,
     user: Annotated[User, Depends(deps.get_current_user)],
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[NotificationsService, Depends(deps.get_notifications_service)],
 ) -> None:
-    svc.mark_read(user, body.ids, body.all)
+    svc.mark_read(user, body.ids, body.all, platform)

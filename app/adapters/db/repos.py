@@ -34,6 +34,7 @@ from app.adapters.db.models import (
     Category,
     Certificate,
     Course,
+    CoursePlatform,
     Enrollment,
     Lead,
     Lesson,
@@ -53,6 +54,7 @@ from app.adapters.db.models import (
     ThreadMessage,
     User,
 )
+from app.domain.platform import PLATFORMS
 
 # Черновик и скрытый курс для площадки не существуют: ни в каталоге,
 # ни по прямой ссылке (предпросмотр админом — отдельный режим, сессия 6).
@@ -311,20 +313,115 @@ class SessionRepo:
         return result.rowcount
 
 
+class CoursePlatformRepo:
+    """Строки `course_platform` — публикация курса на площадке и цена там.
+
+    Галочка в редакторе курса и есть эта строка: она появилась — курс выложен
+    и стоит столько-то, её убрали — курс ушёл из каталога площадки
+    (PLATFORMS_BRIEF, раздел «База»).
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def prices(self, course_ids: list[int], platform: str) -> dict[int, int | None]:
+        """Цены курсов на площадке — {course_id: price}.
+
+        Курса нет в словаре, если он на этой площадке не выложен: у каталога
+        это «сюда не попадёт», а у страницы курса, открытой по доступу, —
+        «Цена по запросу».
+        """
+        if not course_ids:
+            return {}
+        rows = self.db.execute(
+            select(CoursePlatform.course_id, CoursePlatform.price).where(
+                CoursePlatform.course_id.in_(course_ids),
+                CoursePlatform.platform == platform,
+            )
+        )
+        return dict(rows.all())
+
+    def list_for(self, course_id: int) -> list[CoursePlatform]:
+        """Площадки курса в порядке PLATFORMS — форма ответа редактора курса.
+
+        Порядок задаёт код, а не база: он один и тот же на всех экранах,
+        и алфавит слагов на него влиять не должен — бренд переименуют.
+        """
+        rows = list(
+            self.db.scalars(
+                select(CoursePlatform).where(CoursePlatform.course_id == course_id)
+            )
+        )
+        return sorted(rows, key=lambda row: PLATFORMS.index(row.platform))
+
+    def set_for(self, course_id: int, rows: list[tuple[str, int | None]]) -> None:
+        """Заменяет набор площадок курса целиком: чего нет в списке — снято.
+
+        Снятие галочки доступа не отбирает — тот, кто уже учится, доучивается
+        и получает сертификат (PLATFORMS_BRIEF, решение 12). Поэтому здесь
+        нет ни одной проверки «а не учатся ли по нему»: удаляется строка
+        публикации, а не чужая учёба.
+        """
+        conds = [CoursePlatform.course_id == course_id]
+        if rows:
+            conds.append(CoursePlatform.platform.notin_([platform for platform, _ in rows]))
+        self.db.execute(delete(CoursePlatform).where(*conds))
+        if not rows:
+            return
+        # Галочка могла стоять и раньше — тогда меняется только цена
+        stmt = pg_insert(CoursePlatform).values(
+            [
+                {"course_id": course_id, "platform": platform, "price": price}
+                for platform, price in rows
+            ]
+        )
+        self.db.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[CoursePlatform.course_id, CoursePlatform.platform],
+                set_={"price": stmt.excluded.price},
+            )
+        )
+
+
 class CourseVisibility:
     """Правило «курс существует для площадки» — отдельным методом, а не
     условием на месте: режим предпросмотра снимает его ровно с одного курса,
     подменяя репозиторий целиком (BACKEND_NOTES, раздел 12). Наследуют его
     все репозитории, которые о видимости курса спрашивают.
+
+    Условий два, и они не одно и то же. `visible_course` стоит на дверях
+    учебной части: снятая галочка публикации доступа не отбирает, и класть
+    площадку внутрь него значило бы запереть урок у того, кто уже учится
+    (PLATFORMS_BRIEF, решение 12). Каталожные чтения спрашивают
+    `published_course`.
     """
 
     def visible_course(self) -> ColumnElement[bool]:
         return Course.status.in_(CATALOG_STATUSES)
 
+    def published_course(self, platform: str | None) -> ColumnElement[bool]:
+        """Курс существует для каталога площадки: не черновик и выложен на ней.
+
+        `platform=None` — «выложен хоть где-нибудь»: у админки площадки нет
+        вовсе, она одна на обе.
+
+        EXISTS, а не join: условие стоит рядом с другими в том же `where`,
+        а join размножил бы строку курса, выложенного на обеих площадках.
+        """
+        published = select(CoursePlatform.course_id).where(
+            CoursePlatform.course_id == Course.id
+        )
+        if platform is not None:
+            published = published.where(CoursePlatform.platform == platform)
+        return and_(self.visible_course(), published.exists())
+
 
 class CourseRepo(CourseVisibility):
     def __init__(self, db: DbSession):
         self.db = db
+        # Публикация и цена лежат отдельной таблицей, но спрашивают их там же,
+        # где курс: сценарию не нужен второй репозиторий ради колонки цены
+        self.platforms = CoursePlatformRepo(db)
 
     def by_id(self, course_id: int) -> Course | None:
         return self.db.get(Course, course_id)
@@ -335,28 +432,42 @@ class CourseRepo(CourseVisibility):
             select(Course).where(Course.id == course_id, self.visible_course())
         )
 
-    def catalog(self) -> list[Course]:
-        return list(
-            self.db.scalars(select(Course).where(Course.status.in_(CATALOG_STATUSES)))
+    def published_by_id(self, course_id: int, platform: str) -> Course | None:
+        """Версия курса, выложенная на площадке. Не выложена — для каталога
+        курса нет: ни карточки, ни отзывов, ни заявки."""
+        return self.db.scalar(
+            select(Course).where(Course.id == course_id, self.published_course(platform))
         )
 
-    def published_count(self) -> int:
+    def catalog(self, platform: str) -> list[Course]:
+        return list(self.db.scalars(select(Course).where(self.published_course(platform))))
+
+    def published_count(self, platform: str | None) -> int:
         """Версии курсов, видимые в каталоге: русская и казахская считаются
-        порознь — это два курса в списке админа (CONTRACT, сессия 6)."""
+        порознь — это два курса в списке админа (CONTRACT, сессия 6).
+
+        Без площадки — выложенные хоть где-нибудь: курс на обеих площадках
+        остаётся одной версией, а не двумя (EXISTS строку не размножает).
+        """
         return (
             self.db.scalar(
                 select(func.count())
                 .select_from(Course)
-                .where(Course.status.in_(CATALOG_STATUSES))
+                .where(self.published_course(platform))
             )
             or 0
         )
 
-    def group_versions(self, group_id: int) -> list[Course]:
+    def group_versions(self, group_id: int, platform: str) -> list[Course]:
+        """Языковые версии группы, выложенные на площадке — чипы RU/KZ.
+
+        Площадка обязательна: у админского списка версий свой репозиторий
+        (`CourseAdminRepo.group_versions`), он показывает и черновики.
+        """
         return list(
             self.db.scalars(
                 select(Course)
-                .where(Course.group_id == group_id, self.visible_course())
+                .where(Course.group_id == group_id, self.published_course(platform))
                 .order_by(Course.id)
             )
         )
@@ -389,19 +500,28 @@ class CourseRepo(CourseVisibility):
         )
         return dict(rows.all())
 
-    def group_ratings(self, group_ids: list[int]) -> dict[int, tuple[float, int]]:
+    def group_ratings(
+        self, group_ids: list[int], platform: str
+    ) -> dict[int, tuple[float, int]]:
         """Средняя и число оценок по языковой группе — {group_id: (avg, count)}.
 
         В расчёт идёт последний отзыв каждого автора (BACKEND_NOTES, раздел 13),
         чтобы один человек не влиял на среднюю трижды. Удалённый админом
         отзыв не идёт ни в среднюю, ни в счётчик на карточке: наружу он
         не приходит нигде, и число под звёздами обязано это повторять.
+
+        Считается по своей площадке (PLATFORMS_BRIEF, решение 3): прошедший
+        курс дважды оставил два отзыва, и каждый каталог показывает свой.
         """
         latest = (
             select(Course.group_id.label("group_id"), Review.rating.label("rating"))
             .select_from(Review)
             .join(Course, Course.id == Review.course_id)
-            .where(Course.group_id.in_(group_ids), Review.deleted_at.is_(None))
+            .where(
+                Course.group_id.in_(group_ids),
+                Review.platform == platform,
+                Review.deleted_at.is_(None),
+            )
             .distinct(Course.group_id, Review.user_id)
             .order_by(
                 Course.group_id, Review.user_id, Review.created_at.desc(), Review.id.desc()
@@ -751,14 +871,24 @@ class AttemptRepo(CourseVisibility):
             )
         )
 
-    def counted_for_quiz(self, course_id: int, quiz_id: int) -> list[QuizAttempt]:
+    def counted_for_quiz(
+        self, course_id: int, quiz_id: int, platform: str | None
+    ) -> list[QuizAttempt]:
         """Зачётные завершённые попытки одного теста у действующих участников
         курса — из них считается средний балл в отчёте. Отозванный доступ
         в среднее не идёт: его нет и в `granted` (CONTRACT, сессия 6).
 
-        Площадка в условии join, а не в фильтре: отчёт админа считает обе,
-        но у человека с доступом на двух площадках каждая попытка склеилась
-        бы с двумя доступами и попала в среднее дважды."""
+        Площадка стоит дважды и по разным причинам: в условии join — чтобы
+        попытка не склеилась с двумя доступами и не попала в среднее дважды,
+        в фильтре — чтобы выбранная площадка считала только свои попытки."""
+        conds = [
+            QuizAttempt.quiz_id == quiz_id,
+            QuizAttempt.finished_at.is_not(None),
+            QuizAttempt.is_counted.is_(True),
+            not_admin(QuizAttempt.user_id),
+        ]
+        if platform is not None:
+            conds.append(QuizAttempt.platform == platform)
         return list(
             self.db.scalars(
                 select(QuizAttempt)
@@ -771,18 +901,17 @@ class AttemptRepo(CourseVisibility):
                         Enrollment.revoked_at.is_(None),
                     ),
                 )
-                .where(
-                    QuizAttempt.quiz_id == quiz_id,
-                    QuizAttempt.finished_at.is_not(None),
-                    QuizAttempt.is_counted.is_(True),
-                    not_admin(QuizAttempt.user_id),
-                )
+                .where(*conds)
             )
         )
 
     def course_attempts(self, course_id: int, user_ids: list[int]) -> list[QuizAttempt]:
         """Попытки по всем тестам курса у перечисленных учителей — одним
-        запросом на страницу отчёта, а не по запросу на клетку таблицы."""
+        запросом на страницу отчёта, а не по запросу на клетку таблицы.
+
+        Площадки в фильтре нет: попытка её и так несёт, а раскладывает
+        попытки по строкам таблицы (доступам) уже сценарий отчёта.
+        """
         if not user_ids:
             return []
         return list(
@@ -978,15 +1107,23 @@ class SubmissionRepo:
         *,
         status: str | None,
         course_id: int | None,
+        platform: str | None,
         offset: int,
         limit: int,
     ) -> tuple[list[tuple[Submission, User, Task, Course, int]], int]:
-        """Очередь проверки: старые сверху — наверху тот, кто ждёт дольше всех."""
+        """Очередь проверки: старые сверху — наверху тот, кто ждёт дольше всех.
+
+        Площадка — фильтр, а не рамка: админка одна на обе, и без параметра
+        приходят обе (PLATFORMS_BRIEF, решение 9). Условие стоит до подсчёта
+        `total`: число под списком обязано считать те же строки, что и он.
+        """
         conds = []
         if status is not None:
             conds.append(Submission.status == status)
         if course_id is not None:
             conds.append(Module.course_id == course_id)
+        if platform is not None:
+            conds.append(Submission.platform == platform)
 
         total = (
             self.db.scalar(
@@ -1029,21 +1166,22 @@ class SubmissionRepo:
         ], total
 
     def pending_head(
-        self, limit: int
+        self, limit: int, platform: str | None
     ) -> tuple[list[tuple[Submission, User, Task, Course]], int]:
         """Свежие работы из очереди и полное число ждущих — плитка дашборда.
 
         Порядок свой, а не как в очереди проверки: на дашборде все три списка
         свежими сверху (DESIGN_BRIEF, 5.15), а очередь показывает наверху того,
         кто ждёт дольше всех. Номер сдачи здесь не нужен — дашборд его не рисует.
+
+        Площадка — тот же фильтр, что у очереди: плитка и список под ней
+        считаются по одним строкам, иначе счётчик и список разойдутся.
         """
+        conds = [Submission.status == SUBMISSION_PENDING]
+        if platform is not None:
+            conds.append(Submission.platform == platform)
         total = (
-            self.db.scalar(
-                select(func.count())
-                .select_from(Submission)
-                .where(Submission.status == SUBMISSION_PENDING)
-            )
-            or 0
+            self.db.scalar(select(func.count()).select_from(Submission).where(*conds)) or 0
         )
         rows = self.db.execute(
             select(Submission, User, Task, Course)
@@ -1051,7 +1189,7 @@ class SubmissionRepo:
             .join(Task, Task.id == Submission.task_id)
             .join(Module, Module.id == Task.module_id)
             .join(Course, Course.id == Module.course_id)
-            .where(Submission.status == SUBMISSION_PENDING)
+            .where(*conds)
             .order_by(Submission.created_at.desc(), Submission.id.desc())
             .limit(limit)
         )
@@ -1154,32 +1292,41 @@ class CertificateRepo:
             return None
         return certificate
 
-    def active_count(self, course_id: int | None = None) -> int:
-        """Действующие сертификаты: без course_id — по всей платформе (справочное
+    def active_count(self, course_id: int | None = None, platform: str | None = None) -> int:
+        """Действующие сертификаты: без course_id — по всем курсам (справочное
         число дашборда), с ним — по версии курса (сводка отчёта). Отозванные
         не считаются ни там, ни там (CONTRACT, сессия 6), документ админа —
-        тоже: в показателях его нет нигде (`not_admin`)."""
+        тоже: в показателях его нет нигде (`not_admin`).
+
+        Площадка — фильтр обоих экранов: курс на обеих даёт человеку два
+        документа (PLATFORMS_BRIEF, решение 2), и без параметра считаются оба.
+        """
         conds = [Certificate.revoked_at.is_(None), not_admin(Certificate.user_id)]
         if course_id is not None:
             conds.append(Certificate.course_id == course_id)
+        if platform is not None:
+            conds.append(Certificate.platform == platform)
         return (
             self.db.scalar(select(func.count()).select_from(Certificate).where(*conds)) or 0
         )
 
-    def active_user_ids(self, course_id: int, user_ids: list[int]) -> set[int]:
-        """Кому из перечисленных сертификат уже выдан — одним запросом на всю
-        страницу отчёта, а не по запросу на строку."""
+    def active_access_ids(self, course_id: int, user_ids: list[int]) -> set[tuple[int, str]]:
+        """Кому из перечисленных сертификат уже выдан — парами (учитель,
+        площадка), одним запросом на всю страницу отчёта.
+
+        Ключ парный, а не один user_id: строка отчёта — это доступ, и человек
+        с доступом на обеих площадках получает документ на каждой отдельно.
+        """
         if not user_ids:
             return set()
-        return set(
-            self.db.scalars(
-                select(Certificate.user_id).where(
-                    Certificate.course_id == course_id,
-                    Certificate.user_id.in_(user_ids),
-                    Certificate.revoked_at.is_(None),
-                )
+        rows = self.db.execute(
+            select(Certificate.user_id, Certificate.platform).where(
+                Certificate.course_id == course_id,
+                Certificate.user_id.in_(user_ids),
+                Certificate.revoked_at.is_(None),
             )
         )
+        return {(user_id, platform) for user_id, platform in rows}
 
     def unfinished_attempt(self, user_id: int, course_id: int, platform: str) -> bool:
         """Идёт ли по курсу незавершённая попытка теста: её finish ещё может
@@ -1274,9 +1421,9 @@ class ProgressRepo:
             | {("task", task_id) for task_id in tasks}
         )
 
-    def _course_done_rows(self, course_id: int):
+    def _course_done_rows(self, course_id: int, platform: str | None):
         """Пройденное всеми действующими участниками курса — строки
-        (user_id, kind, item_id, is_hidden).
+        (user_id, platform, kind, item_id, is_hidden).
 
         Правила ровно те же, что у `done_keys` одного учителя: отчёт админа
         и экран учителя обязаны показывать один и тот же процент, а два
@@ -1290,13 +1437,19 @@ class ProgressRepo:
         UNION, а не UNION ALL: два зачтённых ответа по одному заданию — это
         всё равно одно пройденное задание, как и в множестве `done_keys`.
 
-        Отчёт считает обе площадки разом — админка одна на обе, — но площадка
-        стоит в условии каждого join: без неё прогресс человека, купившего
-        общий курс дважды, склеился бы с двумя доступами и удвоил числа.
+        Отчёт без фильтра считает обе площадки разом — админка одна на обе, —
+        но площадка стоит и в условии каждого join, и в самих строках: без
+        первого прогресс человека, купившего общий курс дважды, склеился бы
+        с двумя доступами, а без второй два его доступа сложились бы в один
+        и дали процент больше ста (открытый вопрос 3 сессии 1).
         """
+        conds = [Module.course_id == course_id]
+        if platform is not None:
+            conds.append(Enrollment.platform == platform)
         lessons = (
             select(
                 LessonProgress.user_id.label("user_id"),
+                LessonProgress.platform.label("platform"),
                 literal("lesson").label("kind"),
                 LessonProgress.lesson_id.label("item_id"),
                 Lesson.is_hidden.label("is_hidden"),
@@ -1313,11 +1466,12 @@ class ProgressRepo:
                     Enrollment.revoked_at.is_(None),
                 ),
             )
-            .where(Module.course_id == course_id, not_admin(LessonProgress.user_id))
+            .where(*conds, not_admin(LessonProgress.user_id))
         )
         quizzes = (
             select(
                 QuizAttempt.user_id.label("user_id"),
+                QuizAttempt.platform.label("platform"),
                 literal("quiz").label("kind"),
                 QuizAttempt.quiz_id.label("item_id"),
                 Quiz.is_hidden.label("is_hidden"),
@@ -1335,7 +1489,7 @@ class ProgressRepo:
                 ),
             )
             .where(
-                Module.course_id == course_id,
+                *conds,
                 QuizAttempt.finished_at.is_not(None),
                 QuizAttempt.is_counted.is_(True),
                 QuizAttempt.passed.is_(True),
@@ -1345,6 +1499,7 @@ class ProgressRepo:
         tasks = (
             select(
                 Submission.user_id.label("user_id"),
+                Submission.platform.label("platform"),
                 literal("task").label("kind"),
                 Submission.task_id.label("item_id"),
                 Task.is_hidden.label("is_hidden"),
@@ -1362,49 +1517,64 @@ class ProgressRepo:
                 ),
             )
             .where(
-                Module.course_id == course_id,
+                *conds,
                 Submission.status == SUBMISSION_ACCEPTED,
                 not_admin(Submission.user_id),
             )
         )
         return union(lessons, quizzes, tasks).subquery()
 
-    def done_items_by_user(self, course_id: int) -> dict[int, set[tuple[str, int]]]:
-        """Что именно прошёл каждый участник — {user_id: {(kind, item_id)}},
-        вместе со скрытым: это `done_keys(include_hidden=True)` на весь курс.
+    def done_items_by_access(
+        self, course_id: int, platform: str | None
+    ) -> dict[tuple[int, str], set[tuple[str, int]]]:
+        """Что именно пройдено по каждому доступу — {(user_id, platform):
+        {(kind, item_id)}}, вместе со скрытым: это `done_keys(include_hidden=True)`
+        на весь курс.
 
         Тот же формат, что у `done_keys` одного учителя, но на весь курс
         одним запросом: условия сертификата в отчёте считаются на каждую
         строку таблицы, и поход в базу на строку — это N+1 на самом тяжёлом
         экране админки (BACKEND_NOTES, раздел 13).
         """
-        done = self._course_done_rows(course_id)
-        rows = self.db.execute(select(done.c.user_id, done.c.kind, done.c.item_id))
-        by_user: dict[int, set[tuple[str, int]]] = {}
-        for user_id, kind, item_id in rows.all():
-            by_user.setdefault(user_id, set()).add((kind, item_id))
-        return by_user
+        done = self._course_done_rows(course_id, platform)
+        rows = self.db.execute(
+            select(done.c.user_id, done.c.platform, done.c.kind, done.c.item_id)
+        )
+        by_access: dict[tuple[int, str], set[tuple[str, int]]] = {}
+        for user_id, access_platform, kind, item_id in rows.all():
+            by_access.setdefault((user_id, access_platform), set()).add((kind, item_id))
+        return by_access
 
-    def done_by_user(self, course_id: int) -> dict[int, int]:
-        """Сколько элементов программы прошёл каждый участник — {user_id: count}.
+    def done_by_access(self, course_id: int, platform: str | None) -> dict[tuple[int, str], int]:
+        """Сколько элементов программы пройдено по каждому доступу —
+        {(user_id, platform): count}.
+
+        Ключ парный, а не один user_id: общий курс на второй площадке
+        изучается заново, с нуля (PLATFORMS_BRIEF, решение 2), и сложенные
+        два доступа дали бы процент больше ста.
 
         Считает база одним GROUP BY: в отчёте по курсу таких участников
         восемь сотен, и запрос на каждого — это N+1 на самом тяжёлом экране
-        админки (BACKEND_NOTES, раздел 13). Кто не прошёл ничего, в ответ
-        не попадает — это и есть «не начал».
+        админки (BACKEND_NOTES, раздел 13). Доступ, по которому не пройдено
+        ничего, в ответ не попадает — это и есть «не начал».
         """
-        done = self._course_done_rows(course_id)
+        done = self._course_done_rows(course_id, platform)
         rows = self.db.execute(
-            select(done.c.user_id, func.count())
+            select(done.c.user_id, done.c.platform, func.count())
             .where(done.c.is_hidden.is_(False))
-            .group_by(done.c.user_id)
+            .group_by(done.c.user_id, done.c.platform)
         )
-        return dict(rows.all())
+        return {(user_id, access_platform): count for user_id, access_platform, count in rows}
 
-    def done_by_item(self, course_id: int) -> dict[tuple[str, int], int]:
-        """Сколько участников прошли каждый элемент — {(kind, id): count}.
-        Это и есть воронка отчёта, один GROUP BY на весь курс."""
-        done = self._course_done_rows(course_id)
+    def done_by_item(self, course_id: int, platform: str | None) -> dict[tuple[str, int], int]:
+        """Сколько доступов прошли каждый элемент — {(kind, id): count}.
+        Это и есть воронка отчёта, один GROUP BY на весь курс.
+
+        Считаются доступы, а не люди: воронка стоит рядом с `granted`, и один
+        человек с доступом на обеих площадках даёт в неё две единицы — ровно
+        как и в `granted`.
+        """
+        done = self._course_done_rows(course_id, platform)
         rows = self.db.execute(
             select(done.c.kind, done.c.item_id, func.count())
             .where(done.c.is_hidden.is_(False))
@@ -1460,32 +1630,49 @@ class ReviewRepo:
         ).first()
         return (row[0], row[1], row[2]) if row is not None else None
 
-    def page(self, course_id: int, offset: int, limit: int) -> list[tuple[Review, User]]:
+    def page(
+        self, course_id: int, offset: int, limit: int, platform: str
+    ) -> list[tuple[Review, User]]:
+        # Лента курса — своей площадки: отзыв с соседней в этом каталоге
+        # не показывается (PLATFORMS_BRIEF, решение 3)
         rows = self.db.execute(
             select(Review, User)
             .join(User, User.id == Review.user_id)
-            .where(Review.course_id == course_id, Review.deleted_at.is_(None))
+            .where(
+                Review.course_id == course_id,
+                Review.platform == platform,
+                Review.deleted_at.is_(None),
+            )
             .order_by(Review.created_at.desc(), Review.id.desc())
             .offset(offset)
             .limit(limit)
         )
         return [(review, author) for review, author in rows]
 
-    def count(self, course_id: int) -> int:
+    def count(self, course_id: int, platform: str) -> int:
         return (
             self.db.scalar(
                 select(func.count())
                 .select_from(Review)
-                .where(Review.course_id == course_id, Review.deleted_at.is_(None))
+                .where(
+                    Review.course_id == course_id,
+                    Review.platform == platform,
+                    Review.deleted_at.is_(None),
+                )
             )
             or 0
         )
 
-    def breakdown(self, course_id: int) -> dict[int, int]:
-        """Счётчики по звёздам {rating: count} — по последнему отзыву автора."""
+    def breakdown(self, course_id: int, platform: str) -> dict[int, int]:
+        """Счётчики по звёздам {rating: count} — по последнему отзыву автора
+        на этой площадке: под лентой стоят её же звёзды."""
         latest = (
             select(Review.rating.label("rating"))
-            .where(Review.course_id == course_id, Review.deleted_at.is_(None))
+            .where(
+                Review.course_id == course_id,
+                Review.platform == platform,
+                Review.deleted_at.is_(None),
+            )
             .distinct(Review.user_id)
             .order_by(Review.user_id, Review.created_at.desc(), Review.id.desc())
             .subquery()
@@ -1494,15 +1681,27 @@ class ReviewRepo:
         return dict(rows.all())
 
     def admin_page(
-        self, *, course_id: int | None, rating: int | None, offset: int, limit: int
+        self,
+        *,
+        course_id: int | None,
+        rating: int | None,
+        platform: str | None,
+        offset: int,
+        limit: int,
     ) -> tuple[list[tuple[Review, User, Course]], int]:
         """Лента отзывов по всей платформе, свежие сверху. Видимость курса
-        здесь не проверяется: отзыв разбирают и по скрытому курсу."""
+        здесь не проверяется: отзыв разбирают и по скрытому курсу.
+
+        Площадка — фильтр, а не рамка: без параметра приходят обе, и `total`
+        считается по тем же строкам, что и страница.
+        """
         conds = [Review.deleted_at.is_(None)]
         if course_id is not None:
             conds.append(Review.course_id == course_id)
         if rating is not None:
             conds.append(Review.rating == rating)
+        if platform is not None:
+            conds.append(Review.platform == platform)
         total = self.db.scalar(select(func.count()).select_from(Review).where(*conds)) or 0
         rows = self.db.execute(
             select(Review, User, Course)
@@ -1620,10 +1819,16 @@ class LeadRepo:
         statuses: list[str] | None,
         course_ids: list[int] | None,
         q: str | None,
+        platform: str | None,
         offset: int,
         limit: int,
     ) -> tuple[list[tuple[Lead, User, Course]], int]:
+        # Площадка — фильтр, а не рамка: админка одна на обе, и без параметра
+        # приходят обе. Условие стоит до подсчёта total: число под списком
+        # обязано считать те же строки, что и он
         conds = []
+        if platform is not None:
+            conds.append(Lead.platform == platform)
         if statuses:
             # Фильтр — объединение выбранного; псевдостатус «в работе»
             # разворачивается в свои три статуса
@@ -1703,41 +1908,50 @@ class EnrollmentRepo:
         )
         return [(enrollment, course) for enrollment, course in rows]
 
-    def participants_count(self, course_id: int) -> int:
-        """Доступы, не отозванные, — `granted` в сводке отчёта."""
+    def participants_count(self, course_id: int, platform: str | None) -> int:
+        """Доступы, не отозванные, — `granted` в сводке отчёта. Считаются
+        доступы, а не люди: курс на обеих площадках покупают дважды, и это
+        два участника отчёта (PLATFORMS_BRIEF, решение 2)."""
+        conds = [
+            Enrollment.course_id == course_id,
+            Enrollment.revoked_at.is_(None),
+            not_admin(Enrollment.user_id),
+        ]
+        if platform is not None:
+            conds.append(Enrollment.platform == platform)
         return (
-            self.db.scalar(
-                select(func.count())
-                .select_from(Enrollment)
-                .where(
-                    Enrollment.course_id == course_id,
-                    Enrollment.revoked_at.is_(None),
-                    not_admin(Enrollment.user_id),
-                )
-            )
-            or 0
+            self.db.scalar(select(func.count()).select_from(Enrollment).where(*conds)) or 0
         )
 
-    def completed_spans(self, course_id: int) -> list[tuple[datetime, datetime]]:
+    def completed_spans(
+        self, course_id: int, platform: str | None
+    ) -> list[tuple[datetime, datetime]]:
         """Пары (выдан доступ, завершён курс) у завершивших: из них считаются
         и `completed`, и среднее время прохождения. Дни считает Python той же
         функцией, что и «ждёт N дней», — второго календаря в SQL заводить
         незачем (CONTRACT, сессия 6)."""
+        conds = [
+            Enrollment.course_id == course_id,
+            Enrollment.revoked_at.is_(None),
+            Enrollment.completed_at.is_not(None),
+            not_admin(Enrollment.user_id),
+        ]
+        if platform is not None:
+            conds.append(Enrollment.platform == platform)
         rows = self.db.execute(
-            select(Enrollment.granted_at, Enrollment.completed_at).where(
-                Enrollment.course_id == course_id,
-                Enrollment.revoked_at.is_(None),
-                Enrollment.completed_at.is_not(None),
-                not_admin(Enrollment.user_id),
-            )
+            select(Enrollment.granted_at, Enrollment.completed_at).where(*conds)
         )
         return [(granted_at, completed_at) for granted_at, completed_at in rows]
 
     def participants_page(
-        self, course_id: int, *, q: str | None, offset: int, limit: int
-    ) -> tuple[list[User], int]:
-        """Страница таблицы участников. По алфавиту: в отчёте на восемь сотен
-        строк человека ищут по фамилии, а не по дате выдачи доступа.
+        self, course_id: int, *, platform: str | None, q: str | None, offset: int, limit: int
+    ) -> tuple[list[tuple[User, str]], int]:
+        """Страница таблицы участников — доступами, а не людьми: у человека
+        с доступом на обеих площадках строки две, у каждой своя площадка,
+        свой прогресс и свои проценты (решение оркестратора, сессия 2).
+
+        По алфавиту: в отчёте на восемь сотен строк человека ищут по фамилии,
+        а не по дате выдачи доступа; две строки одного человека стоят рядом.
 
         Поиск только по ФИО — телефона в отчёте нет (CONTRACT, сессия 6).
         """
@@ -1746,6 +1960,8 @@ class EnrollmentRepo:
             Enrollment.revoked_at.is_(None),
             User.is_admin.is_(False),
         ]
+        if platform is not None:
+            conds.append(Enrollment.platform == platform)
         if q is not None and q.strip():
             conds.append(
                 func.concat_ws(" ", User.last_name, User.first_name, User.middle_name).ilike(
@@ -1761,17 +1977,15 @@ class EnrollmentRepo:
             )
             or 0
         )
-        users = list(
-            self.db.scalars(
-                select(User)
-                .join(Enrollment, Enrollment.user_id == User.id)
-                .where(*conds)
-                .order_by(User.last_name, User.first_name, User.id)
-                .offset(offset)
-                .limit(limit)
-            )
+        rows = self.db.execute(
+            select(User, Enrollment.platform)
+            .join(Enrollment, Enrollment.user_id == User.id)
+            .where(*conds)
+            .order_by(User.last_name, User.first_name, User.id, Enrollment.platform)
+            .offset(offset)
+            .limit(limit)
         )
-        return users, total
+        return [(user, access_platform) for user, access_platform in rows], total
 
     def create(
         self,
@@ -1809,43 +2023,62 @@ class NotificationRepo:
         self.db.flush()
         return notification
 
-    def page(self, user_id: int, offset: int, limit: int) -> list[Notification]:
-        # Свежие сверху; непрочитанные наверх не поднимаются (CONTRACT, сессия 6)
+    def page(
+        self, user_id: int, offset: int, limit: int, platform: str
+    ) -> list[Notification]:
+        # Свежие сверху; непрочитанные наверх не поднимаются (CONTRACT, сессия 6).
+        # Своей площадки: уведомление ведёт на свой домен, и на первом сайте
+        # нечего показывать про второй (PLATFORMS_BRIEF, раздел «База»)
         return list(
             self.db.scalars(
                 select(Notification)
-                .where(Notification.user_id == user_id)
+                .where(Notification.user_id == user_id, Notification.platform == platform)
                 .order_by(Notification.created_at.desc(), Notification.id.desc())
                 .offset(offset)
                 .limit(limit)
             )
         )
 
-    def count(self, user_id: int) -> int:
+    def count(self, user_id: int, platform: str) -> int:
         return (
             self.db.scalar(
                 select(func.count())
                 .select_from(Notification)
-                .where(Notification.user_id == user_id)
+                .where(Notification.user_id == user_id, Notification.platform == platform)
             )
             or 0
         )
 
-    def unread_count(self, user_id: int) -> int:
+    def unread_count(self, user_id: int, platform: str) -> int:
+        # По той же площадке, что и страница: иначе на колокольчике горит
+        # число, а в списке под ним пусто
         return (
             self.db.scalar(
                 select(func.count())
                 .select_from(Notification)
-                .where(Notification.user_id == user_id, Notification.read_at.is_(None))
+                .where(
+                    Notification.user_id == user_id,
+                    Notification.platform == platform,
+                    Notification.read_at.is_(None),
+                )
             )
             or 0
         )
 
-    def mark_read(self, user_id: int, ids: list[int] | None) -> None:
+    def mark_read(self, user_id: int, ids: list[int] | None, platform: str) -> None:
         """`ids=None` — все свои. Условие UPDATE и есть вся проверка: чужие
         и несуществующие id просто ничего не находят, а `read_at IS NULL`
-        не даёт переписать время первого прочтения (CONTRACT, сессия 6)."""
-        conds = [Notification.user_id == user_id, Notification.read_at.is_(None)]
+        не даёт переписать время первого прочтения (CONTRACT, сессия 6).
+
+        Площадка стоит в том же условии: присланный id соседней площадки
+        человеку не показывали, и гасить его нечем — он неотличим от чужого.
+        «Прочитать все» по той же причине гасит только свой список.
+        """
+        conds = [
+            Notification.user_id == user_id,
+            Notification.platform == platform,
+            Notification.read_at.is_(None),
+        ]
         if ids is not None:
             if not ids:
                 return
@@ -1869,12 +2102,17 @@ class ThreadMessageRepo:
         return self.db.get(ThreadMessage, message_id)
 
     def roots_page(
-        self, lesson_id: int, offset: int, limit: int
+        self, lesson_id: int, offset: int, limit: int, platform: str
     ) -> tuple[list[tuple[ThreadMessage, User]], int]:
         """Вопросы урока, свежие сверху. Автор джойнится сразу: `author_name`
-        и `author_is_admin` собираются в момент чтения."""
+        и `author_is_admin` собираются в момент чтения.
+
+        Только своей площадки (PLATFORMS_BRIEF, решение 3): курс общий, а ленты
+        под ним две, и `total` считается по тем же строкам, что и страница.
+        """
         conds = (
             ThreadMessage.lesson_id == lesson_id,
+            ThreadMessage.platform == platform,
             ThreadMessage.parent_id.is_(None),
             ThreadMessage.deleted_at.is_(None),
         )
@@ -1892,7 +2130,14 @@ class ThreadMessageRepo:
         return [(message, author) for message, author in rows], total
 
     def replies_for(self, root_ids: list[int]) -> dict[int, list[tuple[ThreadMessage, User]]]:
-        """Ответы всей страницы одним запросом — иначе N+1 на каждый вопрос."""
+        """Ответы всей страницы одним запросом — иначе N+1 на каждый вопрос.
+
+        Площадки здесь нет, и это не забытый фильтр: ответ ложится на площадку
+        своего вопроса, а не запроса (`application/questions.py`, `message_platform`),
+        поэтому под корнем своей площадки чужих строк не бывает. Корни уже
+        отобраны — и лентой урока, и очередью админа, которая обязана видеть
+        тред целиком на обеих площадках.
+        """
         if not root_ids:
             return {}
         rows = self.db.execute(
@@ -1936,11 +2181,16 @@ class ThreadMessageRepo:
         answered: bool | None,
         course_id: int | None,
         q: str | None,
+        platform: str | None,
         offset: int,
         limit: int,
     ) -> tuple[list[tuple[ThreadMessage, User, Course, Lesson]], int]:
         """Очередь вопросов по всей платформе: свежие сверху. Видимость курса
-        здесь не проверяется — админ открывает вопрос и по скрытому курсу."""
+        здесь не проверяется — админ открывает вопрос и по скрытому курсу.
+
+        Площадка — фильтр, а не рамка: без параметра приходят обе. Условие
+        стоит и в подсчёте `total`, иначе счётчик очереди разойдётся с ней.
+        """
         reply = aliased(ThreadMessage)
         # Ответ автора самому себе очередь не закрывает: «без ответа» здесь —
         # это «никто ещё не ответил», а не «в треде появилась вторая строка»
@@ -1960,6 +2210,8 @@ class ThreadMessageRepo:
             conds.append(has_reply if answered else ~has_reply)
         if course_id is not None:
             conds.append(ThreadMessage.course_id == course_id)
+        if platform is not None:
+            conds.append(ThreadMessage.platform == platform)
         if q is not None and q.strip():
             needle = f"%{q.strip()}%"
             conds.append(
@@ -2461,6 +2713,9 @@ class CourseAdminRepo:
             .where(Session.preview_course_id == course_id)
             .values(preview_course_id=None)
         )
+        # Строки публикации уходят вместе с курсом: каскада у них нет,
+        # а удаляют только курс, по которому никто не учится
+        self.db.execute(delete(CoursePlatform).where(CoursePlatform.course_id == course_id))
         self.db.execute(delete(Course).where(Course.id == course_id))
 
 

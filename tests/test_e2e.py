@@ -17,6 +17,7 @@
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from app.domain.platform import DEFAULT_PLATFORM
 from app.main import app
 from tests.conftest import ADMIN_PHONE, PHONE, login, login_admin, user_id
 
@@ -89,7 +90,7 @@ def build_course(admin) -> dict:
                 "short": "Как перейти на критерии, не сломав журнал",
                 "full": "Курс для учителей начальной школы.",
                 "cover": {"key": cover["key"], "name": cover["name"]},
-                "price": PRICE,
+                "platforms": [{"platform": DEFAULT_PLATFORM, "price": PRICE}],
                 "duration_text": "6 недель",
                 "strict_order": True,
                 "cert_require_lessons": True,
@@ -99,7 +100,9 @@ def build_course(admin) -> dict:
         )
     )
     assert course["strict_order"] is True
-    assert course["price"] == PRICE
+    # Галочка публикации и цена — одна строка `course_platform`: без неё
+    # собранного курса не будет ни в одном каталоге
+    assert course["platforms"] == [{"platform": DEFAULT_PLATFORM, "price": PRICE}]
     # Наружу обложка уходит адресом публичной раздачи, а не ключом хранилища
     assert course["cover"] == f"{get_settings().public_base_url}/courses/{course_id}/cover"
 

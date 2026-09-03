@@ -94,6 +94,7 @@ def test_feed_row_has_course_author_and_reply(client, sms):
         "items": [
             {
                 "id": review.id,
+                "platform": "p1",
                 "rating": 5,
                 "text": "Наконец-то понятно, как объяснять оценки родителям.",
                 # Правки отзыва учителем в продукте нет — поле остаётся пустым

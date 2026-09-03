@@ -66,15 +66,30 @@ class OverviewService:
 
     # -- GET /admin/overview ---------------------------------------------
 
-    def overview(self) -> dict:
+    def overview(self, platform: str | None) -> dict:
         """Один ответ на весь экран: два запроса, которыми шапка админки
-        тянула `total` у заявок и работ, этим и закрываются."""
+        тянула `total` у заявок и работ, этим и закрываются.
+
+        Площадка — общий фильтр всего экрана, а не вторая колонка у каждого
+        показателя (PLATFORMS_BRIEF, решение 9): он действует и на счётчики,
+        и на списки под ними. Параметра нет — обе площадки, как и было.
+        """
         leads, leads_count = self.leads.admin_page(
-            statuses=[NEW_LEAD_STATUS], course_ids=None, q=None, offset=0, limit=LIST_LIMIT
+            statuses=[NEW_LEAD_STATUS],
+            course_ids=None,
+            q=None,
+            platform=platform,
+            offset=0,
+            limit=LIST_LIMIT,
         )
-        submissions, submissions_count = self.submissions.pending_head(LIST_LIMIT)
+        submissions, submissions_count = self.submissions.pending_head(LIST_LIMIT, platform)
         questions, questions_count = self.messages.admin_page(
-            answered=False, course_id=None, q=None, offset=0, limit=LIST_LIMIT
+            answered=False,
+            course_id=None,
+            q=None,
+            platform=platform,
+            offset=0,
+            limit=LIST_LIMIT,
         )
         # Подпись «Урок 6 · …» — сквозной номер видимых уроков курса
         numbers = self.courses.lesson_numbers(
@@ -98,9 +113,12 @@ class OverviewService:
                 for message, author, course, lesson in questions
             ],
             "totals": {
+                # Единственное число экрана, которое фильтр не трогает:
+                # аккаунт один на обе площадки (PLATFORMS_BRIEF, решение 11),
+                # и «учителей площадки» в базе не существует
                 "teachers": self.users.teachers_count(),
-                "courses_published": self.courses.published_count(),
-                "certificates": self.certificates.active_count(),
+                "courses_published": self.courses.published_count(platform),
+                "certificates": self.certificates.active_count(platform=platform),
             },
         }
 
@@ -110,6 +128,10 @@ class OverviewService:
     def _lead_out(lead: Lead, teacher: User, course: Course, now: datetime) -> dict:
         return {
             "id": lead.id,
+            # Те же строки, что в очереди заявок, — и метка та же: без неё
+            # админ видел бы одну и ту же заявку с площадкой на одном экране
+            # и без неё на соседнем
+            "platform": lead.platform,
             "created_at": lead.created_at,
             # В списке только новые заявки — каждая ждёт с самого создания
             "waiting_days": waiting_days(lead.created_at, now),
@@ -128,6 +150,7 @@ class OverviewService:
     ) -> dict:
         return {
             "id": submission.id,
+            "platform": submission.platform,
             "created_at": submission.created_at,
             "waiting_days": waiting_days(submission.created_at, now),
             "teacher": _teacher_out(teacher),
@@ -145,6 +168,7 @@ class OverviewService:
     ) -> dict:
         return {
             "id": message.id,
+            "platform": message.platform,
             "text": message.text,
             "created_at": message.created_at,
             "teacher": _teacher_out(author),

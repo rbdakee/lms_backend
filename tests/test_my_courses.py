@@ -59,7 +59,7 @@ def test_my_leads_keep_price_snapshot(client, sms):
 
     # Цену курса подняли — заявка помнит свою
     with get_engine().begin() as conn:
-        conn.execute(text("UPDATE course SET price = 60000"))
+        conn.execute(text("UPDATE course_platform SET price = 60000"))
         conn.execute(
             text("UPDATE lead SET created_at = created_at - make_interval(days => 4)")
         )

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, status
 from app.adapters.db.models import User
 from app.api import deps
 from app.api.pagination import PageParams, page_out
+from app.api.routers.admin import platform_filter
 from app.api.schemas import AdminReviewOut, AdminReviewsPageOut, ReviewReplyIn
 from app.application.reviews_admin import ReviewsAdminService
 
@@ -19,9 +20,15 @@ def admin_reviews(
     course_id: Annotated[int | None, Query()] = None,
     # Звёзды: экран открывается без фильтра, отдельно смотрят единицы и двойки
     rating: Annotated[int | None, Query(ge=1, le=5)] = None,
+    # Одно значение; параметра нет — обе площадки
+    platform: Annotated[str | None, Query()] = None,
 ) -> AdminReviewsPageOut:
     data = svc.admin_list(
-        course_id=course_id, rating=rating, offset=params.offset, limit=params.per_page
+        course_id=course_id,
+        rating=rating,
+        platform=platform_filter(platform),
+        offset=params.offset,
+        limit=params.per_page,
     )
     return AdminReviewsPageOut(**page_out(data["items"], data["total"], params))
 

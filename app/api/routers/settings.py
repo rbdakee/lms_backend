@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from app.adapters.db.models import User
@@ -11,8 +11,14 @@ from app.application.settings import SettingsService
 router = APIRouter()
 admin_router = APIRouter(prefix="/admin")
 
-# Сутки: логотип меняют раз в год, а стоит он на каждой странице лендинга
+# Сутки: логотип меняют выкаткой, а стоит он на каждой странице лендинга.
+#
+# `vary: origin` к нему обязателен, и ставим мы его сами: адрес картинки один
+# на обе площадки, а байты у них разные — кэш без этого заголовка отдал бы
+# второй площадке логотип первой. CORSMiddleware дописывает `vary` только
+# тем ответам, у которых в запросе был `Origin`, а здесь он бывает и без него.
 BRANDING_CACHE = "public, max-age=86400"
+BRANDING_VARY = "origin"
 
 # Логотипом кладут и svg, а внутри svg бывает <script>. Открытый прямым
 # адресом, он выполнился бы на домене API — том самом, чью куку сессии делят
@@ -26,27 +32,40 @@ BRANDING_SECURITY = {
 
 @router.get("/settings")
 def public_settings(
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[SettingsService, Depends(deps.get_settings_service)],
 ) -> PublicSettingsOut:
-    # Без входа: название, логотип и контакты показывает лендинг
-    return PublicSettingsOut(**svc.public())
+    # Без входа: название, логотип и контакты показывает лендинг — свои
+    # у каждой площадки
+    return PublicSettingsOut(**svc.public(platform))
 
 
 @router.get("/branding/{slot}")
 def branding_image(
     slot: str,
+    platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[SettingsService, Depends(deps.get_settings_service)],
+    requested: Annotated[str | None, Query(alias="platform")] = None,
 ) -> StreamingResponse:
-    # Слот — обычная строка, а не перечисление: выдуманное имя должно давать
-    # общий 404, как и не поставленная картинка, а не 422 от валидатора пути.
-    # content-disposition не ставим — картинка стоит в <img>, а не скачивается
-    mime, size, chunks = svc.content(slot)
+    # Слот и код площадки — обычные строки, а не перечисления: выдуманное имя
+    # должно давать общий 404, как и не положенная картинка, а не 422
+    # от валидатора. content-disposition не ставим — картинка стоит в <img>,
+    # а не скачивается.
+    #
+    # Параметр главнее `Origin`, и он же тут главный способ: картинку тянет
+    # `<img>`, а в такой запрос браузер `Origin` не кладёт вовсе — без
+    # параметра вторая площадка получала бы логотип первой. Адрес с параметром
+    # собирает сервер (`GET /settings`), фронт его не сочиняет; подделка
+    # безобидна — картинка и так публичная. Параметра нет — прежнее поведение,
+    # площадка из `Origin`, и адрес первой площадки работает как работал.
+    mime, size, chunks = svc.content(requested or platform, slot)
     return StreamingResponse(
         chunks,
         media_type=mime,
         headers={
             "content-length": str(size),
             "cache-control": BRANDING_CACHE,
+            "vary": BRANDING_VARY,
             **BRANDING_SECURITY,
         },
     )

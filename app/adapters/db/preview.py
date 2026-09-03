@@ -6,8 +6,9 @@
 
 - **доступ** — `EnrollmentRepo.active_for`: админу на предпросматриваемый курс
   отдаётся синтетический доступ, которого в базе нет;
-- **видимость** — `CourseVisibility.visible_course`: черновик и скрытая версия
-  для площадки не существуют, а смотреть админ приходит именно их.
+- **видимость** — `CourseVisibility.visible_course` и `published_course`:
+  черновик, скрытая версия и курс, не выложенный на площадке, для неё
+  не существуют, а смотреть админ приходит именно их.
 
 Снимаются они ровно с одного курса — предпросматриваемого: черновик соседнего
 курса в режиме остаётся недоступным.
@@ -81,6 +82,13 @@ class PreviewVisibility(CourseVisibility):
         # Общее правило остаётся в силе: снимается статус ровно с одного курса,
         # черновик соседнего в режиме по-прежнему не существует
         return or_(super().visible_course(), Course.id == self.preview_course_id)
+
+    def published_course(self, platform: str | None) -> ColumnElement[bool]:
+        # Замок публикации снимается той же подменой и с того же одного курса:
+        # у черновика строки `course_platform` может не быть вовсе, а смотреть
+        # админ приходит именно его. Площадку режим при этом не различает
+        # (PLATFORMS_BRIEF, решение 16).
+        return or_(super().published_course(platform), Course.id == self.preview_course_id)
 
 
 class PreviewCourseRepo(PreviewVisibility, CourseRepo):

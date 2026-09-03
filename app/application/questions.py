@@ -67,7 +67,9 @@ class QuestionsService:
         self, user: User, lesson_id: int, offset: int, limit: int, platform: str
     ) -> dict:
         self._accessible(user, lesson_id, platform)
-        roots, total = self.messages.roots_page(lesson_id, offset, limit)
+        # Лента своей площадки: вопрос, заданный на соседней, здесь не виден
+        # ни строкой, ни в total (PLATFORMS_BRIEF, решение 3)
+        roots, total = self.messages.roots_page(lesson_id, offset, limit, platform)
         replies = self.messages.replies_for([root.id for root, _ in roots])
         return {
             "items": [
@@ -159,11 +161,17 @@ class QuestionsService:
         answered: bool | None,
         course_id: int | None,
         q: str | None,
+        platform: str | None,
         offset: int,
         limit: int,
     ) -> dict:
         rows, total = self.messages.admin_page(
-            answered=answered, course_id=course_id, q=q, offset=offset, limit=limit
+            answered=answered,
+            course_id=course_id,
+            q=q,
+            platform=platform,
+            offset=offset,
+            limit=limit,
         )
         replies = self.messages.replies_for([message.id for message, _, _, _ in rows])
         numbers = self.courses.lesson_numbers(sorted({course.id for _, _, course, _ in rows}))
@@ -244,6 +252,10 @@ class QuestionsService:
     ) -> dict:
         return {
             "id": message.id,
+            # Метка площадки: вопрос виден только в своём каталоге, и админ
+            # в общей очереди должен видеть, где его задали. Кодом, а не
+            # именем — имя админка возьмёт из справочника GET /admin/settings
+            "platform": message.platform,
             "text": message.text,
             "created_at": message.created_at,
             # ФИО собирает фронт, как в заявках и очереди работ

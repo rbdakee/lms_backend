@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session as OrmSession
 
@@ -38,6 +39,27 @@ DOCX = b"PK\x03\x04" + b"docx" * 32
 # Адрес-ссылка из прежних времён: колонка `cover` осталась на чтение, и у
 # курсов, заведённых до загрузки файлом, обложка обязана продолжать работать.
 OLD_LINK = "https://cdn.example.kz/covers/assessment_ru.jpg"
+
+# Свои источники, а не из `.env`: у разработчика там localhost с портами.
+# Галочку проверяют по каталогу площадки, а он узнаёт её по Origin.
+P1_ORIGIN = "https://first.example.kz"
+P2_ORIGIN = "https://second.example.kz"
+P1 = {"Origin": P1_ORIGIN}
+P2 = {"Origin": P2_ORIGIN}
+
+
+@pytest.fixture
+def platform_origins(monkeypatch):
+    monkeypatch.setattr(
+        get_settings(), "platform_origins", {P1_ORIGIN: "p1", P2_ORIGIN: "p2"}
+    )
+
+
+def catalog_ids(client, headers):
+    """Что видно в каталоге площадки — по её же адресу, без входа."""
+    resp = client.get("/courses", headers=headers)
+    assert resp.status_code == 200, resp.text
+    return [version["id"] for group in resp.json()["items"] for version in group["versions"]]
 
 
 def upload_cover(client, name="Обложка курса.png", content=COVER_PNG):
@@ -216,7 +238,9 @@ def test_create_draft_answers_with_the_editor(client, sms):
         "category_id": 2,
         "hours": 36,
         "duration_text": None,
-        "price": None,
+        # Только что созданный курс — черновик без единой площадки: в каталоге
+        # ему не место
+        "platforms": [],
         "status": "draft",
         "starts_at": None,
         "strict_order": False,
@@ -329,18 +353,19 @@ def test_card_of_draft_is_not_404(client, sms):
 
 
 def test_patch_changes_fields_and_moves_updated_at(client, sms):
-    course = make_course(price=45000, cover="https://cdn.example.kz/c.jpg")
+    course = make_course(cover="https://cdn.example.kz/c.jpg")
     login_admin(client, sms)
     before = client.get(f"/admin/courses/{course.id}").json()
 
     body = client.patch(
         f"/admin/courses/{course.id}",
-        json={"short": "Как оценивать без пятибалльной шкалы", "price": None,
+        json={"short": "Как оценивать без пятибалльной шкалы",
+              "platforms": [{"platform": "p1", "price": None}],
               "duration_text": "6 недель", "strict_order": True,
               "cert_require_lessons": True},
     ).json()
     # null у цены — это «Цена по запросу», а не «поле не прислали»
-    assert body["price"] is None
+    assert body["platforms"] == [{"platform": "p1", "price": None}]
     assert body["short"] == "Как оценивать без пятибалльной шкалы"
     assert body["duration_text"] == "6 недель"
     assert body["strict_order"] is True
@@ -522,7 +547,10 @@ def test_number_out_of_range_is_reported_in_russian(client, sms):
         "Объём курса — от 1 до 999 часов"
     )
 
-    resp = client.patch(f"/admin/courses/{course.id}", json={"price": -1})
+    resp = client.patch(
+        f"/admin/courses/{course.id}",
+        json={"platforms": [{"platform": "p1", "price": -1}]},
+    )
     assert resp.status_code == 422
     assert resp.json()["error"]["details"]["fields"][0] == {
         "field": "price",
@@ -562,6 +590,137 @@ def test_patch_refuses_an_empty_title(client, sms):
     # Пробелы по краям обрезаются, как и при создании
     body = client.patch(f"/admin/courses/{course.id}", json={"title": "  Новое  "}).json()
     assert body["title"] == "Новое"
+
+
+# -- галочки публикации и цены -----------------------------------------
+
+
+def test_patch_sets_and_clears_the_publication_checkboxes(
+    client, client2, sms, platform_origins
+):
+    """Галочка площадки — это строка `course_platform`, и ставит её тот же
+    PATCH. Курс появляется в каталоге ровно той площадки, которую отметили,
+    и уходит из каталога той, с которой галочку сняли."""
+    course = make_course(title="Критериальное оценивание", platforms={})
+    login_admin(client, sms)
+
+    body = client.patch(
+        f"/admin/courses/{course.id}",
+        json={"platforms": [{"platform": "p1", "price": 45000},
+                            {"platform": "p2", "price": 60000}]},
+    ).json()
+    assert body["platforms"] == [{"platform": "p1", "price": 45000},
+                                 {"platform": "p2", "price": 60000}]
+    assert catalog_ids(client2, P1) == [course.id]
+    assert catalog_ids(client2, P2) == [course.id]
+
+    # Галочку сняли со второй площадки: там курса нет, на первой он остался
+    body = client.patch(
+        f"/admin/courses/{course.id}",
+        json={"platforms": [{"platform": "p1", "price": 45000}]},
+    ).json()
+    assert body["platforms"] == [{"platform": "p1", "price": 45000}]
+    assert catalog_ids(client2, P1) == [course.id]
+    assert catalog_ids(client2, P2) == []
+
+
+def test_each_platform_keeps_its_own_price(client, sms):
+    """Цена — свойство пары «курс и площадка»: у одного курса их две,
+    и обе приходят обратно и в карточку редактора, и в строку списка."""
+    course = make_course(platforms={"p1": 45000, "p2": 60000})
+    login_admin(client, sms)
+
+    both = [{"platform": "p1", "price": 45000}, {"platform": "p2", "price": 60000}]
+    assert client.get(f"/admin/courses/{course.id}").json()["platforms"] == both
+    assert client.get("/admin/courses").json()["items"][0]["platforms"] == both
+
+    body = client.patch(
+        f"/admin/courses/{course.id}",
+        json={"platforms": [{"platform": "p1", "price": 50000},
+                            {"platform": "p2", "price": None}]},
+    ).json()
+    # Пустая цена — «Цена по запросу», а не снятая галочка: строка на месте
+    assert body["platforms"] == [{"platform": "p1", "price": 50000},
+                                 {"platform": "p2", "price": None}]
+
+
+def test_a_patch_without_platforms_leaves_the_set_alone(client, sms):
+    """Поля нет в запросе — набор не трогаем: вкладка «Основное» сохраняется
+    отдельно от галочек, и правка названия не имеет права снять публикацию."""
+    course = make_course(platforms={"p1": 45000, "p2": 60000})
+    login_admin(client, sms)
+
+    body = client.patch(
+        f"/admin/courses/{course.id}", json={"title": "Новое название"}
+    ).json()
+    assert body["platforms"] == [{"platform": "p1", "price": 45000},
+                                 {"platform": "p2", "price": 60000}]
+
+
+def test_an_empty_list_takes_the_course_out_of_every_catalog(
+    client, client2, sms, platform_origins
+):
+    """Пустой список — все галочки сняты: курс не показывают нигде."""
+    course = make_course(platforms={"p1": 45000, "p2": 60000})
+    login_admin(client, sms)
+
+    body = client.patch(f"/admin/courses/{course.id}", json={"platforms": []}).json()
+    assert body["platforms"] == []
+    assert catalog_ids(client2, P1) == []
+    assert catalog_ids(client2, P2) == []
+
+
+def test_the_same_platform_twice_is_refused(client, sms):
+    """Две цены на одну галочку — противоречие экрана, и выбирать за него
+    нельзя. Текст под полем русский: это проверка сценария, а не разбор
+    запроса."""
+    course = make_course(platforms={"p1": 45000})
+    login_admin(client, sms)
+
+    resp = client.patch(
+        f"/admin/courses/{course.id}",
+        json={"platforms": [{"platform": "p1", "price": 45000},
+                            {"platform": "p1", "price": 60000}]},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["details"]["fields"] == [
+        {"field": "platforms", "message": "Площадка в списке дважды: p1"}
+    ]
+    # Отбитый запрос не записал ничего: набор остался прежним
+    assert client.get(f"/admin/courses/{course.id}").json()["platforms"] == [
+        {"platform": "p1", "price": 45000}
+    ]
+
+    # Код вне списка площадок отбивается там же, где остальные значения формы
+    assert client.patch(
+        f"/admin/courses/{course.id}",
+        json={"platforms": [{"platform": "px", "price": 45000}]},
+    ).status_code == 422
+
+
+def test_clearing_a_checkbox_never_touches_somebody_who_studies(
+    client, client2, sms, platform_origins
+):
+    """Решение 12: снятая галочка убирает курс из каталога, но не отбирает
+    доступ. Никакого 409 здесь нет — иначе снятие стало бы необратимым
+    действием над чужой учёбой, и вернуть его было бы нечем."""
+    course = make_course(title="Критериальное оценивание")
+    lesson = make_lesson(make_module(course.id).id)
+    login(client2, sms, TEACHER_PHONE)
+    make_enrollment(user_id(client2), course.id)
+
+    login_admin(client, sms)
+    resp = client.patch(f"/admin/courses/{course.id}", json={"platforms": []})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["platforms"] == []
+    # Курс, по которому учатся, снимается так же, как любой другой
+    assert resp.json()["has_students"] is True
+
+    assert catalog_ids(client2, P1) == []
+    assert client2.get(f"/lessons/{lesson.id}", headers=P1).status_code == 200
+    page = client2.get(f"/courses/{course.id}", headers=P1)
+    assert page.status_code == 200, page.text
+    assert page.json()["access"]["state"] == "granted"
 
 
 # -- обложка курса -----------------------------------------------------
@@ -814,7 +973,9 @@ def test_version_copies_the_program_into_a_new_draft(client, sms):
     assert body["group_id"] == course.group_id
     assert body["lang"] == "kz"
     assert body["status"] == "draft"
-    assert body["price"] is None
+    # Ни одной галочки публикации: цену и площадку казахской версии ставят
+    # отдельно, молча продублировать их нельзя
+    assert body["platforms"] == []
     assert body["starts_at"] is None
     assert body["versions"] == [{"id": course.id, "lang": "ru", "status": "open"}]
 
@@ -900,7 +1061,7 @@ def test_duplicate_makes_a_new_group(client, client2, sms):
     # Обложка переезжает в копию — и загруженная, и доставшаяся ссылкой
     assert body["cover"] == OLD_LINK
     assert body["status"] == "draft"
-    assert body["price"] is None
+    assert body["platforms"] == []
     assert body["starts_at"] is None
     assert body["versions"] == []
     # Доступы не копируются: учатся на исходном курсе

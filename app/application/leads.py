@@ -59,9 +59,14 @@ class LeadsService:
     # -- заявка учителя -------------------------------------------------
 
     def create_lead(self, user: User, course_id: int, platform: str) -> dict:
-        course = self.courses.visible_by_id(course_id)
+        # Правило каталожное, без поблажки на доступ: заявку подаёт тот, у кого
+        # доступа ещё нет, и на курс соседней площадки её подать нельзя
+        course = self.courses.published_by_id(course_id, platform)
         if course is None:
             raise NotFoundError("Курс не найден")
+        # Снимок берётся с цены той площадки, откуда пришла заявка: на второй
+        # тот же курс стоит своих денег (PLATFORMS_BRIEF, решение 3)
+        price = self.courses.platforms.prices([course.id], platform).get(course.id)
         if self.preview_course_id is not None:
             # Ранний выход: ни заявки в очереди админа, ни сообщения в бот
             # (BACKEND_NOTES, раздел 12). Глушится заявка на любой курс, а не
@@ -74,7 +79,7 @@ class LeadsService:
                     id=0,
                     user_id=user.id,
                     course_id=course.id,
-                    price_snapshot=course.price,
+                    price_snapshot=price,
                     status="new",
                     created_at=now_utc(),
                     platform=platform,
@@ -91,7 +96,7 @@ class LeadsService:
             lead.reminded_at = now_utc()
             return self._lead_out(lead)
 
-        lead = self.leads.create(user.id, course.id, course.price, platform)
+        lead = self.leads.create(user.id, course.id, price, platform)
         self.commit()
         try:
             # Без ФИО и телефона: подробности админ откроет по кнопке в
@@ -107,6 +112,9 @@ class LeadsService:
                     link_url=f"{self.admin_base_url}/leads/{lead.id}",
                 ),
                 kind="lead",
+                # Площадка заявки, а не запроса: строку в текст ставит
+                # сам notifier — см. AdminNotifier.notify_admins
+                platform=lead.platform,
             )
         except Exception:
             log.exception("Telegram-уведомление о заявке %s не ушло", lead.id)
@@ -129,15 +137,33 @@ class LeadsService:
         statuses: list[str] | None,
         course_ids: list[int] | None,
         q: str | None,
+        platform: str | None,
         offset: int,
         limit: int,
     ) -> dict:
         rows, total = self.leads.admin_page(
-            statuses=statuses, course_ids=course_ids, q=q, offset=offset, limit=limit
+            statuses=statuses,
+            course_ids=course_ids,
+            q=q,
+            platform=platform,
+            offset=offset,
+            limit=limit,
         )
+        # Запрос на площадку, а не на заявку: цена у каждой своя, а страница
+        # бывает и на сто строк — читать её построчно значит сто запросов
+        course_ids_on_page = [course.id for _, _, course in rows]
+        prices = {
+            lead_platform: self.courses.platforms.prices(
+                course_ids_on_page, lead_platform
+            )
+            for lead_platform in {lead.platform for lead, _, _ in rows}
+        }
         return {
             "items": [
-                self._admin_lead_out(lead, teacher, course) for lead, teacher, course in rows
+                self._admin_lead_out(
+                    lead, teacher, course, prices[lead.platform].get(course.id)
+                )
+                for lead, teacher, course in rows
             ],
             "total": total,
         }
@@ -160,13 +186,22 @@ class LeadsService:
             lead.note = fields["note"]
         teacher = self.users.by_id(lead.user_id)
         course = self.courses.by_id(lead.course_id)
-        return self._admin_lead_out(lead, teacher, course)
+        price = self.courses.platforms.prices([course.id], lead.platform).get(course.id)
+        return self._admin_lead_out(lead, teacher, course, price)
 
     @staticmethod
-    def _admin_lead_out(lead: Lead, teacher: User, course: Course) -> dict:
+    def _admin_lead_out(
+        lead: Lead, teacher: User, course: Course, price: int | None
+    ) -> dict:
+        """Цена приходит готовой: у списка она берётся одним запросом
+        на площадку, у карточки — одним на строку."""
         closed = lead.status in ("granted", "declined")
         return {
             "id": lead.id,
+            # Метка площадки: админка одна на обе, и в строке видно, откуда
+            # заявка. Кодом, а не именем — имя админка возьмёт из справочника
+            # GET /admin/settings
+            "platform": lead.platform,
             "status": lead.status,
             "price_snapshot": lead.price_snapshot,
             "note": lead.note,
@@ -188,7 +223,9 @@ class LeadsService:
                 "id": course.id,
                 "lang": course.lang,
                 "title": course.title,
-                "price": course.price,
+                # Админ смотрит на заявку, и цена рядом с ней — цена того
+                # каталога, откуда она пришла, а не цена второй площадки
+                "price": price,
             },
         }
 

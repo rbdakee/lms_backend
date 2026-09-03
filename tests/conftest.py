@@ -28,6 +28,7 @@ from app.adapters.db.models import (
     Category,
     Certificate,
     Course,
+    CoursePlatform,
     Enrollment,
     Lead,
     Lesson,
@@ -335,12 +336,24 @@ def seed(obj):
 _group_seq = itertools.count(1)
 
 
-def make_course(**kw):
+def make_course(platforms=None, price=45000, **kw):
+    """Курс, по умолчанию выложенный на первой площадке по своей цене.
+
+    Публикация и цена живут строкой `course_platform`, и без неё курса нет
+    ни в одном каталоге. `platforms` — где он выложен и почём:
+    `{"p1": 45000, "p2": 60000}` — на обеих, `{}` — нигде. `price` — цена
+    на площадке по умолчанию: колонки `course.price` больше нет.
+    """
     kw.setdefault("group_id", next(_group_seq))
     fields = {"lang": "ru", "title": "Курс", "category_id": 1, "hours": 72,
-              "price": 45000, "status": "open"}
+              "status": "open"}
     fields.update(kw)
-    return seed(Course(**fields))
+    course = seed(Course(**fields))
+    if platforms is None:
+        platforms = {DEFAULT_PLATFORM: price}
+    for platform, price in platforms.items():
+        seed(CoursePlatform(course_id=course.id, platform=platform, price=price))
+    return course
 
 
 def make_module(course_id, **kw):

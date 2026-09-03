@@ -701,6 +701,9 @@ class AdminLeadCourseOut(BaseModel):
 
 class AdminLeadOut(BaseModel):
     id: int
+    # Метка площадки: админка одна на обе, имя админка возьмёт
+    # из справочника GET /admin/settings
+    platform: str
     status: str
     price_snapshot: int | None
     note: str | None
@@ -785,6 +788,9 @@ class SubmissionTaskOut(BaseModel):
 
 class AdminSubmissionOut(BaseModel):
     id: int
+    # Метка площадки: админка одна на обе, имя админка возьмёт
+    # из справочника GET /admin/settings
+    platform: str
     status: Literal["pending", "accepted", "rework"]
     # 1 — первая работа, больше — доработка после rework
     attempt_number: int
@@ -1021,6 +1027,9 @@ class QuestionLessonOut(BaseModel):
 
 class AdminQuestionOut(BaseModel):
     id: int
+    # Метка площадки: админка одна на обе, имя админка возьмёт
+    # из справочника GET /admin/settings
+    platform: str
     text: str
     created_at: datetime
     teacher: QuestionTeacherOut
@@ -1056,6 +1065,9 @@ class OverviewCourseOut(BaseModel):
 
 class OverviewLeadOut(BaseModel):
     id: int
+    # Метка площадки: админка одна на обе, имя админка возьмёт
+    # из справочника GET /admin/settings
+    platform: str
     created_at: datetime
     waiting_days: int
     price_snapshot: int | None
@@ -1065,6 +1077,9 @@ class OverviewLeadOut(BaseModel):
 
 class OverviewSubmissionOut(BaseModel):
     id: int
+    # Метка площадки: админка одна на обе, имя админка возьмёт
+    # из справочника GET /admin/settings
+    platform: str
     created_at: datetime
     waiting_days: int
     teacher: OverviewTeacherOut
@@ -1074,6 +1089,9 @@ class OverviewSubmissionOut(BaseModel):
 
 class OverviewQuestionOut(BaseModel):
     id: int
+    # Метка площадки: админка одна на обе, имя админка возьмёт
+    # из справочника GET /admin/settings
+    platform: str
     text: str
     created_at: datetime
     teacher: OverviewTeacherOut
@@ -1145,7 +1163,11 @@ class ReportFinalQuizOut(BaseModel):
 
 
 class ReportParticipantOut(BaseModel):
+    """Строка таблицы — это доступ, а не человек: у купившего общий курс
+    на обеих площадках строки две, у каждой свой прогресс и свои проценты."""
+
     user_id: int
+    platform: str
     last_name: str
     first_name: str
     middle_name: str
@@ -1188,6 +1210,17 @@ class AdminCourseVersionOut(BaseModel):
     status: str
 
 
+class AdminCoursePlatformOut(BaseModel):
+    """Площадка, на которой курс выложен, и цена именно там.
+
+    Это и есть галочка публикации: элемента нет — курса нет в каталоге этой
+    площадки. `price: null` — «Цена по запросу».
+    """
+
+    platform: Platform
+    price: int | None
+
+
 class AdminCourseOut(BaseModel):
     """Строка списка курсов — версия, а не группа: редактируют версию."""
 
@@ -1198,8 +1231,9 @@ class AdminCourseOut(BaseModel):
     cover: str | None
     category_id: int
     hours: int
-    # null — «Цена по запросу»
-    price: int | None
+    # Только выложенные площадки, порядком PLATFORMS. Цена своя у каждой:
+    # общей цены у курса больше нет
+    platforms: list[AdminCoursePlatformOut]
     status: str
     starts_at: date | None
     modules_count: int
@@ -1291,7 +1325,8 @@ class AdminCourseCardOut(BaseModel):
     category_id: int
     hours: int
     duration_text: str | None
-    price: int | None
+    # Галочки публикации и цены редактора — только выложенные площадки
+    platforms: list[AdminCoursePlatformOut]
     status: str
     starts_at: date | None
     strict_order: bool
@@ -1336,6 +1371,16 @@ class CourseCoverIn(BaseModel):
     name: str = Field(max_length=255)
 
 
+class AdminCoursePlatformIn(BaseModel):
+    """Галочка публикации с ценой. `price` обязателен и может быть null:
+    список заменяет набор целиком, и забытое поле стирало бы цену молча."""
+
+    model_config = {"extra": "forbid"}
+
+    platform: Platform
+    price: Price | None
+
+
 class AdminCoursePatchIn(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -1349,8 +1394,9 @@ class AdminCoursePatchIn(BaseModel):
     category_id: int | None = None
     hours: Hours | None = None
     duration_text: str | None = Field(None, max_length=100)
-    # null — «Цена по запросу»
-    price: Price | None = None
+    # Не прислали — набор площадок не трогаем; прислали — присланный список
+    # заменяет его целиком, и снятая галочка исчезает из него
+    platforms: list[AdminCoursePlatformIn] | None = None
     # Публикация — это тот же PATCH со сменой статуса, отдельной ручки нет
     status: Literal["draft", "planned", "open", "closed", "hidden"] | None = None
     # Дата без времени; у запланированного курса обязательна
@@ -1892,6 +1938,9 @@ class AdminReviewOut(BaseModel):
     не попадают вовсе."""
 
     id: int
+    # Метка площадки: админка одна на обе, имя админка возьмёт
+    # из справочника GET /admin/settings
+    platform: str
     rating: int
     text: str
     created_at: datetime
@@ -1972,18 +2021,9 @@ class AdminCategoryIn(BaseModel):
 # -- настройки площадки ------------------------------------------------
 
 
-class SettingsImageOut(BaseModel):
-    """Картинка настроек: адрес публичной раздачи и имя файла. Ключ хранилища
-    наружу не уходит — как и у материалов урока."""
-
-    url: str
-    name: str
-
-
 class SettingsContactsOut(BaseModel):
-    """Контакты администратора: их подставляют в кнопку «Связаться
-    с администратором» и в подвал. Не заполняли — приходят пустые строки,
-    а не null: экран рисует поля всегда.
+    """Контакты администратора площадки: их подставляют в кнопку «Связаться
+    с администратором» и в подвал.
 
     `phone` — для звонков, `whatsapp` — номер, а не ссылка: ссылку wa.me
     фронт собирает сам."""
@@ -1992,13 +2032,6 @@ class SettingsContactsOut(BaseModel):
     phone: str
     whatsapp: str
     hours: str
-
-
-class AdminCertificateImagesOut(BaseModel):
-    # Слоты хранилища cert_logo | cert_sign | cert_stamp; null — не ставили
-    logo: SettingsImageOut | None
-    sign: SettingsImageOut | None
-    stamp: SettingsImageOut | None
 
 
 class AdminSettingsTelegramOut(BaseModel):
@@ -2012,45 +2045,27 @@ class AdminSettingsTelegramOut(BaseModel):
     notify_submissions: bool
 
 
-class AdminSettingsOut(BaseModel):
-    """Настройки площадки одним ответом — все четыре вкладки экрана."""
+class AdminSettingsPlatformOut(BaseModel):
+    """Строка справочника площадок: код и человеческие имена бренда.
 
+    Бренд правке не подлежит — он лежит константами в коде, — но имена
+    админке нужны: ими подписаны галочки публикации в редакторе курса
+    и чипы фильтра площадки в списках. Взять их больше неоткуда."""
+
+    platform: str
     platform_name: str
     org_name: str
-    # Слот logo; null — логотип не ставили
-    logo: SettingsImageOut | None
-    contacts: SettingsContactsOut
-    certificate_images: AdminCertificateImagesOut
+
+
+class AdminSettingsOut(BaseModel):
+    """Настройки одним ответом: справочник площадок и привязка бота.
+
+    Бренда и контактов здесь больше нет — они переехали в код, а вкладка
+    «Бренд и контакты» из админки убрана (PLATFORMS_BRIEF, решение 4)."""
+
+    # Порядок — как в PLATFORMS: p1, потом p2
+    platforms: list[AdminSettingsPlatformOut]
     telegram: AdminSettingsTelegramOut
-
-
-class SettingsImageIn(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    # key и name из ответа POST /files. Имя хранится рядом с ключом: ключи
-    # загрузки случайные нарочно, и админу досталось бы «9f3c1a7e.png»
-    key: str = Field(max_length=500)
-    name: str = Field(max_length=255)
-
-
-class SettingsContactsIn(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    # Пустая строка стирает поле; null — то же, что поле не прислали.
-    # whatsapp — номер, как и phone: ссылку собирает фронт
-    name: str | None = Field(None, max_length=200)
-    phone: str | None = Field(None, max_length=50)
-    whatsapp: str | None = Field(None, max_length=50)
-    hours: str | None = Field(None, max_length=200)
-
-
-class AdminCertificateImagesIn(BaseModel):
-    model_config = {"extra": "forbid"}
-
-    # null убирает картинку; поля, которого в запросе нет, правка не касается
-    logo: SettingsImageIn | None = None
-    sign: SettingsImageIn | None = None
-    stamp: SettingsImageIn | None = None
 
 
 class AdminSettingsTelegramIn(BaseModel):
@@ -2066,23 +2081,20 @@ class AdminSettingsTelegramIn(BaseModel):
 class AdminSettingsPatchIn(BaseModel):
     model_config = {"extra": "forbid"}
 
-    platform_name: str | None = Field(None, max_length=200)
-    org_name: str | None = Field(None, max_length=300)
-    contacts: SettingsContactsIn | None = None
-    # null убирает логотип
-    logo: SettingsImageIn | None = None
-    certificate_images: AdminCertificateImagesIn | None = None
+    # Осталась одна вкладка: бренд и контакты правятся выкаткой, а не экраном,
+    # и присланное поле бренда отбивает `extra: forbid`
     telegram: AdminSettingsTelegramIn | None = None
 
 
 class PublicSettingsOut(BaseModel):
-    """Публичный ответ без входа: только то, что лендинг и страница курса
-    показывают всем. Ни привязки бота, ни картинок сертификата, ни ключей
-    хранилища здесь нет — лишнее поле утекает наружу вместе с ответом."""
+    """Публичный ответ без входа: то, что лендинг и страница курса показывают
+    всем. Собирается из констант бренда площадки запроса; ни привязки бота,
+    ни картинок сертификата здесь нет — лишнее поле утекает наружу вместе
+    с ответом."""
 
     platform_name: str
     org_name: str
-    # Адрес GET /branding/logo; null — логотип не ставили
+    # Адрес GET /branding/logo; null — файла логотипа у площадки нет
     logo_url: str | None
     contacts: SettingsContactsOut
 

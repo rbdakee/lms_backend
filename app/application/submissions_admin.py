@@ -37,10 +37,20 @@ class SubmissionsAdminService:
     # -- GET /admin/submissions -----------------------------------------
 
     def admin_list(
-        self, *, status: str | None, course_id: int | None, offset: int, limit: int
+        self,
+        *,
+        status: str | None,
+        course_id: int | None,
+        platform: str | None,
+        offset: int,
+        limit: int,
     ) -> dict:
         rows, total = self.submissions.admin_page(
-            status=status, course_id=course_id, offset=offset, limit=limit
+            status=status,
+            course_id=course_id,
+            platform=platform,
+            offset=offset,
+            limit=limit,
         )
         return {
             "items": [
@@ -111,6 +121,11 @@ class SubmissionsAdminService:
     ) -> dict:
         return {
             "id": submission.id,
+            # Метка площадки — и в очереди, и в карточке: карточка отдаёт
+            # ту же строку, и после вердикта метка на экране не должна
+            # пропадать. Кодом, а не именем: имя админка возьмёт
+            # из справочника GET /admin/settings
+            "platform": submission.platform,
             "status": submission.status,
             "attempt_number": number,
             "created_at": submission.created_at,

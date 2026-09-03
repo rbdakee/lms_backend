@@ -1,8 +1,8 @@
 """Сертификат бумагой: право на документ, снимок для печати и картинки
-настроек.
+бренда.
 
 Отдельным сценарием, а не внутри `certificates.py`: тому для чек-листа,
-выдачи и публичной проверки не нужны ни настройки площадки, ни хранилище,
+выдачи и публичной проверки не нужны ни бренд площадки, ни адрес проверки,
 и дописывать их туда значит тащить в готовый файл чужие зависимости.
 
 Данные — снимок из строки сертификата, без единого джойна на живые таблицы:
@@ -12,25 +12,17 @@
 
 from app.adapters.db.models import Certificate, User
 from app.adapters.db.repos import CertificateRepo
-from app.application.ports import StoragePort
-from app.application.settings import CERT_SLOTS, SettingsService
+from app.application.settings import brand_image
 from app.config import Settings
+from app.domain.brands import CERT_SLOTS
 from app.domain.errors import ForbiddenError, NotFoundError
 
 NOT_FOUND = "Сертификат не найден"
 
 
 class CertificatePdfService:
-    def __init__(
-        self,
-        certificates: CertificateRepo,
-        settings: SettingsService,
-        storage: StoragePort,
-        cfg: Settings,
-    ):
+    def __init__(self, certificates: CertificateRepo, cfg: Settings):
         self.certificates = certificates
-        self.settings = settings
-        self.storage = storage
         self.cfg = cfg
 
     # -- GET /certificates/{id}/pdf ----------------------------------------
@@ -62,7 +54,10 @@ class CertificatePdfService:
                 # Язык документа — снимок момента выдачи, а не язык читателя
                 "lang": certificate.lang,
             },
-            {field: self._image(slot) for field, slot in CERT_SLOTS.items()},
+            # Картинки берутся у площадки самого документа, а не у площадки
+            # запроса: бумагу открывает браузер прямой ссылкой, Origin в такой
+            # запрос не приходит, и площадки у него нет вовсе
+            {field: _image(certificate.platform, slot) for field, slot in CERT_SLOTS.items()},
             self._verify_url(certificate),
         )
 
@@ -81,18 +76,12 @@ class CertificatePdfService:
             return None
         return f"{base}/verify/{certificate.number}"
 
-    def _image(self, slot: str) -> bytes | None:
-        """Байты картинки слота — или None, если её не ставили или объекта
-        в хранилище уже нет.
 
-        Отсутствие печати не повод отказать человеку в сертификате, поэтому
-        пустой слот здесь не ошибка: место на бумаге просто останется пустым.
-        """
-        image = self.settings.image(slot)
-        if image is None:
-            return None
-        if self.storage.size(image["key"]) is None:
-            # Ключ в настройках есть, объекта нет: для документа это то же
-            # самое, что не поставленная картинка
-            return None
-        return b"".join(self.storage.read(image["key"]))
+def _image(platform: str, slot: str) -> bytes | None:
+    """Байты картинки слота у площадки — или None, если файла у неё нет.
+
+    Отсутствие печати не повод отказать человеку в сертификате, поэтому
+    пустой слот здесь не ошибка: место на бумаге просто останется пустым.
+    """
+    path = brand_image(platform, slot)
+    return path.read_bytes() if path is not None else None

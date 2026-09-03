@@ -25,10 +25,20 @@ class ReviewsAdminService:
     # -- GET /admin/reviews ----------------------------------------------
 
     def admin_list(
-        self, *, course_id: int | None, rating: int | None, offset: int, limit: int
+        self,
+        *,
+        course_id: int | None,
+        rating: int | None,
+        platform: str | None,
+        offset: int,
+        limit: int,
     ) -> dict:
         rows, total = self.reviews.admin_page(
-            course_id=course_id, rating=rating, offset=offset, limit=limit
+            course_id=course_id,
+            rating=rating,
+            platform=platform,
+            offset=offset,
+            limit=limit,
         )
         return {
             "items": [
@@ -84,6 +94,11 @@ class ReviewsAdminService:
     def _item_out(review: Review, author: User, course: Course) -> dict:
         return {
             "id": review.id,
+            # Метка площадки — и в ленте, и в ответе на отзыв: ответ отдаёт
+            # ту же строку, и после сохранения метка на экране не должна
+            # пропадать. Кодом, а не именем: имя админка возьмёт
+            # из справочника GET /admin/settings
+            "platform": review.platform,
             "rating": review.rating,
             "text": review.text,
             "created_at": review.created_at,
