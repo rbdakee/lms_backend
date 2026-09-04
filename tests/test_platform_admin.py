@@ -20,6 +20,7 @@ import pytest
 from app.adapters.db.models import QuizAttempt
 from app.adapters.db.repos import now_utc
 from app.config import get_settings
+from app.domain.brands import brand
 from tests.conftest import (
     login,
     login_admin,
@@ -386,11 +387,13 @@ def test_lead_message_names_the_source_platform(client, sms, telegram):
     login_named(client, sms)
 
     assert client.post(f"/courses/{course.id}/lead", headers=P1).status_code == 200
-    assert telegram.sent[-1].lines[0] == "Площадка: Площадка 1"
+    assert telegram.sent[-1].lines[0] == f"Площадка: {brand('p1').platform_name}"
 
     assert client.post(f"/courses/{course.id}/lead", headers=P2).status_code == 200
     # У второй площадки строка другая — иначе метка была бы бесполезной
-    assert telegram.sent[-1].lines[0] == "Площадка: Площадка 2"
+    assert telegram.sent[-1].lines[0] == f"Площадка: {brand('p2').platform_name}"
+    # Имя, а не код: «Площадка: p2» админу ничего не говорит
+    assert "p2" not in telegram.sent[-1].lines[0]
     assert telegram.sent[-1].lines[1] == "Курс: Критериальное оценивание"
 
 
@@ -410,7 +413,7 @@ def test_submission_message_names_the_platform_of_the_work(client, sms, storage,
     )
     assert resp.status_code == 200, resp.text
     assert telegram.sent[-1].lines == [
-        "Площадка: Площадка 2",
+        f"Площадка: {brand('p2').platform_name}",
         "Задание: Составьте дескрипторы",
         "Курс: Критериальное оценивание",
     ]
