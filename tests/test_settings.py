@@ -123,9 +123,10 @@ def test_admin_settings_are_the_platform_directory_and_the_bot(client, sms):
             "chat_title": None,
             "connected_at": None,
             # Флаги включены по умолчанию: бот привязывают затем, чтобы
-            # получать заявки
+            # получать заявки, работы на проверку и просьбы о сертификате
             "notify_leads": True,
             "notify_submissions": True,
+            "notify_certificates": True,
         },
     }
 
@@ -180,7 +181,23 @@ def test_patch_never_writes_chat_id(client, sms):
     body = client.patch("/admin/settings", json={"telegram": {"notify_leads": False}}).json()
     assert body["telegram"]["notify_leads"] is False
     assert body["telegram"]["notify_submissions"] is True
+    assert body["telegram"]["notify_certificates"] is True
     assert body["telegram"]["connected"] is False
+
+
+def test_notify_certificates_is_saved_on_its_own(client, sms):
+    """Заявки на сертификат — третий тип сообщений в чат (CERTIFICATES_BRIEF, 3),
+    и переключатель у него свой: выключенный не должен утащить за собой два
+    соседних."""
+    login_admin(client, sms)
+
+    body = client.patch(
+        "/admin/settings", json={"telegram": {"notify_certificates": False}}
+    ).json()
+
+    assert body["telegram"]["notify_certificates"] is False
+    assert body["telegram"]["notify_leads"] is True
+    assert body["telegram"]["notify_submissions"] is True
 
 
 def test_patch_returns_the_whole_get(client, sms):
@@ -208,6 +225,7 @@ def test_connected_bot_shows_the_chat_but_not_its_id(client, sms):
         "connected_at": "2026-08-06T05:30:00Z",
         "notify_leads": False,
         "notify_submissions": True,
+        "notify_certificates": True,
     }
 
     # Флаг правится, привязка при этом на месте
@@ -218,6 +236,7 @@ def test_connected_bot_shows_the_chat_but_not_its_id(client, sms):
         "connected_at": "2026-08-06T05:30:00Z",
         "notify_leads": True,
         "notify_submissions": True,
+        "notify_certificates": True,
     }
 
 

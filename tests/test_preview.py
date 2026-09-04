@@ -335,6 +335,9 @@ def test_preview_writes_nothing(client, sms, storage, telegram):
 
     certificate = walk_the_cabinet(client, data)
     assert certificate.status_code == 200
+    # Форма ответа настоящая, а строки за ней нет: id заявки нулевой
+    assert certificate.json()["id"] == 0
+    assert certificate.json()["status"] == "requested"
     # Заявка на курс — тоже без следа: очередь админа мусор не собирает
     assert client.post(f"/courses/{make_course().id}/lead").status_code == 200
 
@@ -365,12 +368,16 @@ def test_same_path_outside_preview_writes(client, sms, storage, telegram):
     assert after["review"] == 1
     assert after["thread_message"] == 1
     assert after["lead"] == 1
-    # Сертификат выдан и лежит в базе, учителю ушёл колокольчик
+    # Заявка на сертификат легла в базу — документа по ней ещё нет, поэтому
+    # и колокольчика нет: его пишет выдача, а её делает админ
     assert after["certificate"] == 1
-    assert after["notification"] == 1
-    assert client.get(f"/verify/{certificate.json()['number']}").status_code == 200
+    assert certificate.json()["status"] == "requested"
+    assert certificate.json()["number"] is None
+    assert after["notification"] == 0
     assert list(storage.objects.values()) == [PDF]
-    assert len(telegram.sent) == 2
+    # Три сообщения админам: работа на проверку, заявка на сертификат и заявка
+    # на курс
+    assert len(telegram.sent) == 3
 
 
 def test_preview_lesson_complete_keeps_progress_empty(client, sms):
@@ -385,15 +392,28 @@ def test_preview_lesson_complete_keeps_progress_empty(client, sms):
     assert client.get(f"/lessons/{data['lesson'].id}").json()["is_completed"] is False
 
 
-def test_preview_certificate_is_not_stored(client, sms):
+def test_preview_certificate_request_is_not_stored(client, sms, telegram):
+    """Кнопка «Запросить сертификат» в режиме отвечает как настоящая, но
+    заявки за ответом нет: ни строки в базе, ни сообщения админам — админ
+    пришёл посмотреть экран, а не занять место в собственной очереди."""
     login_admin(client, sms)
     data = make_full_course()
     enter(client, data["course"].id)
 
     body = client.post(f"/courses/{data['course'].id}/certificate").json()
-    assert body["course_title"] == data["course"].title
-    # Номер настоящей формы, но публичная проверка его не найдёт: строки нет
-    assert client.get(f"/verify/{body['number']}").status_code == 404
+
+    assert body == {
+        "id": 0,
+        "status": "requested",
+        "number": None,
+        "requested_at": body["requested_at"],
+        "issued_at": None,
+    }
+    assert body["requested_at"] is not None
+    assert counts()["certificate"] == 0
+    assert telegram.sent == []
+    # И повторное нажатие остаётся тем же ответом, а не «заявка уже подана»
+    assert client.post(f"/courses/{data['course'].id}/certificate").json()["id"] == 0
 
 
 def test_admin_work_on_other_courses_is_written(client, sms):

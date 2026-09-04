@@ -1,4 +1,4 @@
-"""Сквозной путь: админ собрал курс — учитель прошёл его — получил документ.
+"""Сквозной путь: админ собрал курс — учитель прошёл его — админ выдал документ.
 
 Поштучные проверки эндпоинтов живут в своих файлах; здесь проверяется то,
 чего не видно поштучно, — стыки между сессиями. Id, который вернул редактор
@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.domain.platform import DEFAULT_PLATFORM
 from app.main import app
-from tests.conftest import ADMIN_PHONE, PHONE, login, login_admin, user_id
+from tests.conftest import ADMIN_PHONE, PHONE, fake_iin, login, login_admin, user_id
 
 COURSE_TITLE = "Критериальное оценивание в начальной школе"
 
@@ -37,11 +37,14 @@ LESSON_BODY = "<p>Дескриптор описывает, что именно �
 TASK_STATEMENT = "<p>Возьмите ближайший урок и составьте к нему дескрипторы.</p>"
 
 # Профиль учителя: ФИО печатается на сертификате снимком, школа и регион —
-# то, по чему админ узнаёт человека в очереди заявок. Данные вымышленные.
+# то, по чему админ узнаёт человека в очереди заявок. ИИН нужен академии,
+# чтобы внести человека в реестр, и без него заявку не примут. Данные
+# вымышленные, номер — тоже.
 TEACHER_PROFILE = {
     "last_name": "Смагулова",
     "first_name": "Гульмира",
     "middle_name": "Токтарбековна",
+    "iin": fake_iin(),
     "school": "КГУ «Средняя школа №27»",
     "region": "Алматы",
     "city": "Алматы",
@@ -51,6 +54,9 @@ HOLDER_NAME = "Смагулова Гульмира Токтарбековна"
 
 PRICE = 45000
 HOURS = 72
+# Номер академии: мы его не знаем и не вычисляем — админ вводит его руками
+# в момент выдачи.
+REGISTRATION_NUMBER = "АКД-2026/117"
 
 
 def ok(resp):
@@ -517,10 +523,10 @@ def test_full_path_from_editor_to_certificate(client, client2, sms, telegram, st
     assert submission["status"] == "pending"
     assert len(telegram.sent) == 2
 
-    # Сертификат до зачёта работы не выдаётся — условие «Сдать все задания»
+    # Сертификат до зачёта работы не просят — условие «Сдать все задания»
     # ещё не закрыто
     completion = ok(teacher.get(f"/courses/{course_id}/completion"))
-    assert completion["can_issue"] is False
+    assert completion["can_request"] is False
     assert completion["certificate"] is None
     tasks_row = next(row for row in completion["conditions"] if row["code"] == "tasks")
     assert (tasks_row["done_count"], tasks_row["total_count"]) == (0, 1)
@@ -553,7 +559,7 @@ def test_full_path_from_editor_to_certificate(client, client2, sms, telegram, st
     assert task["can_submit"] is False
     assert task["submissions"][0]["comment"] == "Дескрипторы наблюдаемые, зачтено."
 
-    # -- 8. Сертификат ------------------------------------------------------
+    # -- 8. Заявка на сертификат --------------------------------------------
 
     completion = ok(teacher.get(f"/courses/{course_id}/completion"))
     assert [row["code"] for row in completion["conditions"]] == [
@@ -562,35 +568,83 @@ def test_full_path_from_editor_to_certificate(client, client2, sms, telegram, st
         "module_quizzes",
     ]
     assert all(row["status"] == "done" for row in completion["conditions"])
-    assert completion["can_issue"] is True
+    assert completion["can_request"] is True
     assert completion["blocker"] is None
     assert completion["certificate"] is None
 
-    certificate = ok(teacher.post(f"/courses/{course_id}/certificate"))
-    assert certificate["course_id"] == course_id
+    requested = ok(teacher.post(f"/courses/{course_id}/certificate"))
+    assert requested["status"] == "requested"
+    # Ни номера, ни даты выдачи: их поставит админ, когда выпишет документ
+    assert requested["number"] is None
+    assert requested["issued_at"] is None
+    # Третье сообщение в бот за весь путь: заявка на курс, работа на проверку
+    # и теперь заявка на сертификат
+    assert len(telegram.sent) == 3
+    assert telegram.sent[-1].title == "Заявка на сертификат"
+
+    # Кнопка гаснет уже на заявке, а в кабинете по-прежнему пусто: там сетка
+    # выданных документов, и печатать по заявке нечего
+    completion = ok(teacher.get(f"/courses/{course_id}/completion"))
+    assert completion["can_request"] is False
+    assert completion["certificate"] == requested
+    assert ok(teacher.get("/me/certificates"))["items"] == []
+    assert teacher.get(f"/certificates/{requested['id']}/pdf").status_code == 404
+
+    # -- 9. Админ выписывает документ ---------------------------------------
+
+    queue = ok(admin.get("/admin/certificates", params={"status": "requested"}))
+    assert queue["total"] == 1
+    row = queue["items"][0]
+    assert row["id"] == requested["id"]
+    assert row["platform"] == DEFAULT_PLATFORM
+    assert row["course_id"] == course_id
     # На бумаге — снимок: ФИО из профиля, название и часы курса
-    assert certificate["holder_name"] == HOLDER_NAME
-    assert certificate["course_title"] == COURSE_TITLE
-    assert certificate["hours"] == HOURS
+    assert row["holder_name"] == HOLDER_NAME
+    assert row["course_title"] == COURSE_TITLE
+    assert row["hours"] == HOURS
+    assert row["teacher"]["id"] == teacher_id
+    # ИИН админ сверяет с профилем перед выдачей — за этим он здесь и есть
+    assert row["teacher"]["iin"] == TEACHER_PROFILE["iin"]
+
+    card = ok(
+        admin.post(
+            f"/admin/certificates/{requested['id']}/issue",
+            json={"registration_number": REGISTRATION_NUMBER},
+        )
+    )
+    # Второго документа с таким номером академии нет — предупреждать не о чем
+    assert card["warning"] is None
+    certificate = card["certificate"]
+    assert certificate["status"] == "issued"
+    assert certificate["registration_number"] == REGISTRATION_NUMBER
     assert certificate["lang"] == "ru"
     assert certificate["revoked_at"] is None
+    # Строка та же, что была заявкой: дата запроса не поехала
+    assert certificate["requested_at"] == requested["requested_at"]
     number = certificate["number"]
 
+    # Учитель видит документ там же, где оставлял заявку
     assert ok(teacher.get(f"/courses/{course_id}/completion"))["certificate"] == {
-        "id": certificate["id"],
+        "id": requested["id"],
+        "status": "issued",
         "number": number,
+        "requested_at": requested["requested_at"],
         "issued_at": certificate["issued_at"],
     }
-    assert [row["id"] for row in ok(teacher.get("/me/certificates"))["items"]] == [
-        certificate["id"]
-    ]
+    my_certificates = ok(teacher.get("/me/certificates"))["items"]
+    assert [row["id"] for row in my_certificates] == [requested["id"]]
+    assert my_certificates[0]["registration_number"] == REGISTRATION_NUMBER
+    assert my_certificates[0]["holder_name"] == HOLDER_NAME
+    assert my_certificates[0]["course_title"] == COURSE_TITLE
+    assert my_certificates[0]["hours"] == HOURS
 
     mine = ok(teacher.get("/me/courses"))
     assert mine["leads"] == []
     row = next(row for row in mine["items"] if row["id"] == course_id)
     assert row["progress_percent"] == 100
     assert row["next_lesson"] is None
-    # «Курс пройден» и «сертификат получен» — одно событие
+    # «Курс пройден» и «сертификат выдан» — одно событие, и ставит его теперь
+    # выдача: до неё вкладка «Пройденные» этот курс не показывала
     assert row["completed_at"] is not None
 
     # Колокольчик собрал весь путь; params несут те же id, по которым фронт
@@ -606,22 +660,27 @@ def test_full_path_from_editor_to_certificate(client, client2, sms, telegram, st
     assert bell["items"][0]["params"]["course_id"] == course_id
     assert bell["items"][1]["params"]["task_id"] == built["task_id"]
 
-    # -- 9. Публичная проверка по номеру ------------------------------------
+    # -- 10. Публичная проверка по номеру -----------------------------------
 
     with TestClient(app) as anonymous:
         # Номер перебивают с бумаги: регистр и дефисы не в счёт
-        verified = ok(anonymous.get(f"/verify/{number.replace('-', '').lower()}"))
+        resp = anonymous.get(f"/verify/{number.replace('-', '').lower()}")
+    verified = ok(resp)
     assert verified == {
         "status": "valid",
         "number": number,
+        # Комиссии полезнее номер академии, чем наш, — он тут и есть
+        "registration_number": REGISTRATION_NUMBER,
         "holder_name": HOLDER_NAME,
         "course_title": COURSE_TITLE,
         "hours": HOURS,
         "issued_at": certificate["issued_at"],
         "revoked_at": None,
     }
+    # А ИИН на публичную страницу не выходит: её открывает посторонний
+    assert TEACHER_PROFILE["iin"] not in resp.text
 
-    # -- 10. PDF ------------------------------------------------------------
+    # -- 11. PDF ------------------------------------------------------------
 
     resp = teacher.get(f"/certificates/{certificate['id']}/pdf")
     assert resp.status_code == 200, resp.text

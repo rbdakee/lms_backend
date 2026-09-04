@@ -301,6 +301,32 @@ class ProfileIncompleteError(AppError):
         super().__init__("Заполните фамилию и имя — они печатаются на сертификате")
 
 
+class IinRequiredError(AppError):
+    """Отдельно от profile_incomplete, потому что экран ведёт человека
+    в разные поля: там ФИО, здесь ИИН.
+
+    Самого номера в тексте нет и быть не может: ошибку видно на экране
+    и в логе фронта, а ИИН туда не ходит (CERTIFICATES_BRIEF, 1).
+    """
+
+    status = 409
+    code = "iin_required"
+
+    def __init__(self, message: str = "Заполните ИИН — без него сертификат не выдать"):
+        super().__init__(message)
+
+
+class CertificateNotIssuedError(AppError):
+    """До выдачи строка сертификата — это заявка: ни номера, ни даты выдачи
+    у неё нет, и половина действий над документом к ней неприменима."""
+
+    status = 409
+    code = "certificate_not_issued"
+
+    def __init__(self, message: str = "Сертификат ещё не выдан"):
+        super().__init__(message)
+
+
 # Правки курса, где уже учатся (BACKEND_NOTES, раздел 10). Все пятеро говорят
 # одно и то же разными словами: у этой строки есть чужие данные. Отдельные
 # коды нужны потому, что дальше экран предлагает разное — скрыть, создать
@@ -425,6 +451,23 @@ class PhoneTakenError(AppError):
 
     def __init__(self, user_id: int):
         super().__init__("Этот номер уже у другого учителя", details={"user_id": user_id})
+
+
+class IinTakenError(AppError):
+    """Один человек — один аккаунт: второй номер телефона второго аккаунта
+    не даёт (CERTIFICATES_BRIEF, 1).
+
+    Details пустые нарочно (решение владельца 04.09.2026), и этим ошибка
+    отличается от phone_taken: там номер меняет админ и чинит доступ
+    конкретному человеку, а сюда упирается кто угодно — назвать аккаунт
+    значит отдать его тому, кто перебирает чужие ИИН.
+    """
+
+    status = 409
+    code = "iin_taken"
+
+    def __init__(self):
+        super().__init__("Этот ИИН уже указан в другом аккаунте")
 
 
 class SelfBlockError(AppError):

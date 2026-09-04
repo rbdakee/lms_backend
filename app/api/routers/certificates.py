@@ -6,13 +6,14 @@ from fastapi import APIRouter, Depends, Request, Response
 from app.adapters.db.models import User
 from app.adapters.pdf.certificate import render_certificate
 from app.api import deps
-from app.api.schemas import CertificateOut, CompletionOut, MyCertificatesOut, VerifyOut
+from app.api.schemas import CertificateStateOut, CompletionOut, MyCertificatesOut, VerifyOut
 from app.application.certificate_pdf import CertificatePdfService
 from app.application.certificates import CertificatesService
 
-# Чек-лист и выдача висят на курсе, список — в кабинете учителя,
+# Чек-лист и заявка висят на курсе, список — в кабинете учителя,
 # проверка подлинности живёт своим публичным адресом, а бумага — своим:
-# её открывает браузер, а не фронт.
+# её открывает браузер, а не фронт. Выдачи здесь нет вовсе: она админская
+# и лежит в admin_certificates.
 router = APIRouter(prefix="/courses")
 me_router = APIRouter(prefix="/me")
 verify_router = APIRouter(prefix="/verify")
@@ -31,14 +32,16 @@ def completion(
 
 
 @router.post("/{course_id}/certificate")
-def issue_certificate(
+def request_certificate(
     course_id: int,
     user: Annotated[User, Depends(deps.get_current_user)],
     platform: Annotated[str, Depends(deps.platform_of)],
     svc: Annotated[CertificatesService, Depends(deps.get_certificates_service)],
-) -> CertificateOut:
-    # Тела запроса нет; повторный вызов отдаёт 200 и тот же документ
-    return CertificateOut(**svc.issue(user, course_id, platform))
+) -> CertificateStateOut:
+    # Ручка создаёт заявку, а документ по ней выписывает админ руками
+    # (CERTIFICATES_BRIEF, 3). Тела запроса нет; повторный вызов отдаёт 200
+    # и ту же строку — заявку или уже выданный документ
+    return CertificateStateOut(**svc.request(user, course_id, platform))
 
 
 @me_router.get("/certificates")

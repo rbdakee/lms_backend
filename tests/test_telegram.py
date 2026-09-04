@@ -33,6 +33,7 @@ from tests.conftest import (
     in_parallel,
     login,
     login_admin,
+    login_named,
     make_course,
     make_enrollment,
     make_module,
@@ -453,6 +454,7 @@ def test_unbind_erases_the_chat_and_keeps_the_flags(client, sms, bot, telegram):
         # Отвязали чат — не значит передумали получать заявки
         "notify_leads": False,
         "notify_submissions": True,
+        "notify_certificates": True,
     }
     assert "chat_id" not in stored_telegram()
     # Уведомлять больше некуда, но и ошибкой это не становится
@@ -547,6 +549,26 @@ def test_notify_submissions_off_silences_the_message_not_the_work(
     assert telegram.sent == []
     # Работа всё равно в очереди проверки: Telegram — доставка, не хранилище
     assert client.get("/admin/submissions").json()["total"] == 1
+
+
+def test_notify_certificates_off_silences_the_message_not_the_request(
+    client, client2, sms, telegram
+):
+    """Третий флаг устроен как два соседних: сообщение в чат не уходит,
+    а заявка на сертификат всё равно встаёт в очередь админа — иначе учитель
+    ждал бы документ, о котором никто не узнает."""
+    login_admin(client, sms)
+    client.patch("/admin/settings", json={"telegram": {"notify_certificates": False}})
+    course = make_course()
+
+    login_named(client2, sms)
+    make_enrollment(user_id(client2), course.id)
+    resp = client2.post(f"/courses/{course.id}/certificate")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "requested"
+    assert telegram.sent == []
+    assert client.get("/admin/certificates").json()["total"] == 1
 
 
 def test_the_other_flag_stays_on(client, client2, sms, telegram):

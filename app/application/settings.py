@@ -80,9 +80,10 @@ class SettingsService:
             "chat_title": stored.get("chat_title"),
             "connected_at": stored.get("connected_at"),
             # По умолчанию включены: бот привязывают затем, чтобы получать
-            # заявки и работы на проверку
+            # заявки, работы на проверку и просьбы о сертификате
             "notify_leads": stored.get("notify_leads", True),
             "notify_submissions": stored.get("notify_submissions", True),
+            "notify_certificates": stored.get("notify_certificates", True),
         }
 
     # -- GET /admin/settings ------------------------------------------------
@@ -115,6 +116,7 @@ class SettingsService:
                 "connected_at": telegram["connected_at"],
                 "notify_leads": telegram["notify_leads"],
                 "notify_submissions": telegram["notify_submissions"],
+                "notify_certificates": telegram["notify_certificates"],
             },
         }
 
@@ -129,7 +131,10 @@ class SettingsService:
         а отменённая отвязка отправляет заявки с телефонами учителей в чат,
         который админ уже считает отключённым.
         """
-        telegram = _sent(data.get("telegram") or {}, ("notify_leads", "notify_submissions"))
+        telegram = _sent(
+            data.get("telegram") or {},
+            ("notify_leads", "notify_submissions", "notify_certificates"),
+        )
         if telegram:
             # Уходят ровно флаги: `chat_id` этим PATCH не пишется никогда.
             # Чужой чат — это заявки с телефонами учителей, ушедшие

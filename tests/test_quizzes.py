@@ -2,10 +2,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session as OrmSession
 
 from app.adapters.db.base import get_engine
-from app.adapters.db.models import Certificate
 from app.adapters.db.repos import AttemptRepo, now_utc
 from tests.conftest import (
     login,
+    make_certificate,
+    make_certificate_request,
     make_course,
     make_enrollment,
     make_lesson,
@@ -13,7 +14,6 @@ from tests.conftest import (
     make_option,
     make_question,
     make_quiz,
-    seed,
     user_id,
 )
 
@@ -566,21 +566,21 @@ def test_worse_retake_drops_done_in_program(client, sms):
 # -- сертификат --------------------------------------------------------
 
 
+def revoke(certificate_id: int) -> None:
+    """Отзыв сырым SQL: ручка отзыва админская, а этим тестам важно только
+    то, что отозванная строка замок больше не держит."""
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("UPDATE certificate SET revoked_at = now() WHERE id = :id"),
+            {"id": certificate_id},
+        )
+
+
 def test_certificate_closes_new_attempts(client, sms):
     login(client, sms)
     uid = user_id(client)
     course, quiz, _, _ = make_learning_quiz(uid, retakable=True)
-    certificate = seed(
-        Certificate(
-            number="KZ-2026-000123",
-            user_id=uid,
-            course_id=course.id,
-            holder_name="Тестова Тест Тестовна",
-            course_title="Курс",
-            hours=72,
-            platform="p1",
-        )
-    )
+    certificate = make_certificate(uid, course.id)
 
     resp = client.post(f"/quizzes/{quiz.id}/quiz_attempts")
     assert resp.status_code == 409
@@ -590,12 +590,36 @@ def test_certificate_closes_new_attempts(client, sms):
     }
     assert client.get(f"/quizzes/{quiz.id}").json()["state"]["can_start"] is False
 
-    with get_engine().begin() as conn:
-        conn.execute(
-            text("UPDATE certificate SET revoked_at = now() WHERE id = :id"),
-            {"id": certificate.id},
-        )
+    revoke(certificate.id)
     # Отозванный сертификат больше не держит: результат снова можно менять
+    assert client.post(f"/quizzes/{quiz.id}/quiz_attempts").status_code == 200
+
+
+def test_certificate_request_closes_new_attempts_with_its_own_text(client, sms):
+    """Заявка запирает тест наравне с выданным документом: админ выпишет
+    бумагу по чек-листу, закрытому в момент заявки, и поехавший результат
+    попал бы под неё.
+
+    Код отказа при этом прежний — экран уже умеет его читать, — а текст свой:
+    искать несуществующий документ в кабинете человека посылать нельзя.
+    """
+    login(client, sms)
+    uid = user_id(client)
+    course, quiz, _, _ = make_learning_quiz(uid, retakable=True)
+    request = make_certificate_request(uid, course.id)
+
+    resp = client.post(f"/quizzes/{quiz.id}/quiz_attempts")
+
+    assert resp.status_code == 409
+    assert resp.json()["error"] == {
+        "code": "certificate_issued",
+        "message": "Заявка на сертификат отправлена — результаты теста изменить нельзя",
+    }
+    assert client.get(f"/quizzes/{quiz.id}").json()["state"]["can_start"] is False
+
+    # Отзыв ошибочной заявки — единственный выход из этого замка, и он
+    # возвращает попытку так же, как возвращает её отзыв документа
+    revoke(request.id)
     assert client.post(f"/quizzes/{quiz.id}/quiz_attempts").status_code == 200
 
 
@@ -605,17 +629,22 @@ def test_certificate_closes_retake_after_finish(client, sms):
     course, quiz, _, _ = make_learning_quiz(uid, retakable=True)
     attempt = client.post(f"/quizzes/{quiz.id}/quiz_attempts").json()
     client.post(f"/quiz_attempts/{attempt['id']}/finish")
-    seed(
-        Certificate(
-            number="KZ-2026-000124",
-            user_id=uid,
-            course_id=course.id,
-            holder_name="Тестова Тест Тестовна",
-            course_title="Курс",
-            hours=72,
-            platform="p1",
-        )
-    )
+    make_certificate(uid, course.id)
+
+    state = client.get(f"/quizzes/{quiz.id}").json()["state"]
+    assert state["status"] == "finished"
+    assert state["can_retake"] is False
+
+
+def test_certificate_request_closes_retake_after_finish(client, sms):
+    """Пересдачу закрывает и заявка: до выдачи результат менять нельзя
+    ровно по той же причине, что и после неё."""
+    login(client, sms)
+    uid = user_id(client)
+    course, quiz, _, _ = make_learning_quiz(uid, retakable=True)
+    attempt = client.post(f"/quizzes/{quiz.id}/quiz_attempts").json()
+    client.post(f"/quiz_attempts/{attempt['id']}/finish")
+    make_certificate_request(uid, course.id)
 
     state = client.get(f"/quizzes/{quiz.id}").json()["state"]
     assert state["status"] == "finished"

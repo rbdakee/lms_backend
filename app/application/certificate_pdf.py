@@ -7,22 +7,25 @@
 
 Данные — снимок из строки сертификата, без единого джойна на живые таблицы:
 курс переименуют или удалят, учитель поправит ФИО — выданный документ обязан
-остаться прежним (BACKEND_NOTES, раздел 6).
+остаться прежним (BACKEND_NOTES, раздел 6). Исключение ровно одно — ИИН,
+и почему оно осознанное, сказано у `_holder_iin`.
 """
 
 from app.adapters.db.models import Certificate, User
-from app.adapters.db.repos import CertificateRepo
+from app.adapters.db.repos import CertificateRepo, UserRepo
 from app.application.settings import brand_image
 from app.config import Settings
 from app.domain.brands import CERT_SLOTS
 from app.domain.errors import ForbiddenError, NotFoundError
+from app.domain.iin import iin_filled
 
 NOT_FOUND = "Сертификат не найден"
 
 
 class CertificatePdfService:
-    def __init__(self, certificates: CertificateRepo, cfg: Settings):
+    def __init__(self, certificates: CertificateRepo, users: UserRepo, cfg: Settings):
         self.certificates = certificates
+        self.users = users
         self.cfg = cfg
 
     # -- GET /certificates/{id}/pdf ----------------------------------------
@@ -35,14 +38,17 @@ class CertificatePdfService:
         Порядок проверок общий, как в `files`: существование, потом право,
         — поэтому у чужого сертификата приходит 403, а не 404. Отозванный
         не отдаётся никому, включая владельца и админа: отозванная бумага
-        не должна печататься заново.
+        не должна печататься заново. Заявка не отдаётся по той же причине
+        и тем же текстом: документа с номером и датой ещё нет, печатать
+        нечего, а разного текста на «ещё нет» и «уже нет» посторонний
+        видеть не должен.
         """
         certificate = self.certificates.by_id(certificate_id)
         if certificate is None:
             raise NotFoundError(NOT_FOUND)
         if certificate.user_id != user.id and not user.is_admin:
             raise ForbiddenError("Сертификат выдан другому человеку")
-        if certificate.revoked_at is not None:
+        if certificate.issued_at is None or certificate.revoked_at is not None:
             raise NotFoundError(NOT_FOUND)
         return (
             {
@@ -51,6 +57,10 @@ class CertificatePdfService:
                 "hours": certificate.hours,
                 "issued_at": certificate.issued_at,
                 "number": certificate.number,
+                # Номер академии — тоже снимок: он вписан руками в момент
+                # выдачи и у документов до 04.09.2026 пустой
+                "registration_number": certificate.registration_number,
+                "iin": self._holder_iin(certificate),
                 # Язык документа — снимок момента выдачи, а не язык читателя
                 "lang": certificate.lang,
             },
@@ -60,6 +70,24 @@ class CertificatePdfService:
             {field: _image(certificate.platform, slot) for field, slot in CERT_SLOTS.items()},
             self._verify_url(certificate),
         )
+
+    def _holder_iin(self, certificate: Certificate) -> str:
+        """ИИН владельца — единственное поле листа, взятое из живой таблицы.
+
+        Колонки `iin` у сертификата нет, и заводить её незачем: схема брифа
+        её не заводит (CERTIFICATES_BRIEF, 5), номер у человека один на всю
+        жизнь и после выдачи не меняется, а вторая копия самых чувствительных
+        персональных данных, которые мы храним, — это две утечки вместо одной.
+
+        Заглушка «не заполнен» на бумагу не идёт: на листе она читалась бы
+        как настоящий номер из одних нулей. Владельца не нашлось (быть
+        не должно — строку держит внешний ключ) — тоже пусто: лист выйдет
+        без номера, а не откажет в печати, как и без картинки печати.
+        """
+        holder = self.users.by_id(certificate.user_id)
+        if holder is None or not iin_filled(holder.iin):
+            return ""
+        return holder.iin
 
     def _verify_url(self, certificate: Certificate) -> str | None:
         """Адрес страницы проверки этого документа — он уходит в QR.

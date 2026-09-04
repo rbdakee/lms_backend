@@ -24,6 +24,7 @@ from app.adapters.db.models import LessonFile
 from app.config import get_settings
 from tests.conftest import (
     login,
+    login_admin,
     login_named,
     make_certificate,
     make_course,
@@ -111,6 +112,21 @@ def pass_the_quiz(client, quiz_id, question_id, option_id, headers):
 def rows(sql, **params):
     with get_engine().connect() as conn:
         return conn.execute(text(sql), params).all()
+
+
+def issue(admin, certificate_id):
+    """Выдача админом: документ у человека появляется только после неё,
+    а без документа половину этих проверок не разыграть.
+
+    Площадки у админки нет вовсе — она одна на обе, — и площадку каждый
+    документ приносит свою: здесь это и проверяется.
+    """
+    resp = admin.post(
+        f"/admin/certificates/{certificate_id}/issue",
+        json={"registration_number": "АКД-2026/117"},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["certificate"]
 
 
 # -- доступ ------------------------------------------------------------
@@ -201,11 +217,14 @@ def test_an_attempt_started_on_p1_is_not_reachable_from_p2(client, sms):
 # -- сертификат --------------------------------------------------------
 
 
-def test_a_certificate_on_p1_does_not_close_the_issue_on_p2(client, sms):
+def test_a_request_on_p1_does_not_close_the_one_on_p2(client, client2, sms):
     """Два документа за один курс — тоже следствие раздельной учёбы: человек
     прошёл его дважды и заплатил дважды. Единственность держит частичный
-    индекс, и если площадка в него не вошла, вторая выдача упрётся в базу —
-    отказом на экране «Курс пройден»."""
+    индекс, и если площадка в него не вошла, вторая заявка упрётся в базу —
+    отказом на экране «Курс пройден».
+
+    Выдача разводится по площадкам следом за заявкой: номера у двух бумаг
+    разные, потому что и строки разные."""
     course = make_course()
     login_named(client, sms)
     uid = user_id(client)
@@ -216,12 +235,18 @@ def test_a_certificate_on_p1_does_not_close_the_issue_on_p2(client, sms):
     assert first.status_code == 200, first.text
     second = client.post(f"/courses/{course.id}/certificate", headers=P2)
     assert second.status_code == 200, second.text
-    assert second.json()["number"] != first.json()["number"]
+    assert second.json()["id"] != first.json()["id"]
 
     assert rows("SELECT platform FROM certificate ORDER BY platform") == [("p1",), ("p2",)]
 
+    login_admin(client2, sms)
+    on_p1 = issue(client2, first.json()["id"])
+    on_p2 = issue(client2, second.json()["id"])
+    assert (on_p1["platform"], on_p2["platform"]) == ("p1", "p2")
+    assert on_p1["number"] != on_p2["number"]
 
-def test_my_certificates_shows_only_the_documents_of_its_own_platform(client, sms):
+
+def test_my_certificates_shows_only_the_documents_of_its_own_platform(client, client2, sms):
     """Кабинет у площадок разный: чужой документ в списке — это ссылка
     на бумагу другого бренда."""
     course = make_course()
@@ -232,15 +257,25 @@ def test_my_certificates_shows_only_the_documents_of_its_own_platform(client, sm
 
     first = client.post(f"/courses/{course.id}/certificate", headers=P1).json()
     second = client.post(f"/courses/{course.id}/certificate", headers=P2).json()
-    assert first["number"] != second["number"]
+    # Пока это заявки, кабинет пуст на обеих площадках
+    assert client.get("/me/certificates", headers=P1).json() == {"items": []}
+    assert client.get("/me/certificates", headers=P2).json() == {"items": []}
 
-    on_p1 = client.get("/me/certificates", headers=P1).json()["items"]
-    on_p2 = client.get("/me/certificates", headers=P2).json()["items"]
-    assert [item["number"] for item in on_p1] == [first["number"]]
-    assert [item["number"] for item in on_p2] == [second["number"]]
+    login_admin(client2, sms)
+    on_p1 = issue(client2, first["id"])
+    on_p2 = issue(client2, second["id"])
+
+    assert [
+        item["number"] for item in client.get("/me/certificates", headers=P1).json()["items"]
+    ] == [on_p1["number"]]
+    assert [
+        item["number"] for item in client.get("/me/certificates", headers=P2).json()["items"]
+    ] == [on_p2["number"]]
 
 
-def test_a_number_from_another_platform_answers_exactly_like_a_missing_one(client, sms):
+def test_a_number_from_another_platform_answers_exactly_like_a_missing_one(
+    client, client2, sms
+):
     """Проверка публична и без входа, значит номера по ней перебирают.
     Отличайся отказ чужому номеру от отказа несуществующему хоть текстом,
     хоть статусом — и проверка сама подсказывала бы, что документ где-то
@@ -248,7 +283,9 @@ def test_a_number_from_another_platform_answers_exactly_like_a_missing_one(clien
     course = make_course()
     login_named(client, sms)
     make_enrollment(user_id(client), course.id)
-    number = client.post(f"/courses/{course.id}/certificate", headers=P1).json()["number"]
+    requested = client.post(f"/courses/{course.id}/certificate", headers=P1).json()
+    login_admin(client2, sms)
+    number = issue(client2, requested["id"])["number"]
 
     own = client.get(f"/verify/{number}", headers=P1)
     assert own.status_code == 200

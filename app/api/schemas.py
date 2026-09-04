@@ -83,6 +83,8 @@ class UserOut(BaseModel):
     first_name: str
     last_name: str
     middle_name: str
+    # Свой номер человек видит: он его и вводил в онбординге
+    iin: str
     photo_url: str | None
     email: str
     school: str
@@ -105,6 +107,7 @@ class UserOut(BaseModel):
             first_name=user.first_name,
             last_name=user.last_name,
             middle_name=user.middle_name,
+            iin=user.iin,
             photo_url=user.photo_url,
             email=user.email,
             school=user.school,
@@ -115,7 +118,9 @@ class UserOut(BaseModel):
             experience=user.experience,
             lang=user.lang,
             is_admin=user.is_admin,
-            onboarding_done=onboarding_done(user.first_name, user.last_name),
+            onboarding_done=onboarding_done(
+                user.first_name, user.last_name, user.iin, is_admin=user.is_admin
+            ),
             created_at=user.created_at,
             preview=(
                 PreviewOut(course_id=preview_course_id)
@@ -133,6 +138,9 @@ class UserPatch(BaseModel):
     first_name: str | None = Field(None, max_length=100)
     last_name: str | None = Field(None, max_length=100)
     middle_name: str | None = Field(None, max_length=100)
+    # Запас длины — на пробелы по краям: их снимет normalize_iin, а до неё
+    # присланное лучше пропустить внутрь, чем отбить по длине
+    iin: str | None = Field(None, max_length=20)
     email: str | None = Field(None, max_length=320)
     school: str | None = Field(None, max_length=300)
     position: str | None = Field(None, max_length=200)
@@ -870,34 +878,49 @@ CompletionConditionOut = Annotated[
 
 
 class BlockerOut(BaseModel):
-    """Почему кнопка выдачи неактивна, хотя условия выполнены."""
+    """Почему кнопка заявки неактивна, хотя условия выполнены."""
 
     code: Literal["attempt_in_progress"]
     message: str
 
 
-class CertificateBriefOut(BaseModel):
-    """Уже выданный сертификат в чек-листе: ссылка на документ, не сам документ."""
+class CertificateStateOut(BaseModel):
+    """Строка сертификата глазами учителя: заявка до выдачи, документ после.
+
+    Состояния два, а строка одна: отдельной таблицы заявок нет
+    (CERTIFICATES_BRIEF, 5). Отозванные сюда не приходят — для учителя
+    их просто нет."""
 
     id: int
-    number: str
-    issued_at: datetime
+    status: Literal["requested", "issued"]
+    # null — документ ещё не выписан: номер появляется в момент выдачи
+    number: str | None
+    requested_at: datetime
+    # null — админ ещё не выдал
+    issued_at: datetime | None
 
 
 class CompletionOut(BaseModel):
     conditions: list[CompletionConditionOut]
-    can_issue: bool
+    # Кнопка называется «Запросить сертификат»: документ выписывает админ
+    can_request: bool
     # null — помех нет
     blocker: BlockerOut | None
-    certificate: CertificateBriefOut | None
+    # null — заявки нет и документа нет
+    certificate: CertificateStateOut | None
 
 
 class MyCertificateOut(BaseModel):
     """Элемент списка `/certificates` — он же всё, что печатает `/certificates/{id}`:
-    отдельного эндпоинта за одним сертификатом нет."""
+    отдельного эндпоинта за одним сертификатом нет.
+
+    Заявок в кабинете нет, только выданные документы, — поэтому `number`
+    и `issued_at` здесь обязательные, в отличие от `CertificateStateOut`."""
 
     id: int
     number: str
+    # Номер академии; пусто у документов, выданных до 04.09.2026
+    registration_number: str
     course_id: int
     course_title: str
     holder_name: str
@@ -910,17 +933,18 @@ class MyCertificatesOut(BaseModel):
     items: list[MyCertificateOut]
 
 
-class CertificateOut(MyCertificateOut):
-    # Отозванный в кабинет не попадает, поэтому revoked_at есть только в ответе выдачи
-    revoked_at: datetime | None
-
-
 class VerifyOut(BaseModel):
     """Публичная проверка: только то, что напечатано на бумаге — ни user_id,
-    ни course_id, ни id сертификата, ни ссылок в кабинет."""
+    ни course_id, ни id сертификата, ни ссылок в кабинет.
+
+    ИИН здесь нет и не будет: страницу открывает посторонний человек, и отдавать
+    ему персональные данные владельца незачем (CERTIFICATES_BRIEF, 1)."""
 
     status: Literal["valid", "revoked"]
     number: str
+    # Номер академии: комиссии он полезнее нашего. Пусто у документов
+    # до 04.09.2026
+    registration_number: str
     holder_name: str
     course_title: str
     hours: int
@@ -1113,6 +1137,10 @@ class AdminOverviewOut(BaseModel):
     leads_count: int
     submissions_count: int
     questions_count: int
+    # Заявки на сертификат — ещё одна очередь, где админ отвечает людям
+    # (CERTIFICATES_BRIEF, 4). Списка под этим счётчиком нет: дашборд рисует
+    # три списка, четвёртый никто не просил
+    certificates_count: int
     # Списки — по 5 элементов, свежие сверху
     leads: list[OverviewLeadOut]
     submissions: list[OverviewSubmissionOut]
@@ -1860,15 +1888,25 @@ class AdminTeacherSubmissionOut(BaseModel):
 
 
 class AdminTeacherCertificateOut(BaseModel):
+    """Строка вкладки «Сертификаты»: и заявки, и выданные, и отозванные —
+    админ смотрит на человека целиком, а не только на то, что у него на руках."""
+
     id: int
-    number: str
+    status: Literal["requested", "issued", "revoked"]
+    # null — это заявка, документ ещё не выписан
+    number: str | None
+    # Номер академии; пусто у документов до 04.09.2026
+    registration_number: str
     course_id: int
     # Документов по одному курсу может быть два — по одному на площадку
     platform: Platform
     # Снимок на момент выдачи, а не текущее название курса
     course_title: str
     hours: int
-    issued_at: datetime
+    # Есть у всех трёх состояний, поэтому вкладка сортируется по нему
+    requested_at: datetime
+    # null — админ ещё не выдал
+    issued_at: datetime | None
     # Заполнено — документ отозван
     revoked_at: datetime | None
 
@@ -1882,6 +1920,8 @@ class AdminTeacherCardOut(BaseModel):
     last_name: str
     first_name: str
     middle_name: str
+    # ИИН показывается только админу — здесь и на странице «Сертификаты»
+    iin: str
     phone: str
     email: str
     school: str
@@ -1922,6 +1962,115 @@ class TeacherRetakeIn(BaseModel):
     # Причина обязательна: она остаётся в истории попытки, и по ней потом
     # разбирают, почему зачёт снят. Пустую строку отбивает сценарий
     reason: str = Field(max_length=2000)
+
+
+# -- админка: сертификаты ----------------------------------------------
+
+
+class AdminCertificateTeacherOut(BaseModel):
+    """Владелец документа глазами админа. Телефона и школы здесь нет: строка
+    списка их не показывает, а лишнее поле — это лишние персональные данные
+    в ответе."""
+
+    id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+    # ИИН показывается только админу и только здесь и в карточке учителя:
+    # админ сверяет им человека перед выдачей (CERTIFICATES_BRIEF, 3)
+    iin: str
+
+
+class AdminCertificateOut(BaseModel):
+    """Строка списка «Сертификаты» — она же карточка: полей у документа
+    немного, и второй формы под карточку заводить незачем.
+
+    `status` — три состояния одной и той же строки, отдельной таблицы заявок
+    нет (CERTIFICATES_BRIEF, 5)."""
+
+    id: int
+    status: Literal["requested", "issued", "revoked"]
+    platform: Platform
+    # null — документ ещё не выписан
+    number: str | None
+    # Пусто — номер академии не введён (документы до 04.09.2026)
+    registration_number: str
+    # Снимки, а не живые поля профиля и курса: по ним печатается бумага,
+    # и правятся они прямо здесь
+    holder_name: str
+    course_id: int
+    course_title: str
+    hours: int
+    lang: str
+    requested_at: datetime
+    # null — заявка ещё ждёт выдачи
+    issued_at: datetime | None
+    # Заполнено — строка ушла в «Отозванные»
+    revoked_at: datetime | None
+    teacher: AdminCertificateTeacherOut
+
+
+class AdminCertificatesPageOut(BaseModel):
+    items: list[AdminCertificateOut]
+    total: int
+    page: int
+    per_page: int
+
+
+class RegistrationNumberWarningOut(BaseModel):
+    """Номер академии уже стоит у другого документа.
+
+    Не отказ: правил чужой нумерации мы не знаем, а запрет остановил бы админа
+    посреди работы (CERTIFICATES_BRIEF, 2). Пришло предупреждение — значит,
+    сохранение всё равно прошло."""
+
+    code: Literal["registration_number_taken"]
+    message: str
+    certificate_id: int
+    # Наш номер того документа — по нему админ его и найдёт; null, если тот
+    # сам ещё не выдан
+    number: str | None
+
+
+class AdminCertificateCardOut(BaseModel):
+    """Ответ карточки и всех трёх действий над ней — одной формы, чтобы экран
+    перерисовывался одним и тем же куском кода."""
+
+    certificate: AdminCertificateOut
+    # null — предупреждать не о чем
+    warning: RegistrationNumberWarningOut | None
+
+
+class CertificateIssueIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Обязателен: выдача без номера академии — это документ, которого нет
+    # в её реестре. Пустую строку отбивает сценарий. Нашего `number` в теле
+    # нет — его выписывает сервер в ту же секунду
+    registration_number: str = Field(max_length=100)
+
+
+class CertificatePatchIn(BaseModel):
+    """Правятся только снимки и то, что админ вписал руками. `number`,
+    `user_id`, `course_id` и `platform` не правятся: смена любого означает
+    другой документ, а не правку этого (CERTIFICATES_BRIEF, 4) — присланные
+    отбивает `extra: forbid`."""
+
+    model_config = {"extra": "forbid"}
+
+    # Пустая строка допускается: так админ стирает ошибочный номер
+    registration_number: str | None = Field(None, max_length=100)
+    # Пустые holder_name и course_title отбивает сценарий: снимок без имени
+    # или без названия печатать не на чем
+    holder_name: str | None = Field(None, max_length=300)
+    course_title: str | None = Field(None, max_length=300)
+    # Тот же потолок, что у часов курса: это его снимок, и два разных
+    # предела на одно число врали бы друг другу
+    hours: Hours | None = None
+    lang: Literal["ru", "kz"] | None = None
+    # Стереть дату выдачи нельзя — это отменило бы выдачу в обход отзыва;
+    # присланный null отбивает сценарий
+    issued_at: datetime | None = None
 
 
 # -- админка: отзывы и модерация ---------------------------------------
@@ -2056,6 +2205,7 @@ class AdminSettingsTelegramOut(BaseModel):
     connected_at: datetime | None
     notify_leads: bool
     notify_submissions: bool
+    notify_certificates: bool
 
 
 class AdminSettingsPlatformOut(BaseModel):
@@ -2089,6 +2239,7 @@ class AdminSettingsTelegramIn(BaseModel):
     # попытку его прислать
     notify_leads: bool | None = None
     notify_submissions: bool | None = None
+    notify_certificates: bool | None = None
 
 
 class AdminSettingsPatchIn(BaseModel):

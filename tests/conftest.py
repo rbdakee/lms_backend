@@ -14,6 +14,7 @@ os.environ["AUTH_BOOTSTRAP_CODE"] = ""
 import itertools
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 
 import pytest
 from alembic import command
@@ -269,12 +270,17 @@ def login(client, sms, phone=PHONE):
 def login_named(client, sms, phone=PHONE, **profile):
     """Вход и сразу заполненный профиль.
 
-    ФИО печатается на сертификате и остаётся снимком, поэтому выдача без имени
-    отбивается — а вход по SMS заводит человека с пустыми полями.
+    ФИО печатается на сертификате и остаётся снимком, а без ИИН заявку
+    на сертификат не принимают — вход же по SMS заводит человека с пустыми
+    полями и нулевым ИИН.
+
+    Нужен человек с незаполненным ИИН — `login_named(..., iin=None)`:
+    поле просто не уйдёт в PATCH, и заглушка останется на месте.
     """
     resp = login(client, sms, phone=phone)
-    fields = {"last_name": "Нурланова", "first_name": "Айгуль"}
+    fields = {"last_name": "Нурланова", "first_name": "Айгуль", "iin": fake_iin()}
     fields.update(profile)
+    fields = {name: value for name, value in fields.items() if value is not None}
     assert client.patch("/me", json=fields).status_code == 200
     return resp
 
@@ -334,6 +340,21 @@ def seed(obj):
 # group_id сквозной на прогон: таблицы чистятся между тестами, а уникальность
 # (group_id, lang) важна только внутри одного теста
 _group_seq = itertools.count(1)
+
+# ИИН сквозной по той же причине: он уникален в базе, и два человека в одной
+# сцене обязаны получить разные номера.
+_iin_seq = itertools.count(1)
+
+
+def fake_iin() -> str:
+    """Вымышленный ИИН: 12 цифр, свой у каждого вызова.
+
+    Настоящим быть не может по построению: третья и четвёртая цифры ИИН —
+    месяц рождения, а здесь на их месте стоит 99. Так номер в тестах и в логе
+    прогона нельзя спутать с чьим-то живым (общий CLAUDE.md, «Персональные
+    данные»).
+    """
+    return f"9099{next(_iin_seq):08d}"
 
 
 def make_course(platforms=None, price=45000, **kw):
@@ -409,11 +430,22 @@ def make_enrollment(user_id, course_id, **kw):
 
 
 def make_certificate(user_id, course_id, **kw):
+    """Выданный документ: номер и дата выдачи проставлены.
+
+    Дата обязательна явно — `server_default` у `issued_at` снят, чтобы заявка
+    не получала её на вставке, а номер без даты отбивает `ck_certificate_issued`.
+    """
     fields = {"user_id": user_id, "course_id": course_id, "number": "KZ-2026-XB7K2M",
               "holder_name": "Смагулова Гульмира Токтарбековна", "course_title": "Курс",
-              "hours": 72, "lang": "ru", "platform": DEFAULT_PLATFORM}
+              "hours": 72, "lang": "ru", "platform": DEFAULT_PLATFORM,
+              "issued_at": datetime.now(UTC)}
     fields.update(kw)
     return seed(Certificate(**fields))
+
+
+def make_certificate_request(user_id, course_id, **kw):
+    """Заявка: та же строка до выдачи — ни номера, ни даты выдачи."""
+    return make_certificate(user_id, course_id, number=None, issued_at=None, **kw)
 
 
 def make_progress(user_id, lesson_id, **kw):
@@ -439,7 +471,7 @@ def make_user(phone, **kw):
     каждого через SMS — лишний шум. Номера вымышленные."""
     fields = {"phone": phone, "last_name": "Смагулова", "first_name": "Гульмира",
               "middle_name": "Токтарбековна", "school": "КГУ «Средняя школа №27»",
-              "region": "Алматы"}
+              "region": "Алматы", "iin": fake_iin()}
     fields.update(kw)
     return seed(User(**fields))
 

@@ -5,6 +5,7 @@ from tests.conftest import (
     login,
     login_admin,
     make_certificate,
+    make_certificate_request,
     make_course,
     make_lead,
     make_lesson,
@@ -48,6 +49,7 @@ def test_empty_overview_is_zeros_not_error(client, sms):
         "leads_count": 0,
         "submissions_count": 0,
         "questions_count": 0,
+        "certificates_count": 0,
         "leads": [],
         "submissions": [],
         "questions": [],
@@ -179,6 +181,49 @@ def test_totals_count_teachers_published_courses_and_certificates(client, sms):
     # Заблокированный учителем быть не перестал; отозванный сертификат
     # не считается; черновик и скрытый курс в каталоге не видны
     assert totals == {"teachers": 2, "courses_published": 2, "certificates": 1}
+
+
+def test_certificates_counter_counts_requests_only(client, sms):
+    """Четвёртая очередь наверху экрана — заявки, ждущие выдачи. Выданный
+    документ и отозванная строка из неё уходят: там уже нечего делать.
+
+    Списка под этим счётчиком нет — дашборд рисует три списка
+    (CERTIFICATES_BRIEF, 4).
+    """
+    login_admin(client, sms)
+    course = make_course()
+    make_certificate_request(teacher(1).id, course.id)
+    make_certificate(teacher(2).id, course.id, number="KZ-2026-AAAAAA")
+    make_certificate_request(teacher(3).id, course.id, revoked_at=now_utc())
+
+    body = client.get("/admin/overview").json()
+
+    assert body["certificates_count"] == 1
+    # Справочное число внизу экрана считает наоборот — выданные документы
+    assert body["totals"]["certificates"] == 1
+    # Тот же счётчик, что total у вкладки «Ждут выдачи»
+    assert (
+        body["certificates_count"]
+        == client.get("/admin/certificates?status=requested").json()["total"]
+    )
+
+
+def test_certificates_counter_obeys_the_platform_filter(client, sms):
+    """Площадка — общий фильтр всего экрана, и четвёртый счётчик слушается
+    его наравне с тремя соседними (PLATFORMS_BRIEF, решение 9)."""
+    login_admin(client, sms)
+    course = make_course(platforms={"p1": 45000, "p2": 60000})
+    person = teacher(1)
+    make_certificate_request(person.id, course.id, platform="p1")
+    make_certificate_request(person.id, course.id, platform="p2")
+    make_certificate_request(teacher(2).id, course.id, platform="p2")
+
+    def counted(query: str = "") -> int:
+        return client.get(f"/admin/overview{query}").json()["certificates_count"]
+
+    assert counted() == 3
+    assert counted("?platform=p1") == 1
+    assert counted("?platform=p2") == 2
 
 
 def test_deleted_question_leaves_the_counter(client, sms):

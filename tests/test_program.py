@@ -227,7 +227,7 @@ def test_new_stub_does_not_show_up_in_an_open_course(client, client2, sms):
     assert client.get(f"/quizzes/{quiz_stub['id']}").status_code == 404
     assert client.get(f"/tasks/{task_stub['id']}").status_code == 404
     # И условие сертификата пустая заготовка не ломает
-    assert client.get(f"/courses/{course.id}/completion").json()["can_issue"] is True
+    assert client.get(f"/courses/{course.id}/completion").json()["can_request"] is True
 
 
 def test_done_needs_counted_passed_attempt_and_accepted_task(client, sms):

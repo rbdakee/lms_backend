@@ -57,6 +57,8 @@ TEXTS = {
         "passed": "прошёл(-ла) курс повышения квалификации",
         "issued_at": "Дата выдачи",
         "number": "Номер документа",
+        "iin": "ИИН",
+        "registration_number": "Рег. номер",
         "sign": "Подпись",
         "stamp": "М.П.",
         "verify": "Проверить подлинность",
@@ -68,6 +70,8 @@ TEXTS = {
         "passed": "біліктілікті арттыру курсынан өтті",
         "issued_at": "Берілген күні",
         "number": "Құжат нөмірі",
+        "iin": "ЖСН",
+        "registration_number": "Тіркеу нөмірі",
         "sign": "Қолы",
         "stamp": "М.О.",
         "verify": "Түпнұсқалығын тексеру",
@@ -81,9 +85,14 @@ def render_certificate(
     """Байты PDF по снимку сертификата.
 
     `document` — то, что записано в строке сертификата: `holder_name`,
-    `course_title`, `hours`, `issued_at`, `number`, `lang`. Живых таблиц
-    здесь нет по определению: курс переименуют или удалят — документ
+    `course_title`, `hours`, `issued_at`, `number`, `registration_number`,
+    `lang`, — и `iin` владельца, единственное поле не из снимка (колонки
+    под него у сертификата нет). Курс переименуют или удалят — документ
     обязан остаться прежним.
+
+    `registration_number` и `iin` бывают пустыми: номера академии нет
+    у документов до 04.09.2026, а ИИН — у тех, кто его ещё не заполнил.
+    Пустое значение свою половину подвала не печатает вовсе.
 
     `images` — байты картинок настроек по слотам `logo`, `sign`, `stamp`.
     Любой из них может быть None, и тогда место остаётся пустым.
@@ -202,13 +211,42 @@ def _qr(pdf: FPDF, url: str, *, x: float, y: float, side: float) -> None:
 
 
 def _footer(pdf: FPDF, words: dict, document: dict) -> None:
-    """Дата и номер по нижнему краю: дата слева, номер справа."""
+    """Две строки по нижнему краю: даты и номера, слева и справа.
+
+    Вторая строка — про реестр академии (CERTIFICATES_BRIEF, 1 и 2): туда
+    человека вносят по ИИН, а документ находят по её собственному номеру.
+    Оба стоят под своей парой сверху — датой выдачи и нашим номером.
+
+    Высоты хватает ровно на две: ячейка высотой 6 на 188.5 кончается
+    на 194.5, а внутренняя рамка идёт по PAGE_H - 13.5 = 196.5. Третьей
+    строке места на листе уже нет.
+    """
     pdf.set_font(FONT, "", 10)
     pdf.set_text_color(*MUTED)
-    pdf.set_xy(MARGIN, 186)
-    pdf.cell(LINE_W / 2, 6, f"{words['issued_at']}: {_date(document['issued_at'])}", align="L")
-    pdf.set_xy(MARGIN + LINE_W / 2, 186)
-    pdf.cell(LINE_W / 2, 6, f"{words['number']}: {document['number']}", align="R")
+    issued_at = _date(document["issued_at"])
+    _footer_cell(pdf, y=182, align="L", label=words["issued_at"], value=issued_at)
+    _footer_cell(pdf, y=182, align="R", label=words["number"], value=document["number"])
+    _footer_cell(pdf, y=188.5, align="L", label=words["iin"], value=document["iin"])
+    _footer_cell(
+        pdf,
+        y=188.5,
+        align="R",
+        label=words["registration_number"],
+        value=document["registration_number"],
+    )
+
+
+def _footer_cell(pdf: FPDF, *, y: float, align: str, label: str, value: str) -> None:
+    """Половина строки подвала — или ничего.
+
+    Пустое значение не печатает и подписи: «Рег. номер:» без номера читается
+    как потерянные данные, а не как «номера здесь и не бывает». Шрифт и цвет
+    ставит `_footer`: подписи подвала все одинаковые.
+    """
+    if not value:
+        return
+    pdf.set_xy(MARGIN if align == "L" else MARGIN + LINE_W / 2, y)
+    pdf.cell(LINE_W / 2, 6, f"{label}: {value}", align=align)
 
 
 # -- кирпичики -------------------------------------------------------------

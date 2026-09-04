@@ -1,4 +1,4 @@
-"""Дашборд админа: три счётчика «требует действия», три коротких списка
+"""Дашборд админа: четыре счётчика «требует действия», три коротких списка
 под ними и справочные числа внизу экрана.
 
 Это рабочий стол, а не аналитика: всё считается в момент запроса и ничего
@@ -18,6 +18,7 @@ from app.adapters.db.models import (
     User,
 )
 from app.adapters.db.repos import (
+    CertificateAdminRepo,
     CertificateRepo,
     CourseRepo,
     LeadRepo,
@@ -56,6 +57,7 @@ class OverviewService:
         submissions: SubmissionRepo,
         messages: ThreadMessageRepo,
         certificates: CertificateRepo,
+        admin_certificates: CertificateAdminRepo,
     ):
         self.users = users
         self.courses = courses
@@ -63,6 +65,10 @@ class OverviewService:
         self.submissions = submissions
         self.messages = messages
         self.certificates = certificates
+        # Два репозитория сертификатов рядом не случайно: внизу экрана
+        # справочное число выданных документов, а в счётчике наверху — заявки,
+        # которых тот, что отвечает учителю, не видит вовсе
+        self.admin_certificates = admin_certificates
 
     # -- GET /admin/overview ---------------------------------------------
 
@@ -100,6 +106,9 @@ class OverviewService:
             "leads_count": leads_count,
             "submissions_count": submissions_count,
             "questions_count": questions_count,
+            # Четвёртая очередь без списка под ней: экран рисует три списка,
+            # четвёртый никто не просил (CERTIFICATES_BRIEF, 4)
+            "certificates_count": self.admin_certificates.requested_count(platform),
             "leads": [
                 self._lead_out(lead, teacher, course, now)
                 for lead, teacher, course in leads

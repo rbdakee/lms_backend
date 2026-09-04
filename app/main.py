@@ -14,6 +14,7 @@ from app.api.routers import (
     admin,
     admin_admins,
     admin_categories,
+    admin_certificates,
     admin_courses,
     admin_lessons,
     admin_quizzes,
@@ -111,6 +112,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_quizzes.router)
     app.include_router(admin_tasks.router)
     app.include_router(admin_teachers.router)
+    app.include_router(admin_certificates.router)
     app.include_router(admin_reviews.router)
     app.include_router(admin_categories.router)
     app.include_router(admin_admins.router)

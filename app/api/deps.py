@@ -17,6 +17,7 @@ from app.adapters.db.repos import (
     AttemptRepo,
     AuthCodeRepo,
     CategoryRepo,
+    CertificateAdminRepo,
     CertificateRepo,
     CourseAdminRepo,
     CoursePlatformRepo,
@@ -49,6 +50,7 @@ from app.application.auth import AuthService, hash_token
 from app.application.categories import CategoriesService
 from app.application.certificate_pdf import CertificatePdfService
 from app.application.certificates import CertificatesService
+from app.application.certificates_admin import CertificatesAdminService
 from app.application.courses import CoursesService
 from app.application.courses_admin import CoursesAdminService
 from app.application.files import FilesService
@@ -377,7 +379,9 @@ def get_auth_service(
 
 
 def get_users_service(db: Annotated[DbSession, Depends(get_db)]) -> UsersService:
-    return UsersService(sessions=SessionRepo(db))
+    # Профилю нужен UserRepo: ИИН уникален, и совпадение при сохранении —
+    # это чужой аккаунт, а не второй свой
+    return UsersService(sessions=SessionRepo(db), users=UserRepo(db))
 
 
 def get_courses_service(
@@ -441,19 +445,25 @@ def get_quizzes_service(
 
 def get_certificates_service(
     db: Annotated[DbSession, Depends(get_db)],
+    notifier: Annotated[AdminNotifier, Depends(get_admin_notifier)],
     verify_limiter: Annotated[SlidingWindowLimiter, Depends(get_verify_limiter)],
     enrollments: Annotated[EnrollmentRepo, Depends(get_enrollments)],
     preview_course_id: Annotated[int | None, Depends(get_preview_course_id)],
     repos: Annotated[VisibilityRepos, Depends(get_visibility_repos)],
 ) -> CertificatesService:
+    # Сертификат теперь просят, а не получают, и заявку кто-то должен увидеть:
+    # уходит она тем же путём, что заявка на курс, — карточкой в Telegram
+    # со ссылкой в админку, поэтому здесь и адрес админки, и свой commit
     return CertificatesService(
         certificates=CertificateRepo(db),
         courses=repos.courses,
         enrollments=enrollments,
         progress=ProgressRepo(db),
-        notifications=NotificationRepo(db),
+        telegram=notifier,
         verify_limiter=verify_limiter,
+        commit=db.commit,
         preview_course_id=preview_course_id,
+        admin_base_url=get_settings().admin_base_url,
     )
 
 
@@ -616,6 +626,21 @@ def get_teachers_admin_service(
     )
 
 
+def get_certificates_admin_service(
+    db: Annotated[DbSession, Depends(get_db)],
+) -> CertificatesAdminService:
+    # Настоящие репозитории, не подменённые предпросмотром: админ смотрит
+    # на документы как они есть, а в режиме предпросмотра их не заводится вовсе
+    return CertificatesAdminService(
+        certificates=CertificateRepo(db),
+        admin_certificates=CertificateAdminRepo(db),
+        notifications=NotificationRepo(db),
+        # Отметку «курс пройден» ставит теперь выдача: раньше её ставила
+        # мгновенная выдача у учителя, а вкладка «Пройденные» держится на ней
+        enrollments=EnrollmentRepo(db),
+    )
+
+
 def get_reviews_admin_service(db: Annotated[DbSession, Depends(get_db)]) -> ReviewsAdminService:
     return ReviewsAdminService(reviews=ReviewRepo(db))
 
@@ -643,6 +668,9 @@ def get_certificate_pdf_service(
     # выданный документ, а в режиме предпросмотра документов не заводится вовсе
     return CertificatePdfService(
         certificates=CertificateRepo(db),
+        # ИИН печатается на бумаге, а колонки под него у сертификата нет:
+        # номер у человека один на всю жизнь, и второй его копии не заводим
+        users=UserRepo(db),
         # Адрес страницы проверки для QR живёт в конфигурации: он про домен,
         # а не про бренд
         cfg=get_settings(),
@@ -668,6 +696,10 @@ def get_overview_service(db: Annotated[DbSession, Depends(get_db)]) -> OverviewS
         submissions=SubmissionRepo(db),
         messages=ThreadMessageRepo(db),
         certificates=CertificateRepo(db),
+        # Заявки на сертификат — третья очередь, где админ отвечает людям.
+        # Считает её админский репозиторий: тот, что отвечает учителю,
+        # заявок не видит вовсе
+        admin_certificates=CertificateAdminRepo(db),
     )
 
 

@@ -54,6 +54,7 @@ from app.adapters.db.models import (
     ThreadMessage,
     User,
 )
+from app.domain.iin import IIN_PLACEHOLDER
 from app.domain.platform import PLATFORMS
 
 # Черновик и скрытый курс для площадки не существуют: ни в каталоге,
@@ -94,6 +95,18 @@ class UserRepo:
 
     def by_phone(self, phone: str) -> User | None:
         return self.db.scalar(select(User).where(User.phone == phone))
+
+    def by_iin(self, iin: str) -> User | None:
+        """Чей это ИИН — вопрос перед сохранением номера в профиль: один
+        человек — один аккаунт (CERTIFICATES_BRIEF, 1).
+
+        Заглушка сюда не приходит: под уникальность она не попадает, стоит
+        у всех, кто регистрировался раньше, и запрос по ней вернул бы
+        случайного из них — человек получил бы «ИИН занят» на ровном месте.
+        """
+        if iin == IIN_PLACEHOLDER:
+            return None
+        return self.db.scalar(select(User).where(User.iin == iin))
 
     def by_id(self, user_id: int) -> User | None:
         return self.db.get(User, user_id)
@@ -1203,9 +1216,18 @@ class CertificateRepo:
         self.db = db
 
     def active_for(self, user_id: int, course_id: int, platform: str) -> Certificate | None:
-        """Действующий сертификат по курсу: он закрывает новые попытки тестов.
-        Отозванный не считается — результат снова можно менять. Сертификат
-        соседней площадки попытки здесь не закрывает: там своя учёба."""
+        """Действующая строка сертификата по курсу — и заявка, и выданный
+        документ: попытки тестов закрывает уже заявка.
+
+        Причина: админ выпишет документ по тому чек-листу, который был
+        проверен в момент заявки, и поехавшие после неё результаты дали бы
+        бумагу человеку, который условиям больше не отвечает. Ошибочную
+        заявку снимает отзыв.
+
+        Отозванная строка не считается — результат снова можно менять.
+        Сертификат соседней площадки попытки здесь не закрывает: там своя
+        учёба.
+        """
         return self.db.scalar(
             select(Certificate).where(
                 Certificate.user_id == user_id,
@@ -1242,7 +1264,8 @@ class CertificateRepo:
 
     def list_for_user(self, user_id: int, platform: str) -> list[Certificate]:
         """Свои сертификаты этой площадки, свежие сверху. Отозванные в кабинет
-        не попадают."""
+        не попадают, заявки — тоже: в кабинете сетка документов, а заявку
+        человек видит на экране своего курса."""
         return list(
             self.db.scalars(
                 select(Certificate)
@@ -1250,6 +1273,7 @@ class CertificateRepo:
                     Certificate.user_id == user_id,
                     Certificate.platform == platform,
                     Certificate.revoked_at.is_(None),
+                    Certificate.issued_at.is_not(None),
                 )
                 .order_by(Certificate.issued_at.desc(), Certificate.id.desc())
             )
@@ -1258,7 +1282,6 @@ class CertificateRepo:
     def create(
         self,
         *,
-        number: str,
         user_id: int,
         course_id: int,
         holder_name: str,
@@ -1267,13 +1290,22 @@ class CertificateRepo:
         lang: str,
         platform: str,
     ) -> Certificate | None:
-        """Новый сертификат. None — вставку отбила база: либо номер уже занят,
-        либо соседний запрос выдал сертификат первым (uq_certificate_active).
-        Оба случая разбирает сценарий: первый — новым номером, второй — чужим
-        документом, потому что двойной клик обязан дать один документ.
+        """Заявка на сертификат. Номера и даты выдачи у неё нет — их ставит
+        выдача, а её делает админ руками (CERTIFICATES_BRIEF, 3). Дату
+        запроса проставляет база.
+
+        None — вставку отбил uq_certificate_active: соседний запрос попросил
+        сертификат первым. Разбирает это сценарий чужой строкой, потому что
+        двойной клик обязан дать одну заявку.
         """
         certificate = Certificate(
-            number=number,
+            # Дата запроса ставится приложением, хотя у колонки есть
+            # server_default: дату выдачи ставит оно же, а часы базы в контейнере
+            # и часы процесса расходятся на миллисекунды. Разойдись они здесь —
+            # и в карточке нашёлся бы документ, выданный раньше, чем его
+            # попросили. Значение по умолчанию остаётся страховкой для вставок
+            # мимо этого метода.
+            requested_at=now_utc(),
             user_id=user_id,
             course_id=course_id,
             holder_name=holder_name,
@@ -1284,7 +1316,7 @@ class CertificateRepo:
         )
         try:
             # SAVEPOINT: откатывать всю транзакцию запроса из-за проигранной
-            # гонки незачем — дальше сценарий читает документ победителя
+            # гонки незачем — дальше сценарий читает заявку победителя
             with self.db.begin_nested():
                 self.db.add(certificate)
                 self.db.flush()
@@ -1292,16 +1324,40 @@ class CertificateRepo:
             return None
         return certificate
 
+    def take_number(self, certificate: Certificate, number: str, issued_at: datetime) -> bool:
+        """Занять номер за документом — это и есть выдача: номер и дата
+        появляются одним движением. False — номер уже чей-то, сценарий
+        пробует следующий.
+
+        expire обязателен: откат SAVEPOINT снял значения в базе, но в объекте
+        они остались, и следующая попытка ушла бы в базу поверх номера,
+        которого там нет.
+        """
+        try:
+            with self.db.begin_nested():
+                certificate.number = number
+                certificate.issued_at = issued_at
+                self.db.flush()
+        except IntegrityError:
+            self.db.expire(certificate)
+            return False
+        return True
+
     def active_count(self, course_id: int | None = None, platform: str | None = None) -> int:
-        """Действующие сертификаты: без course_id — по всем курсам (справочное
+        """Выданные сертификаты: без course_id — по всем курсам (справочное
         число дашборда), с ним — по версии курса (сводка отчёта). Отозванные
         не считаются ни там, ни там (CONTRACT, сессия 6), документ админа —
-        тоже: в показателях его нет нигде (`not_admin`).
+        тоже: в показателях его нет нигде (`not_admin`). Заявка — тоже: пока
+        админ её не выписал, документа у человека нет.
 
         Площадка — фильтр обоих экранов: курс на обеих даёт человеку два
         документа (PLATFORMS_BRIEF, решение 2), и без параметра считаются оба.
         """
-        conds = [Certificate.revoked_at.is_(None), not_admin(Certificate.user_id)]
+        conds = [
+            Certificate.revoked_at.is_(None),
+            Certificate.issued_at.is_not(None),
+            not_admin(Certificate.user_id),
+        ]
         if course_id is not None:
             conds.append(Certificate.course_id == course_id)
         if platform is not None:
@@ -1316,6 +1372,9 @@ class CertificateRepo:
 
         Ключ парный, а не один user_id: строка отчёта — это доступ, и человек
         с доступом на обеих площадках получает документ на каждой отдельно.
+
+        Заявка сюда не попадает: отчёт говорит «сертификат выдан», а её ещё
+        не выписали — такая строка честнее покажется как «условия выполнены».
         """
         if not user_ids:
             return set()
@@ -1324,6 +1383,7 @@ class CertificateRepo:
                 Certificate.course_id == course_id,
                 Certificate.user_id.in_(user_ids),
                 Certificate.revoked_at.is_(None),
+                Certificate.issued_at.is_not(None),
             )
         )
         return {(user_id, platform) for user_id, platform in rows}
@@ -1351,6 +1411,153 @@ class CertificateRepo:
                 .limit(1)
             )
             is not None
+        )
+
+
+class CertificateAdminRepo:
+    """Сертификаты глазами админа: очередь заявок, список и карточка.
+
+    Отдельно от CertificateRepo потому, что тот отвечает на вопросы учителя —
+    «есть ли у меня документ по этому курсу». Здесь вопрос другой: кому
+    выписать бумагу и что показать в строке списка. Поэтому учитель и курс
+    приходят вместе со строкой, а не запросом на каждую.
+
+    Здесь ходят персональные данные: ФИО и ИИН. Наружу их отдаёт только
+    админский сценарий, и только админу.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    @staticmethod
+    def _status_conds(status: str | None) -> list[ColumnElement[bool]]:
+        """Вкладка списка в условия запроса. Разбор держится одним местом:
+        состояние строки складывается из двух дат, и второе его прочтение
+        где-нибудь ещё рано или поздно разошлось бы с этим.
+        """
+        if status == "requested":
+            return [Certificate.revoked_at.is_(None), Certificate.issued_at.is_(None)]
+        if status == "issued":
+            return [Certificate.revoked_at.is_(None), Certificate.issued_at.is_not(None)]
+        if status == "revoked":
+            return [Certificate.revoked_at.is_not(None)]
+        return []
+
+    @staticmethod
+    def _search_filter(q: str):
+        """Поиск по ФИО, ИИН и обоим номерам (CERTIFICATES_BRIEF, 4).
+
+        ФИО ищется и в живом профиле, и в снимке holder_name: человек мог
+        сменить фамилию после выдачи, а на бумаге осталась прежняя — админ
+        ищет по той, что у него перед глазами. Телефона здесь нет, в отличие
+        от `name_or_phone_filter`: на этой странице его не показывают,
+        и искать по невидимому столбцу нечем.
+        """
+        like = f"%{q.strip()}%"
+        return or_(
+            func.concat_ws(" ", User.last_name, User.first_name, User.middle_name).ilike(like),
+            Certificate.holder_name.ilike(like),
+            User.iin.ilike(like),
+            Certificate.number.ilike(like),
+            Certificate.registration_number.ilike(like),
+        )
+
+    def page(
+        self,
+        *,
+        status: str | None,
+        platform: str | None,
+        q: str | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[tuple[Certificate, User]], int]:
+        """Страница списка сертификатов, свежие сверху.
+
+        Порядок по дате запроса, а не выдачи: у заявки её нет, а первое, зачем
+        админ открывает экран, — как раз очередь на выдачу.
+
+        Курс сюда не джойнится: название, часы и язык строка сертификата
+        хранит своими снимками, и живой курс в ответе не участвует. Лишний
+        join к тому же был бы скрытым фильтром — удалённый курс выкинул бы
+        документ из реестра.
+        """
+        conds = self._status_conds(status)
+        if platform is not None:
+            conds.append(Certificate.platform == platform)
+        if q is not None and q.strip():
+            conds.append(self._search_filter(q))
+
+        # join(User) и в подсчёте: поиск смотрит в живой профиль, и число
+        # под списком обязано считать те же строки, что и он
+        total = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(Certificate)
+                .join(User, User.id == Certificate.user_id)
+                .where(*conds)
+            )
+            or 0
+        )
+        rows = self.db.execute(
+            select(Certificate, User)
+            .join(User, User.id == Certificate.user_id)
+            .where(*conds)
+            .order_by(Certificate.requested_at.desc(), Certificate.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return [(certificate, teacher) for certificate, teacher in rows], total
+
+    def by_id(self, certificate_id: int) -> tuple[Certificate, User] | None:
+        """Строка карточки вместе с учителем.
+
+        Учитель нужен живой, а не снимком: перед выдачей админ сверяет ФИО
+        и ИИН с тем, что у человека в профиле сейчас, — в снимке ИИН нет
+        и не будет. Курса здесь нет по той же причине, что и в `page`.
+        """
+        row = self.db.execute(
+            select(Certificate, User)
+            .join(User, User.id == Certificate.user_id)
+            .where(Certificate.id == certificate_id)
+        ).first()
+        if row is None:
+            return None
+        certificate, teacher = row
+        return certificate, teacher
+
+    def requested_count(self, platform: str | None) -> int:
+        """Сколько заявок ждёт выдачи — счётчик у пункта меню.
+
+        `not_admin` здесь не применяется, в отличие от `active_count`: это
+        очередь работы, а не показатель, и заявка админа ждёт ответа наравне
+        с остальными — в очереди заявок на курс он тоже считается.
+        """
+        conds = self._status_conds("requested")
+        if platform is not None:
+            conds.append(Certificate.platform == platform)
+        return (
+            self.db.scalar(select(func.count()).select_from(Certificate).where(*conds)) or 0
+        )
+
+    def same_registration_number(
+        self, registration_number: str, exclude_id: int
+    ) -> Certificate | None:
+        """Другой документ с тем же номером академии — повод предупредить,
+        а не отказать: чужой нумерации мы не знаем (CERTIFICATES_BRIEF, 2).
+
+        Пустой номер не ищется вовсе: он стоит у всех документов до
+        04.09.2026, и предупреждение о нём было бы верным и бесполезным.
+        """
+        if not registration_number.strip():
+            return None
+        return self.db.scalar(
+            select(Certificate)
+            .where(
+                Certificate.registration_number == registration_number,
+                Certificate.id != exclude_id,
+            )
+            .order_by(Certificate.id)
+            .limit(1)
         )
 
 
@@ -3057,13 +3264,17 @@ class TeacherAdminRepo:
         return {user_id: (courses, completed) for user_id, courses, completed in rows}
 
     def certificate_counts(self, user_ids: list[int]) -> dict[int, int]:
-        """Действующие сертификаты — {user_id: count}. Отозванный документ
-        в счёт не идёт: у человека его на руках нет."""
+        """Выданные сертификаты — {user_id: count}. Ни отозванный документ,
+        ни заявка в счёт не идут: у человека их на руках нет."""
         if not user_ids:
             return {}
         rows = self.db.execute(
             select(Certificate.user_id, func.count())
-            .where(Certificate.user_id.in_(user_ids), Certificate.revoked_at.is_(None))
+            .where(
+                Certificate.user_id.in_(user_ids),
+                Certificate.revoked_at.is_(None),
+                Certificate.issued_at.is_not(None),
+            )
             .group_by(Certificate.user_id)
         )
         return dict(rows.all())
@@ -3285,13 +3496,18 @@ class TeacherAdminRepo:
         return [(submission, task, course_id) for submission, task, course_id in rows]
 
     def certificates(self, user_id: int) -> list[Certificate]:
-        """Документы человека, свежие сверху. Отозванные приходят вместе
-        с остальными — с отметкой revoked_at."""
+        """Все строки сертификатов человека, свежие сверху: заявки, выданные
+        документы и отозванные — с отметками requested_at, issued_at
+        и revoked_at, по которым карточка и различает их состояние.
+
+        Порядок по дате запроса, а не выдачи: у заявки issued_at пустой,
+        и по нему она провалилась бы в конец списка вместо начала.
+        """
         return list(
             self.db.scalars(
                 select(Certificate)
                 .where(Certificate.user_id == user_id)
-                .order_by(Certificate.issued_at.desc(), Certificate.id.desc())
+                .order_by(Certificate.requested_at.desc(), Certificate.id.desc())
             )
         )
 

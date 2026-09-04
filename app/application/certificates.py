@@ -1,46 +1,51 @@
-"""Сертификат: чек-лист условий, выдача и публичная проверка.
+"""Сертификат: чек-лист условий, заявка на выдачу и публичная проверка.
 
-Выдача необратима — отзывать выданный документ уже неловко, — поэтому условия
-считаются на сервере, единственность держит частичный уникальный индекс,
-а незавершённая попытка теста выдачу останавливает: её finish ещё может
-поменять зачёт.
+С 04.09.2026 документ здесь не выписывается: учитель просит сертификат, а выдаёт
+его админ руками, вводя регистрационный номер академии (CERTIFICATES_BRIEF, 3).
+Заявка и выданный документ — одна строка в двух состояниях, поэтому попросить
+сертификат дважды не даёт тот же частичный уникальный индекс, что раньше держал
+единственность документа.
+
+Условия всё равно считаются на сервере: по ним админ и выписывает бумагу.
+Незавершённая попытка теста останавливает заявку по той же причине, по какой
+раньше останавливала выдачу — её finish ещё может поменять зачёт, а админ
+будет смотреть на чек-лист, закрытый в момент заявки.
 """
+
+import logging
+from collections.abc import Callable
 
 from app.adapters.db.models import Certificate, Course, User
 from app.adapters.db.repos import (
     CertificateRepo,
     CourseRepo,
     EnrollmentRepo,
-    NotificationRepo,
     ProgressRepo,
     now_utc,
 )
+from app.application.admin_notify import AdminNotifier
+from app.application.ports import NotificationCard
 from app.application.ratelimit import SlidingWindowLimiter
-from app.domain.certificate import (
-    all_done,
-    build_conditions,
-    canonical_number,
-    generate_number,
-)
+from app.domain.certificate import all_done, build_conditions, canonical_number
 from app.domain.errors import (
     AttemptInProgressError,
     ConditionsNotMetError,
     ForbiddenError,
+    IinRequiredError,
     NotFoundError,
     ProfileIncompleteError,
     RateLimitedError,
 )
-from app.domain.profile import onboarding_done
+from app.domain.iin import iin_filled
+from app.domain.profile import names_filled
+
+log = logging.getLogger("certificates")
 
 ACCESS_DENIED = "Доступ к курсу не открыт"
 
-# Случайная часть номера — 32 в шестой степени, около миллиарда вариантов:
-# занятый номер это невероятное совпадение, и хватает попробовать ещё раз.
-NUMBER_TRIES = 5
-
 
 def _attempt_blocker() -> dict:
-    """Помеха выдаче и отказ в выдаче — одно и то же событие, поэтому и текст
+    """Помеха заявке и отказ в заявке — одно и то же событие, поэтому и текст
     у них один: экран показывает его под неактивной кнопкой."""
     error = AttemptInProgressError()
     return {"code": error.code, "message": error.message}
@@ -127,18 +132,25 @@ class CertificatesService:
         courses: CourseRepo,
         enrollments: EnrollmentRepo,
         progress: ProgressRepo,
-        notifications: NotificationRepo,
         verify_limiter: SlidingWindowLimiter,
+        telegram: AdminNotifier,
+        commit: Callable[[], None],
         preview_course_id: int | None,
+        admin_base_url: str,
     ):
         self.certificates = certificates
         self.courses = courses
         self.enrollments = enrollments
         self.progress = progress
-        self.notifications = notifications
         self.verify_limiter = verify_limiter
+        self.telegram = telegram
+        # Коммит нужен сценарию точечно: заявка обязана быть в базе до того,
+        # как уйдёт в Telegram, — бот недоступен, а заявка всё равно в админке.
+        self.commit = commit
         # Курс, который админ смотрит «как учитель»: по нему ничего не пишется
         self.preview_course_id = preview_course_id
+        # Кнопка «Открыть в админке» в карточке уведомления
+        self.admin_base_url = admin_base_url
 
     # -- GET /courses/{id}/completion ------------------------------------
 
@@ -166,18 +178,15 @@ class CertificatesService:
         )
         return {
             "conditions": conditions,
-            "can_issue": (
+            # Кнопка называется «Запросить сертификат», а не «Получить»:
+            # документ выписывает админ. Поданная заявка гасит её так же,
+            # как гасил выданный документ, — просить дважды нечего
+            "can_request": (
                 enrolled and certificate is None and blocker is None and all_done(conditions)
             ),
             "blocker": blocker,
             "certificate": (
-                {
-                    "id": certificate.id,
-                    "number": certificate.number,
-                    "issued_at": certificate.issued_at,
-                }
-                if certificate is not None
-                else None
+                self._state_out(certificate) if certificate is not None else None
             ),
         }
 
@@ -212,20 +221,25 @@ class CertificatesService:
 
     # -- POST /courses/{id}/certificate ----------------------------------
 
-    def issue(self, user: User, course_id: int, platform: str) -> dict:
+    def request(self, user: User, course_id: int, platform: str) -> dict:
+        """Заявка на сертификат: сам документ по ней выпишет админ руками.
+
+        Отметки «курс пройден» и колокольчика здесь больше нет — оба
+        принадлежат выдаче, а она переехала в админку.
+        """
         course = self._visible(course_id)
-        enrollment = self.enrollments.active_for(user.id, course.id, platform)
-        if enrollment is None:
+        if self.enrollments.active_for(user.id, course.id, platform) is None:
             raise ForbiddenError(ACCESS_DENIED)
 
         if course.id == self.preview_course_id:
-            return self._preview_certificate(user, course, platform)
+            return self._preview_request()
 
         existing = self.certificates.active_for(user.id, course.id, platform)
         if existing is not None:
-            # Идемпотентность: экран завершения дёргает выдачу при открытии,
-            # и F5 не должен превращаться в отказ
-            return self._issued_out(existing)
+            # Идемпотентность: экран завершения дёргает ручку при открытии,
+            # и F5 не должен превращаться в отказ. Второго сообщения в бот
+            # повтор при этом не шлёт — заявка уже стоит в очереди админа
+            return self._state_out(existing)
 
         # Условия — раньше попытки: человеку, у которого пройдено 2 урока
         # из 18, надо показать чек-лист, а не «завершите начатый тест»
@@ -235,58 +249,71 @@ class CertificatesService:
             raise ConditionsNotMetError(conditions)
         if self.certificates.unfinished_attempt(user.id, course.id, platform):
             raise AttemptInProgressError()
-        if not onboarding_done(user.first_name, user.last_name):
-            # ФИО — снимок на бумаге. Курс без единого условия выдаёт документ
-            # в ту же секунду, что и доступ, — то есть раньше, чем человек
-            # вообще открыл профиль, и пустое имя уже не исправить
+        if not names_filled(user.first_name, user.last_name):
+            # ФИО — снимок на бумаге, и снимается он сейчас: курс без единого
+            # условия пускает к заявке в ту же секунду, что и доступ, — то есть
+            # раньше, чем человек вообще открыл профиль
             raise ProfileIncompleteError()
+        if not iin_filled(user.iin):
+            # Без ИИН академия не внесёт человека в реестр, и упереться в это
+            # лучше здесь, чем в момент выдачи: там учитель уже всё сдал и ждёт
+            # документ. Самого номера в отказе нет — это персональные данные
+            raise IinRequiredError()
 
-        certificate, created = self._issue_document(user, course, platform)
-        if not created:
-            # Гонку выиграл соседний запрос: документ его, и отметка
-            # «курс пройден» с уведомлением тоже уже сделаны им
-            return self._issued_out(certificate)
-        if enrollment.completed_at is None:
-            # «Курс пройден» и «сертификат получен» — одно событие: вкладка
-            # «Пройденные» на /my показывает именно его (CONTRACT, сессия 6)
-            enrollment.completed_at = now_utc()
-        # Площадка — у выданного документа: ссылка из колокольчика ведёт
-        # на тот сайт, где сертификат получен
-        self.notifications.create(
-            user.id,
-            "certificate_issued",
-            {
-                "course_id": course.id,
-                "course_title": course.title,
-                "certificate_id": certificate.id,
-            },
-            certificate.platform,
+        certificate = self.certificates.create(
+            user_id=user.id,
+            course_id=course.id,
+            holder_name=self._holder_name(user),
+            course_title=course.title,
+            hours=course.hours,
+            # Язык версии курса: сертификат одноязычный, переключателя нет
+            lang=course.lang,
+            platform=platform,
         )
-        return self._issued_out(certificate)
+        if certificate is None:
+            # Вставку отбил uq_certificate_active: заявку успел подать
+            # соседний запрос. Двойной клик рождает одну заявку, и в Telegram
+            # её отправил победитель
+            existing = self.certificates.active_for(user.id, course.id, platform)
+            if existing is None:
+                raise RuntimeError("Заявка на сертификат не создалась")
+            return self._state_out(existing)
 
-    def _preview_certificate(self, user: User, course: Course, platform: str) -> dict:
-        """Документ, которого не будет: ни строки в certificate, ни уведомления,
-        ни отметки «курс пройден» у доступа (BACKEND_NOTES, раздел 12).
+        # Заявка обязана лечь в базу до похода в Telegram: бот бывает
+        # недоступен, а заявка всё равно должна оказаться в админке
+        self.commit()
+        try:
+            self.telegram.notify_admins(
+                NotificationCard(
+                    title="Заявка на сертификат",
+                    # Ни ФИО, ни ИИН: подробности админ откроет по кнопке —
+                    # карточка уходит в Telegram, а не за дверь с входом
+                    lines=[f"Курс: {course.title}"],
+                    link_text="Открыть в админке",
+                    link_url=f"{self.admin_base_url}/certificates/{certificate.id}",
+                ),
+                kind="certificate",
+                # Площадка заявки, а не запроса: строку в текст ставит сам
+                # notifier — см. AdminNotifier.notify_admins
+                platform=certificate.platform,
+            )
+        except Exception:
+            # В логе только id строки: ни ФИО, ни ИИН туда не ходят
+            log.exception(
+                "Telegram-уведомление о заявке на сертификат %s не ушло", certificate.id
+            )
+        return self._state_out(certificate)
+
+    def _preview_request(self) -> dict:
+        """Заявка, которой не будет: ни строки в certificate, ни сообщения
+        в бот (BACKEND_NOTES, раздел 12).
 
         Условия не проверяются: прогресса в режиме нет по определению — писать
-        его некуда, — а экран завершения админ пришёл увидеть целиком. Номер
-        настоящей формы, но нигде не записан: публичная проверка его не найдёт.
-        Объект создан в памяти и в сессию SQLAlchemy не добавлен.
+        его некуда, — а экран завершения админ пришёл увидеть целиком. Объект
+        создан в памяти и в сессию SQLAlchemy не добавлен.
         """
-        return self._issued_out(
-            Certificate(
-                id=0,
-                number=generate_number(now_utc()),
-                user_id=user.id,
-                course_id=course.id,
-                holder_name=self._holder_name(user),
-                course_title=course.title,
-                hours=course.hours,
-                lang=course.lang,
-                issued_at=now_utc(),
-                revoked_at=None,
-                platform=platform,
-            )
+        return self._state_out(
+            Certificate(id=0, number=None, requested_at=now_utc(), issued_at=None)
         )
 
     @staticmethod
@@ -295,33 +322,6 @@ class CertificatesService:
         return " ".join(
             part for part in (user.last_name, user.first_name, user.middle_name) if part
         )
-
-    def _issue_document(
-        self, user: User, course: Course, platform: str
-    ) -> tuple[Certificate, bool]:
-        """Документ и признак «создали мы, а не соседний запрос»: от него
-        зависит, писать ли уведомление и отметку о завершении."""
-        holder_name = self._holder_name(user)
-        for _ in range(NUMBER_TRIES):
-            certificate = self.certificates.create(
-                number=generate_number(now_utc()),
-                user_id=user.id,
-                course_id=course.id,
-                holder_name=holder_name,
-                course_title=course.title,
-                hours=course.hours,
-                # Язык версии курса: сертификат одноязычный, переключателя нет
-                lang=course.lang,
-                platform=platform,
-            )
-            if certificate is not None:
-                return certificate, True
-            existing = self.certificates.active_for(user.id, course.id, platform)
-            if existing is not None:
-                # Вставку отбил не занятый номер, а соседний запрос: двойной
-                # клик рождает один документ, второй запрос отдаёт его же
-                return existing, False
-        raise RuntimeError("Свободный номер сертификата не подобрался")
 
     # -- GET /me/certificates ---------------------------------------------
 
@@ -360,6 +360,9 @@ class CertificatesService:
         return {
             "status": "revoked" if certificate.revoked_at is not None else "valid",
             "number": certificate.number,
+            # Номер академии комиссии полезнее нашего, поэтому он тут есть.
+            # А ИИН не появится: страницу открывает посторонний человек
+            "registration_number": certificate.registration_number,
             "holder_name": certificate.holder_name,
             "course_title": certificate.course_title,
             "hours": certificate.hours,
@@ -369,10 +372,20 @@ class CertificatesService:
 
     # -- общее -------------------------------------------------------------
 
-    def _issued_out(self, certificate: Certificate) -> dict:
-        """Ответ выдачи: тот же документ плюс `revoked_at` — экран печатает
-        его сразу после нажатия кнопки."""
-        return {**self._certificate_out(certificate), "revoked_at": certificate.revoked_at}
+    @staticmethod
+    def _state_out(certificate: Certificate) -> dict:
+        """Строка сертификата глазами учителя: до выдачи заявка, после —
+        документ. Отозванных сюда не приходит — их отсекает `active_for`."""
+        return {
+            "id": certificate.id,
+            # Состояние читается по дате выдачи, а не по отдельной колонке:
+            # номер и дата появляются одним движением, и отдельный статус
+            # в базе рано или поздно разошёлся бы с ними
+            "status": "issued" if certificate.issued_at is not None else "requested",
+            "number": certificate.number,
+            "requested_at": certificate.requested_at,
+            "issued_at": certificate.issued_at,
+        }
 
     def _visible(self, course_id: int) -> Course:
         course = self.courses.visible_by_id(course_id)
@@ -388,6 +401,9 @@ class CertificatesService:
         return {
             "id": certificate.id,
             "number": certificate.number,
+            # Номер академии: пусто у документов до 04.09.2026 — админ
+            # проставит его на новой странице, когда дойдут руки
+            "registration_number": certificate.registration_number,
             "course_id": certificate.course_id,
             "course_title": certificate.course_title,
             "holder_name": certificate.holder_name,

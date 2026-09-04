@@ -32,6 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.domain.iin import IIN_PLACEHOLDER
 from app.domain.platform import PLATFORMS
 
 
@@ -68,6 +69,12 @@ class User(Base):
     first_name: Mapped[str] = mapped_column(Text, default="", server_default="")
     last_name: Mapped[str] = mapped_column(Text, default="", server_default="")
     middle_name: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # ИИН строкой, а не числом: ведущий ноль значащий (CERTIFICATES_BRIEF, 1).
+    # Заглушка у всех, кто зарегистрировался до 04.09.2026, — это метка
+    # «не заполнен», и онбординг мимо неё не пускает.
+    iin: Mapped[str] = mapped_column(
+        Text, default=IIN_PLACEHOLDER, server_default=IIN_PLACEHOLDER
+    )
     photo_url: Mapped[str | None] = mapped_column(Text)
     email: Mapped[str] = mapped_column(Text, default="", server_default="")
     school: Mapped[str] = mapped_column(Text, default="", server_default="")
@@ -83,7 +90,19 @@ class User(Base):
     consented_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
-    __table_args__ = (CheckConstraint("lang IN ('ru', 'kz')", name="lang"),)
+    __table_args__ = (
+        CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
+        # Один человек — один аккаунт: вторым ИИН второй аккаунт не завести
+        # (CERTIFICATES_BRIEF, 1). Заглушка под уникальность не попадает —
+        # она стоит у всех, кто регистрировался раньше, и один индекс
+        # запретил бы им сохранять профиль.
+        Index(
+            "uq_user_iin",
+            "iin",
+            unique=True,
+            postgresql_where=text(f"iin <> '{IIN_PLACEHOLDER}'"),
+        ),
+    )
 
 
 class Course(Base):
@@ -447,7 +466,13 @@ class Certificate(Base):
     __tablename__ = "certificate"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    number: Mapped[str] = mapped_column(Text, unique=True)
+    # Пусто, пока документ не выписан: до выдачи эта строка — заявка,
+    # а номер придумывает выдача (CERTIFICATES_BRIEF, 3).
+    number: Mapped[str | None] = mapped_column(Text, unique=True)
+    # Номер академии: он не наш, вычислить его нельзя — админ берёт его
+    # из своей нумерации и вводит руками. Пусто у документов до 04.09.2026
+    # и у всех заявок.
+    registration_number: Mapped[str] = mapped_column(Text, default="", server_default="")
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"), index=True)
     course_id: Mapped[int] = mapped_column(ForeignKey("course.id"), index=True)
     # Снимок на момент выдачи: курс переименуют — сертификат остаётся прежним.
@@ -456,8 +481,17 @@ class Certificate(Base):
     hours: Mapped[int] = mapped_column(Integer)
     # Язык тоже снимок: сертификат одноязычный, по языку версии курса (раздел 3).
     lang: Mapped[str] = mapped_column(Text, default="ru", server_default="ru")
-    issued_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Время заявки есть у всех трёх состояний строки, время выдачи — только
+    # у выданной. server_default у issued_at нет нарочно: с ним заявка
+    # получала бы дату выдачи прямо на вставке.
+    requested_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    issued_at: Mapped[datetime | None] = mapped_column()
     revoked_at: Mapped[datetime | None] = mapped_column()
+    # Кто выдал и кто отозвал: у действия админа хранится actor_id
+    # (backend/CLAUDE.md), как у enrollment.granted_by и review.reply_by.
+    # Наружу не отдаются — экрана, который их спрашивает, нет.
+    issued_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
+    revoked_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
     # Сертификат свой на каждой площадке; номер при этом уникален на всю
     # базу — нумерация общая, иначе проверка по номеру неоднозначна.
     platform: Mapped[str] = mapped_column(Text)
@@ -465,8 +499,13 @@ class Certificate(Base):
     __table_args__ = (
         CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
         CheckConstraint(PLATFORM_CHECK, name="platform"),
-        # Двойной клик по «Получить сертификат» не должен выдавать два
-        # документа: единственность держит база, а не проверка в сценарии.
+        # Номер и дата выдачи появляются одним движением — выдачей. Строка
+        # с номером, но без даты (или наоборот) означает недоведённую выдачу,
+        # и не пустить её в базу дешевле, чем потом разбирать, что случилось.
+        CheckConstraint("(number IS NULL) = (issued_at IS NULL)", name="issued"),
+        # Двойной клик по «Запросить сертификат» не должен заводить две
+        # строки: единственность держит база, а не проверка в сценарии.
+        # Она же не даёт попросить документ дважды (CERTIFICATES_BRIEF, 5).
         Index(
             "uq_certificate_active",
             "user_id",

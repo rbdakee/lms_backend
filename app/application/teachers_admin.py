@@ -173,9 +173,16 @@ class TeachersAdminService:
             raise NoAttemptError()
         if counted.finished_at is None:
             raise AttemptInProgressError("Попытка ещё не завершена — дождитесь её конца")
-        if self.certificates.active_for(teacher.id, course.id, platform) is not None:
-            # Иначе новая попытка на 40% отменила бы уже выданный документ
-            raise CertificateIssuedError("Сертификат по курсу уже выдан — пересдача закрыта")
+        certificate = self.certificates.active_for(teacher.id, course.id, platform)
+        if certificate is not None:
+            # Иначе новая попытка на 40% отменила бы уже выданный документ —
+            # или чек-лист, по которому админ вот-вот его выпишет: заявку он
+            # проверил в момент подачи, и результаты под ней не едут
+            raise CertificateIssuedError(
+                "Заявка на сертификат отправлена — пересдача закрыта"
+                if certificate.issued_at is None
+                else "Сертификат по курсу уже выдан — пересдача закрыта"
+            )
 
         counted.is_counted = False
         counted.uncounted_by = admin.id
@@ -237,6 +244,9 @@ class TeachersAdminService:
             "last_name": teacher.last_name,
             "first_name": teacher.first_name,
             "middle_name": teacher.middle_name,
+            # ИИН видит только админ — здесь и на странице «Сертификаты»
+            # (CERTIFICATES_BRIEF, 1). Заглушка означает «не заполнен»
+            "iin": teacher.iin,
             "phone": teacher.phone,
             "email": teacher.email,
             "school": teacher.school,
@@ -317,7 +327,10 @@ class TeachersAdminService:
         Тесты берутся из попыток: у теста, который человек не открывал,
         показывать нечего, и разрешать там тоже нечего.
         """
-        issued = {
+        # Действующие строки, а не одни выданные: заявка закрывает пересдачу
+        # так же, как документ, — админ выпишет бумагу по тому чек-листу,
+        # который проверил в момент заявки (CERTIFICATES_BRIEF, 3)
+        active = {
             (certificate.course_id, certificate.platform)
             for certificate in certificates
             if certificate.revoked_at is None
@@ -329,7 +342,7 @@ class TeachersAdminService:
             by_quiz.setdefault(key, (quiz, course, []))[2].append(attempt)
         return [
             self._quiz_out(
-                quiz, course, platform, rows, max_scores, (course.id, platform) in issued
+                quiz, course, platform, rows, max_scores, (course.id, platform) in active
             )
             for (_, platform), (quiz, course, rows) in by_quiz.items()
         ]
@@ -342,9 +355,9 @@ class TeachersAdminService:
         platform: str,
         attempts: list[QuizAttempt],
         max_scores: dict[int, int],
-        certificate_issued: bool,
+        certificate_active: bool,
     ) -> dict:
-        blocker = cls._retake_blocker(quiz, attempts, certificate_issued)
+        blocker = cls._retake_blocker(quiz, attempts, certificate_active)
         return {
             "quiz_id": quiz.id,
             "title": quiz.title,
@@ -380,7 +393,7 @@ class TeachersAdminService:
 
     @staticmethod
     def _retake_blocker(
-        quiz: Quiz, attempts: list[QuizAttempt], certificate_issued: bool
+        quiz: Quiz, attempts: list[QuizAttempt], certificate_active: bool
     ) -> str | None:
         """Почему пересдачу разрешить нельзя — или None, если можно.
 
@@ -397,7 +410,9 @@ class TeachersAdminService:
             return "no_attempt"
         if counted.finished_at is None:
             return "attempt_in_progress"
-        if certificate_issued:
+        if certificate_active:
+            # Код причины прежний, хотя причиной стала и заявка: его читает
+            # экран админки, и менять его в этой сессии не просили
             return "certificate_issued"
         return None
 
@@ -405,13 +420,30 @@ class TeachersAdminService:
     def _certificate_out(certificate: Certificate) -> dict:
         return {
             "id": certificate.id,
+            # Три состояния одной строки, отдельной таблицы заявок нет
+            # (CERTIFICATES_BRIEF, 5). Отзыв поверх любого из двух остальных,
+            # поэтому проверяется первым
+            "status": (
+                "revoked"
+                if certificate.revoked_at is not None
+                else "issued"
+                if certificate.issued_at is not None
+                else "requested"
+            ),
+            # null у заявки: наш номер выписывается в момент выдачи
             "number": certificate.number,
+            # Номер академии, пустой у документов до 04.09.2026 — админ
+            # проставит его, когда дойдут руки
+            "registration_number": certificate.registration_number,
             "course_id": certificate.course_id,
             # Документов по одному курсу может быть два — по одному на площадку
             "platform": certificate.platform,
-            # Снимок на момент выдачи: курс переименуют — документ прежний
+            # Снимок, снятый при заявке: курс переименуют — документ прежний
             "course_title": certificate.course_title,
             "hours": certificate.hours,
+            # Есть у всех трёх состояний, поэтому вкладка сортируется по нему
+            "requested_at": certificate.requested_at,
+            # null — админ ещё не выдал
             "issued_at": certificate.issued_at,
             "revoked_at": certificate.revoked_at,
         }

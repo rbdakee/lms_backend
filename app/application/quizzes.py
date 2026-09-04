@@ -129,6 +129,9 @@ class QuizzesService:
         if active is not None:
             # Активная попытка главнее прочего: экран возвращает человека в неё
             return {"status": "in_progress", "attempt": self._attempt_out(active, quiz)}
+        # Действующая строка — и заявка, и выданный документ: замок ставит
+        # уже заявка, потому что админ выпишет бумагу по тому чек-листу,
+        # который был проверен в момент запроса
         has_certificate = (
             self.certificates.active_for(user.id, course.id, platform) is not None
         )
@@ -186,8 +189,17 @@ class QuizzesService:
             # возвращает ту же попытку с сохранёнными ответами
             return self._attempt_out(active, quiz)
         self._check_unlocked(user, quiz, course, platform)
-        if self.certificates.active_for(user.id, course.id, platform) is not None:
-            raise CertificateIssuedError()
+        certificate = self.certificates.active_for(user.id, course.id, platform)
+        if certificate is not None:
+            # Заявка запирает тест наравне с документом: результат, поехавший
+            # после неё, попал бы под бумагу, которую админ уже выписывает.
+            # Текст выданного передан явно, хоть он и по умолчанию, — оба
+            # отказа должны читаться рядом
+            raise CertificateIssuedError(
+                "Заявка на сертификат отправлена — результаты теста изменить нельзя"
+                if certificate.issued_at is None
+                else "Сертификат уже выдан — результаты теста изменить нельзя"
+            )
         if not quiz.retakable and self.attempts.finished_for(user.id, quiz.id, platform):
             raise AttemptUsedError()
 

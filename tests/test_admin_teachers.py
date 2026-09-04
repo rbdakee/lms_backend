@@ -7,6 +7,7 @@ from tests.conftest import (
     login,
     login_admin,
     make_certificate,
+    make_certificate_request,
     make_course,
     make_enrollment,
     make_lesson,
@@ -226,6 +227,9 @@ def test_card_of_just_registered_teacher_is_empty(client, client2, sms):
         "last_name": "",
         "first_name": "",
         "middle_name": "",
+        # Не «ИИН такой», а метка «не заполнен»: она стоит у всех, кто вошёл
+        # до 04.09.2026, и у любого, кто ещё не прошёл онбординг
+        "iin": "000000000000",
         "phone": "+77071234567",
         "email": "",
         "school": "",
@@ -280,11 +284,14 @@ def test_card_shows_profile_and_four_tabs(client, sms):
     assert card["submissions"][0].pop("created_at")
     assert card["submissions"][0].pop("reviewed_at")
     assert card["certificates"][0].pop("issued_at")
+    assert card["certificates"][0].pop("requested_at")
     assert card == {
         "id": person.id,
         "last_name": "Нурланова",
         "first_name": "Айгуль",
         "middle_name": "Сериковна",
+        # ИИН показывается только админу — здесь и на странице «Сертификаты»
+        "iin": person.iin,
         "phone": person.phone,
         "email": "a.nurlanova@example.kz",
         "school": "КГУ «Школа-лицей №27»",
@@ -348,7 +355,11 @@ def test_card_shows_profile_and_four_tabs(client, sms):
         "certificates": [
             {
                 "id": certificate.id,
+                "status": "issued",
                 "number": "KZ-2026-XB7K2M",
+                # Номер академии пуст у документов до 04.09.2026 — админ
+                # проставит его на новой странице, когда дойдут руки
+                "registration_number": "",
                 "course_id": other.id,
                 "platform": "p1",
                 "course_title": "Информационная безопасность",
@@ -357,6 +368,45 @@ def test_card_shows_profile_and_four_tabs(client, sms):
             }
         ],
     }
+
+
+def test_card_shows_requests_next_to_issued_documents(client, sms):
+    """Вкладка «Сертификаты» — про человека целиком: заявка стоит рядом
+    с выданным документом и отозванным. Без заявки в списке админ не поймёт,
+    почему у человека закрыта пересдача.
+    """
+    login_admin(client, sms)
+    course = make_course(title="Критериальное оценивание", hours=36)
+    person = teacher(1)
+    issued = make_certificate(
+        person.id, course.id, course_title=course.title, hours=36
+    )
+    revoked = make_certificate(
+        person.id,
+        course.id,
+        number="KZ-2026-AAAAAA",
+        course_title=course.title,
+        hours=36,
+        revoked_at=now_utc(),
+    )
+    # Заявка на второй площадке: на первой действующая строка уже есть,
+    # и второй её не пускает uq_certificate_active
+    request = make_certificate_request(
+        person.id, course.id, platform="p2", course_title=course.title, hours=36
+    )
+
+    rows = client.get(f"/admin/teachers/{person.id}").json()["certificates"]
+
+    # Сортировка по дате запроса: она есть у всех трёх состояний, а даты
+    # выдачи у заявки нет вовсе
+    assert [row["id"] for row in rows] == [request.id, revoked.id, issued.id]
+    assert [row["status"] for row in rows] == ["requested", "revoked", "issued"]
+    waiting = rows[0]
+    assert waiting["number"] is None
+    assert waiting["issued_at"] is None
+    assert waiting["requested_at"] is not None
+    assert waiting["registration_number"] == ""
+    assert rows[1]["revoked_at"] is not None
 
 
 def test_card_keeps_revoked_access_with_its_progress(client, sms):

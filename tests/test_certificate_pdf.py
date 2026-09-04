@@ -1,9 +1,10 @@
 """GET /certificates/{id}/pdf — сертификат бумагой.
 
-Содержимое документа глазами тут никто не читает: текст в PDF лежит
-глифами подмножества шрифта, и обратно в строку он не разбирается. Поэтому
-проверяем то, что проверяемо: право на документ, валидность байтов, влияние
-картинок бренда и дату по Алматы — её видно сравнением двух сборок.
+Текст в PDF лежит глифами подмножества шрифта, поэтому напечатанное читается
+не глазами, а через карту `/ToUnicode` самого документа — как это делает любой
+просмотрщик; сборка карты и разбор строк живут внизу файла. Остальное
+проверяется тем же, чем и раньше: право на документ, валидность байтов,
+влияние картинок бренда и дата по Алматы — её видно сравнением двух сборок.
 
 Картинки берутся у площадки самого документа: бумагу открывает браузер прямой
 ссылкой, `Origin` в такой запрос не приходит, и площадки у запроса нет вовсе.
@@ -27,10 +28,12 @@ from app.application.certificate_pdf import CertificatePdfService
 from app.config import get_settings
 from app.domain import brands
 from app.domain.brands import CERT_SLOTS
+from app.domain.iin import IIN_PLACEHOLDER
 from tests.conftest import (
     login_admin,
     login_named,
     make_certificate,
+    make_certificate_request,
     make_course,
     make_user,
     user_id,
@@ -172,7 +175,7 @@ def test_missing_certificate_is_not_found(client, sms, storage):
     assert resp.json()["error"]["code"] == "not_found"
 
 
-# -- отозванный ------------------------------------------------------------
+# -- отозванный и заявка ---------------------------------------------------
 
 
 def test_revoked_is_not_printed_to_its_holder(client, sms, storage):
@@ -206,6 +209,20 @@ def test_revoked_is_found_and_refused_by_decision(client, sms, storage):
     certificate_id = make_certificate(stranger.id, course.id, revoked_at=now_utc()).id
 
     assert get_pdf(client, certificate_id).status_code == 403
+
+
+def test_a_request_is_not_printed(client, sms, storage):
+    """Заявка — ещё не документ: ни номера, ни даты выдачи у неё нет, печатать
+    нечего. Текст тот же, что у отозванного: разного «ещё нет» и «уже нет»
+    посторонний видеть не должен."""
+    login_named(client, sms)
+    course = make_course()
+    certificate_id = make_certificate_request(user_id(client), course.id).id
+
+    resp = get_pdf(client, certificate_id)
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "not_found"
 
 
 # -- сам документ ----------------------------------------------------------
@@ -319,6 +336,8 @@ def build(issued_at: datetime) -> bytes:
         "hours": 72,
         "issued_at": issued_at,
         "number": "KZ-2026-XB7K2M",
+        "registration_number": "АК-2026/117",
+        "iin": "909900000001",
         "lang": "ru",
     }
     return CREATION_DATE.sub(b"", render_certificate(document, {}))
@@ -358,6 +377,8 @@ def build_qr(verify_url, number="KZ-2026-XB7K2M", lang="ru") -> bytes:
         "hours": 72,
         "issued_at": datetime(2026, 8, 19, 6, 0, tzinfo=UTC),
         "number": number,
+        "registration_number": "АК-2026/117",
+        "iin": "909900000001",
         "lang": lang,
     }
     return CREATION_DATE.sub(b"", render_certificate(document, {}, verify_url))
@@ -401,7 +422,8 @@ def verify_url_for(
 ) -> str | None:
     """Ссылка так, как её собирает сценарий. Репозиторий для этого не нужен —
     только конфигурация, номер и площадка документа."""
-    service = CertificatePdfService(certificates=None, cfg=get_settings())
+    # Ни строк, ни людей: ссылке хватает конфигурации, номера и площадки
+    service = CertificatePdfService(certificates=None, users=None, cfg=get_settings())
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(get_settings(), "verify_base_url", base)
         patch.setattr(get_settings(), "platform_verify_urls", by_platform or {})
@@ -473,3 +495,112 @@ def test_kazakh_document_with_a_code_is_built():
 
     assert document.startswith(b"%PDF")
     assert qr_rects(document) > 50
+
+
+# -- что напечатано на бумаге ----------------------------------------------
+
+# Карта глифов документа: fpdf2 кладёт текст подмножеством шрифта, то есть
+# номерами глифов, а обратный перевод — в /ToUnicode рядом со шрифтом.
+BFCHAR = re.compile(rb"<([0-9A-Fa-f]{4})>\s*<([0-9A-Fa-f]+)>")
+
+# Escape-последовательности, которые ставит fpdf2 (util.escape_parens):
+# три знака самого синтаксиса строк и возврат каретки. Больше он ничего
+# не экранирует, и разбирать весь PDF ради этого незачем.
+UNESCAPE = {b"\\": b"\\", b"(": b"(", b")": b")", b"r": b"\r"}
+
+
+def _stream_at(pdf_bytes: bytes, at: int) -> bytes:
+    """Байты первого потока после указанного места."""
+    start = pdf_bytes.index(b"stream\n", at) + len(b"stream\n")
+    return pdf_bytes[start : pdf_bytes.index(b"\nendstream", start)]
+
+
+def _glyphs(pdf_bytes: bytes) -> dict[int, str]:
+    """Номер глифа — символ, по карте /ToUnicode самого документа.
+
+    Шрифт в документе один, поэтому карта тоже одна: искать её по имени
+    шрифта незачем.
+    """
+    at = pdf_bytes.index(b"/ToUnicode")
+    number = int(pdf_bytes[at + len(b"/ToUnicode") :].split()[0])
+    cmap = _stream_at(pdf_bytes, pdf_bytes.index(b"\n%d 0 obj\n" % number))
+    return {
+        int(code, 16): bytes.fromhex(value.decode()).decode("utf-16-be")
+        for code, value in BFCHAR.findall(cmap)
+    }
+
+
+def _strings(stream: bytes) -> list[bytes]:
+    """Строковые операнды потока страницы — то, что уходит в Tj."""
+    found, buffer, inside, at = [], bytearray(), False, 0
+    while at < len(stream):
+        char = stream[at : at + 1]
+        if inside and char == b"\\":
+            buffer += UNESCAPE.get(stream[at + 1 : at + 2], stream[at + 1 : at + 2])
+            at += 2
+            continue
+        if char == b"(":
+            inside, buffer = True, bytearray()
+        elif char == b")" and inside:
+            inside = False
+            found.append(bytes(buffer))
+        elif inside:
+            buffer += char
+        at += 1
+    return found
+
+
+def page_text(pdf_bytes: bytes) -> str:
+    """Текст листа строками, в порядке печати.
+
+    Так его читает и просмотрщик: двухбайтные номера глифов через карту
+    /ToUnicode. Собственного разбора PDF здесь ровно столько, сколько нужно
+    одностраничному документу с одним шрифтом.
+    """
+    glyphs = _glyphs(pdf_bytes)
+    stream = zlib.decompress(_stream_at(pdf_bytes, pdf_bytes.index(b"/Contents")))
+    return "\n".join(
+        "".join(
+            glyphs.get(int.from_bytes(raw[at : at + 2], "big"), "")
+            for at in range(0, len(raw) - 1, 2)
+        )
+        for raw in _strings(stream)
+    )
+
+
+def test_the_paper_carries_the_iin_and_the_registration_number(client, sms, storage):
+    """ИИН печатается на самом документе, и номер академии рядом с ним:
+    по ним человека вносят в её реестр (CERTIFICATES_BRIEF, 1 и 2).
+
+    ИИН берётся из живого профиля владельца — колонки под него у сертификата
+    нет, — поэтому он сверяется с тем, что отдаёт GET /me.
+    """
+    login_named(client, sms)
+    iin = client.get("/me").json()["iin"]
+    course = make_course()
+    certificate_id = make_certificate(
+        user_id(client), course.id, registration_number="АК-2026/117"
+    ).id
+
+    printed = page_text(get_pdf(client, certificate_id).content)
+
+    assert f"ИИН: {iin}" in printed
+    assert "Рег. номер: АК-2026/117" in printed
+    # Верхняя строка подвала осталась на месте: новая встала под ней
+    assert "Номер документа: KZ-2026-XB7K2M" in printed
+
+
+def test_the_empty_half_of_the_footer_is_not_printed(client, sms, storage):
+    """Номера академии нет у документов до 04.09.2026, а ИИН бывает
+    не заполнен: подпись без значения читается как потерянные данные,
+    а заглушка «не заполнен» — как настоящий номер из одних нулей."""
+    login_named(client, sms, iin=None)
+    course = make_course()
+    certificate_id = make_certificate(user_id(client), course.id).id
+
+    printed = page_text(get_pdf(client, certificate_id).content)
+
+    assert IIN_PLACEHOLDER not in printed
+    assert "ИИН" not in printed
+    assert "Рег. номер" not in printed
+    assert "Номер документа: KZ-2026-XB7K2M" in printed
