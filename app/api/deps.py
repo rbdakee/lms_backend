@@ -611,6 +611,7 @@ def get_tasks_admin_service(
 
 def get_teachers_admin_service(
     db: Annotated[DbSession, Depends(get_db)],
+    profiles: Annotated[UsersService, Depends(get_users_service)],
 ) -> TeachersAdminService:
     # Настоящие репозитории, не подменённые предпросмотром: карточка учителя
     # показывает его доступы и попытки как они есть, а не глазами режима
@@ -623,6 +624,9 @@ def get_teachers_admin_service(
         certificates=CertificateRepo(db),
         sessions=SessionRepo(db),
         notifications=NotificationRepo(db),
+        # Профиль учителя админ правит тем же сценарием, что человек правит
+        # свой: правила ИИН одни на оба эндпоинта
+        profiles=profiles,
     )
 
 

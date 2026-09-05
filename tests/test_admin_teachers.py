@@ -4,6 +4,7 @@ from app.adapters.db.base import get_engine
 from app.adapters.db.models import QuizAttempt, Session
 from app.adapters.db.repos import now_utc
 from tests.conftest import (
+    fake_iin,
     login,
     login_admin,
     make_certificate,
@@ -623,6 +624,128 @@ def test_phone_that_is_not_kazakh_is_422(client, sms):
     assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "validation_error"
     assert resp.json()["error"]["details"]["fields"][0]["field"] == "phone"
+
+
+# -- правка профиля ------------------------------------------------------
+
+
+def test_admin_fixes_the_profile_fields(client, sms):
+    """Опечатку в ФИО и в ИИН чинить больше некому: учитель свой ИИН только
+    видит, а в реестр академии строка уходит как есть."""
+    login_admin(client, sms)
+    person = teacher(1, last_name="Смагулва", first_name="Гулмира")
+    iin = fake_iin()
+
+    resp = client.patch(
+        f"/admin/teachers/{person.id}",
+        json={
+            "last_name": "Смагулова",
+            "first_name": "Гульмира",
+            "middle_name": "Токтарбековна",
+            "iin": iin,
+            "email": "gulmira@example.kz",
+            "school": "КГУ «Средняя школа №27»",
+            "position": "Учитель начальных классов",
+            "region": "Алматы",
+            "city": "Алматы",
+            "subject": "Начальные классы",
+            "experience": 14,
+        },
+    )
+    assert resp.status_code == 200
+    card = resp.json()
+    assert card["last_name"] == "Смагулова"
+    assert card["first_name"] == "Гульмира"
+    assert card["iin"] == iin
+    assert card["position"] == "Учитель начальных классов"
+    assert card["experience"] == 14
+    # Ответ — карточка целиком, а не одни правленые поля: экран перерисовывает
+    # её ответом
+    assert card["courses"] == []
+
+
+def test_spaces_are_trimmed_and_null_erases_a_string(client, sms):
+    """Правила те же, что у `PATCH /me`: `null` у строки — «стереть»."""
+    login_admin(client, sms)
+    person = teacher(1)
+
+    resp = client.patch(
+        f"/admin/teachers/{person.id}", json={"city": "  Астана  ", "school": None}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["city"] == "Астана"
+    assert resp.json()["school"] == ""
+
+
+def test_iin_that_is_not_twelve_digits_is_422(client, sms):
+    login_admin(client, sms)
+    person = teacher(1)
+
+    resp = client.patch(f"/admin/teachers/{person.id}", json={"iin": "90990000"})
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "validation_error"
+    assert resp.json()["error"]["details"]["fields"][0]["field"] == "iin"
+
+
+def test_iin_of_another_teacher_names_nobody(client, sms):
+    """Отказ не называет владельца номера: `details` пустые нарочно
+    (решение владельца 04.09.2026) — иначе перебором чужих ИИН находят
+    чужие аккаунты."""
+    login_admin(client, sms)
+    person = teacher(1, last_name="Смагулова")
+    taken = fake_iin()
+    other = teacher(2, iin=taken, last_name="Нурланова")
+
+    resp = client.patch(
+        f"/admin/teachers/{person.id}", json={"last_name": "Оспанова", "iin": taken}
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "iin_taken"
+    assert resp.json()["error"].get("details") in (None, {})
+    body = resp.text
+    assert str(other.id) not in body
+    assert other.phone not in body
+    assert "Нурланова" not in body
+    # Отказ по ИИН не оставляет наполовину применённую правку: фамилия
+    # из того же запроса не сохранилась
+    assert client.get(f"/admin/teachers/{person.id}").json()["last_name"] == "Смагулова"
+
+
+def test_own_iin_is_not_taken(client, sms):
+    """Свой же номер занятым не считается: админ сохранил карточку второй раз,
+    не тронув поле."""
+    login_admin(client, sms)
+    iin = fake_iin()
+    person = teacher(1, iin=iin)
+
+    resp = client.patch(f"/admin/teachers/{person.id}", json={"iin": iin, "city": "Тараз"})
+    assert resp.status_code == 200
+    assert resp.json()["iin"] == iin
+    assert resp.json()["city"] == "Тараз"
+
+
+def test_unknown_field_is_422(client, sms):
+    """`extra: forbid` — защита от опечаток: `lang`, `is_admin` и `photo_url`
+    админ с этой карточки не меняет."""
+    login_admin(client, sms)
+    person = teacher(1)
+
+    for field, value in (("lang", "kz"), ("is_admin", True), ("surname", "Оспанова")):
+        resp = client.patch(f"/admin/teachers/{person.id}", json={field: value})
+        assert resp.status_code == 422, field
+        assert resp.json()["error"]["code"] == "validation_error"
+
+
+def test_profile_patch_requires_admin(client, sms):
+    """Чужое ФИО и чужой ИИН правит только админ, с проверкой на сервере."""
+    person = teacher(1)
+    body = {"last_name": "Оспанова", "iin": fake_iin()}
+    assert client.patch(f"/admin/teachers/{person.id}", json=body).status_code == 401
+
+    login(client, sms)
+    resp = client.patch(f"/admin/teachers/{person.id}", json=body)
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "forbidden"
 
 
 # -- пересдача -----------------------------------------------------------

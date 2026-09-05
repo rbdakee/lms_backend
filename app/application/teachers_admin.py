@@ -8,6 +8,8 @@
 Отдельно от `UsersService` потому, что тот отвечает человеку на вопросы
 о себе самом. Здесь на человека смотрят снаружи: что у него с курсами,
 тестами, работами и документами — и что админ вправе с этим сделать.
+Правку профиля этот файл всё же берёт у него: правила ИИН и `null` обязаны
+быть одни на `PATCH /me` и на карточку админа, а не две расходящиеся копии.
 """
 
 from app.adapters.db.models import Certificate, Course, Enrollment, Quiz, QuizAttempt, User
@@ -22,6 +24,7 @@ from app.adapters.db.repos import (
     UserRepo,
     now_utc,
 )
+from app.application.users import UsersService
 from app.domain.errors import (
     AttemptInProgressError,
     CertificateIssuedError,
@@ -55,6 +58,11 @@ class TeachersAdminService:
         certificates: CertificateRepo,
         sessions: SessionRepo,
         notifications: NotificationRepo,
+        # Правка профиля — тот же сценарий, что у `PATCH /me`, и внедряется
+        # он так же, как чек-лист сертификата внедрён в отчёт админа: второй
+        # экземпляр правил `null`, обрезки и уникальности ИИН однажды разошёлся
+        # бы с первым, а ИИН уникален по решению владельца
+        profiles: UsersService,
     ):
         self.users = users
         self.teachers = teachers
@@ -64,6 +72,7 @@ class TeachersAdminService:
         self.certificates = certificates
         self.sessions = sessions
         self.notifications = notifications
+        self.profiles = profiles
 
     # -- GET /admin/teachers ---------------------------------------------
 
@@ -114,7 +123,21 @@ class TeachersAdminService:
     # -- PATCH /admin/teachers/{id} --------------------------------------
 
     def patch(self, admin: User, user_id: int, fields: dict) -> dict:
+        """Правка карточки: профиль, блокировка и номер — одним запросом.
+
+        Профиль идёт первым: его отказы (не тот ИИН, чужой ИИН) случаются
+        до того, как смена номера отзовёт человеку сессии. Наполовину
+        применённой правки не бывает и так — запрос это одна транзакция,
+        и исключение её откатывает, — но так порядок читается без оговорок.
+        """
         teacher = self._found(user_id)
+        # Всё, кроме двух собственных полей карточки, — профиль: правила
+        # для него живут в UsersService и здесь не повторяются
+        profile = {
+            name: value for name, value in fields.items() if name not in ("is_blocked", "phone")
+        }
+        if profile:
+            self.profiles.update_profile(teacher, profile)
         if fields.get("is_blocked") is not None:
             if fields["is_blocked"] and teacher.id == admin.id:
                 raise SelfBlockError()

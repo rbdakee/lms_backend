@@ -1942,6 +1942,22 @@ class AdminTeacherCardOut(BaseModel):
 
 
 class AdminTeacherPatchIn(BaseModel):
+    """Админ правит карточку учителя целиком: опечатку в ФИО или в ИИН чинить
+    больше некому — учитель свой ИИН только видит, а в реестр академии эти
+    строки уходят как есть.
+
+    Три поля `UserPatch` сюда нарочно не взяты:
+
+    - `lang` — личная настройка интерфейса человека, а не запись о нём: админ,
+      тронув её, молча переключил бы учителю язык кабинета;
+    - `is_admin` — права выдаются на своей странице настроек, а снятия прав
+      в продукте нет;
+    - `photo_url` — загрузки фото не существует.
+
+    Остальные поля повторяют `UserPatch` по типам и длинам: правит их тот же
+    сценарий, и ограничениям двух форм расходиться нельзя.
+    """
+
     model_config = {"extra": "forbid"}
 
     # Два действия карточки: «Заблокировать» и «Изменить номер телефона».
@@ -1949,6 +1965,20 @@ class AdminTeacherPatchIn(BaseModel):
     # сессии этого человека
     is_blocked: bool | None = None
     phone: str | None = Field(None, max_length=20)
+
+    first_name: str | None = Field(None, max_length=100)
+    last_name: str | None = Field(None, max_length=100)
+    middle_name: str | None = Field(None, max_length=100)
+    # Запас длины — на пробелы по краям: их снимет normalize_iin, а до неё
+    # присланное лучше пропустить внутрь, чем отбить по длине
+    iin: str | None = Field(None, max_length=20)
+    email: str | None = Field(None, max_length=320)
+    school: str | None = Field(None, max_length=300)
+    position: str | None = Field(None, max_length=200)
+    region: str | None = Field(None, max_length=100)
+    city: str | None = Field(None, max_length=100)
+    subject: str | None = Field(None, max_length=100)
+    experience: Experience | None = None
 
 
 class TeacherRetakeIn(BaseModel):
