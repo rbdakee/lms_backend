@@ -102,6 +102,11 @@ class SettingsService:
         подписаны галочки публикации в редакторе курса и чипы фильтра
         площадки в списках заявок, отзывов, вопросов и работ. Взять их
         больше неоткуда — из базы бренд ушёл.
+
+        Здесь же признак, есть ли в этой установке ассистент: пустой ключ
+        провайдера значит «страницы нет и кнопки „Ответить с помощью ИИ“
+        нет» (ASSISTANT_BRIEF, разделы 9 и 11). Настройкой он не правится —
+        это про деплой, а не про площадку, поэтому только на чтение.
         """
         telegram = self.telegram()
         tutorial = self.settings.get(TUTORIAL_KEY)
@@ -127,6 +132,7 @@ class SettingsService:
                 "notify_submissions": telegram["notify_submissions"],
                 "notify_certificates": telegram["notify_certificates"],
             },
+            "assistant": {"enabled": self.cfg.assistant_on},
         }
 
     # -- PATCH /admin/settings ----------------------------------------------

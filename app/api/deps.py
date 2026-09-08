@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import Depends, Request, Response
 from sqlalchemy.orm import Session as DbSession
 
+from app.adapters.ai.openai_chat import OpenAiChat
 from app.adapters.db.base import get_db
 from app.adapters.db.models import Session, User
 from app.adapters.db.preview import (
@@ -46,6 +47,9 @@ from app.adapters.telegram.bot import TelegramBot
 from app.adapters.telegram.log_telegram import LogTelegram
 from app.application.admin_notify import AdminNotifier
 from app.application.admins import AdminsService
+from app.application.assistant_chat import AssistantChatService
+from app.application.assistant_draft import DraftReplyService
+from app.application.assistant_memory import MemoryService
 from app.application.auth import AuthService, hash_token
 from app.application.categories import CategoriesService
 from app.application.certificate_pdf import CertificatePdfService
@@ -59,7 +63,7 @@ from app.application.lessons import LessonsService
 from app.application.lessons_admin import LessonsAdminService
 from app.application.notifications import NotificationsService
 from app.application.overview import OverviewService
-from app.application.ports import SmsPort, StoragePort, TelegramPort
+from app.application.ports import AiPort, SmsPort, StoragePort, TelegramPort
 from app.application.preview import Preview, PreviewService
 from app.application.preview_quiz import PreviewAttemptStore, SessionAttempts
 from app.application.questions import QuestionsService
@@ -77,7 +81,12 @@ from app.application.teachers_admin import TeachersAdminService
 from app.application.telegram_bind import TelegramBindService
 from app.application.users import UsersService
 from app.config import Settings, get_settings
-from app.domain.errors import BlockedError, ForbiddenError, UnauthorizedError
+from app.domain.errors import (
+    AssistantOffError,
+    BlockedError,
+    ForbiddenError,
+    UnauthorizedError,
+)
 from app.domain.platform import DEFAULT_PLATFORM
 
 # Имя куки сессии зависит от приложения: у кабинета учителя и у админки
@@ -124,6 +133,12 @@ _thread_limiter = SlidingWindowLimiter(get_settings().thread_messages_per_min, 6
 # Попытки предпросмотра живут в памяти процесса, значит хранилище одно на всё
 # приложение: заводить его на каждый запрос — значит не хранить ничего
 _preview_attempts = PreviewAttemptStore()
+# Ассистент стоит денег: потолок сообщений на админа в час. Счётчик тот же
+# и по той же причине один на всё приложение
+_assistant_limiter = SlidingWindowLimiter(get_settings().assistant_messages_per_hour, 3600)
+# Клиент провайдера держит своё соединение: заводить его на каждый запрос —
+# это новое TLS-рукопожатие на каждое сообщение админа
+_ai: AiPort | None = None
 
 
 def get_sms() -> SmsPort:
@@ -185,6 +200,60 @@ def get_storage() -> StoragePort:
 
 def get_playback_limiter() -> SlidingWindowLimiter:
     return _playback_limiter
+
+
+def require_assistant() -> None:
+    """Есть ли ассистент в этой установке.
+
+    Пустой ключ значит «страницы нет», а не «сервис не поднимается»
+    (ASSISTANT_BRIEF, раздел 9): остальное API работает как работало.
+    Ручки при этом остаются в схеме OpenAPI всегда — из неё фронт
+    генерирует типы, и на машине без ключа это не должно ломаться.
+    """
+    if not get_settings().assistant_on:
+        raise AssistantOffError()
+
+
+def get_ai() -> AiPort:
+    global _ai
+    if _ai is None:
+        _ai = OpenAiChat(get_settings())
+    return _ai
+
+
+def get_assistant_limiter() -> SlidingWindowLimiter:
+    return _assistant_limiter
+
+
+def get_memory_service(db: Annotated[DbSession, Depends(get_db)]) -> MemoryService:
+    return MemoryService(db)
+
+
+def get_draft_reply_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    ai: Annotated[AiPort, Depends(get_ai)],
+    limiter: Annotated[SlidingWindowLimiter, Depends(get_assistant_limiter)],
+) -> DraftReplyService:
+    # Лимитер тот же, что у чата: черновики и разговор тратят один и тот же
+    # месячный счёт, и считать их по отдельности значило бы не считать
+    return DraftReplyService(db, ai, limiter=limiter)
+
+
+def get_assistant_chat_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    ai: Annotated[AiPort, Depends(get_ai)],
+    memory: Annotated[MemoryService, Depends(get_memory_service)],
+    limiter: Annotated[SlidingWindowLimiter, Depends(get_assistant_limiter)],
+) -> AssistantChatService:
+    cfg = get_settings()
+    return AssistantChatService(
+        db,
+        ai,
+        memory=memory,
+        limiter=limiter,
+        max_tool_calls=cfg.assistant_max_tool_calls,
+        history_messages=cfg.assistant_history_messages,
+    )
 
 
 def get_verify_limiter() -> SlidingWindowLimiter:

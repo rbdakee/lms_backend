@@ -12,6 +12,8 @@ from app.api.schemas import (
     ThreadMessageIn,
     ThreadQuestionOut,
 )
+from app.api.schemas_assistant import AssistantDraftReplyOut
+from app.application.assistant_draft import DraftReplyService
 from app.application.questions import QuestionsService
 
 # Вопросы висят на уроке, а сводная очередь — экран админки.
@@ -76,3 +78,22 @@ def delete_thread_message(
 ) -> None:
     # И вопрос, и ответ: удаление корня уносит из выдачи весь тред
     svc.delete_message(admin, message_id)
+
+
+@admin_router.post(
+    "/thread_messages/{message_id}/draft_reply",
+    # Сначала «кто спрашивает», потом «есть ли ассистент»
+    dependencies=[Depends(deps.get_current_admin), Depends(deps.require_assistant)],
+)
+def draft_reply_to_question(
+    message_id: int,
+    admin: Annotated[User, Depends(deps.get_current_admin)],
+    svc: Annotated[DraftReplyService, Depends(deps.get_draft_reply_service)],
+) -> AssistantDraftReplyOut:
+    """Кнопка «Ответить с помощью ИИ» у вопроса под уроком.
+
+    Адресуется корень ветки — тот же путь, что у DELETE выше. Ничего
+    не меняет: текст встаёт в поле ответа, отправляет его админ обычной
+    кнопкой (ASSISTANT_BRIEF, раздел 11).
+    """
+    return AssistantDraftReplyOut(**svc.for_question(admin, message_id))

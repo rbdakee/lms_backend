@@ -10,6 +10,11 @@ os.environ["DATABASE_URL"] = os.environ.get(
 # поэтому обе половины гасятся здесь.
 os.environ["AUTH_BOOTSTRAP_PHONE"] = ""
 os.environ["AUTH_BOOTSTRAP_CODE"] = ""
+# Ассистент в тестах включён, а ключ подставной: настоящий клиент провайдера
+# подменяется фикстурой `ai`, и наружу не ходит никто. Без ключа ручки
+# ассистента отвечали бы `assistant_off` — это отдельная проверка, и она
+# гасит ключ сама.
+os.environ["OPENAI_API_KEY"] = "test-key-not-a-real-one"
 
 import itertools
 import threading
@@ -46,6 +51,8 @@ from app.adapters.db.models import (
     User,
 )
 from app.api.deps import (
+    get_ai,
+    get_assistant_limiter,
     get_playback_limiter,
     get_sms,
     get_storage,
@@ -53,8 +60,9 @@ from app.api.deps import (
     get_thread_limiter,
     get_verify_limiter,
 )
-from app.application.ports import NotificationCard
+from app.application.ports import AiReply, AiToolCall, NotificationCard
 from app.application.ratelimit import SlidingWindowLimiter
+from app.assistant.registry import ToolCtx
 from app.config import get_settings
 from app.domain.platform import DEFAULT_PLATFORM
 from app.main import app
@@ -224,6 +232,102 @@ def thread_limiter_clock():
     app.dependency_overrides[get_thread_limiter] = lambda: limiter
     yield clock
     app.dependency_overrides.pop(get_thread_limiter, None)
+
+
+class FakeAi:
+    """Подставной провайдер: отдаёт заранее разложенные ответы по очереди.
+
+    Живого хода в OpenAI в тестах нет и быть не должно — он стоит денег
+    и требует сети. Зато видно всё, чего не видно снаружи: что ушло
+    в системном промпте, какие инструменты предложены модели и в каком
+    виде вернулся результат вызова.
+    """
+
+    def __init__(self):
+        self.replies: list[AiReply] = []
+        # Каждый запрос целиком: system, переписка и список инструментов
+        self.calls: list[dict] = []
+
+    def says(self, text: str = "Готово", **kw) -> "FakeAi":
+        self.replies.append(AiReply(text=text, **kw))
+        return self
+
+    def wants(self, name: str, call_id: str = "call_1", **arguments) -> "FakeAi":
+        """Ход, в котором модель просит вызвать инструмент."""
+        self.replies.append(
+            AiReply(text="", tool_calls=(AiToolCall(id=call_id, name=name, arguments=arguments),))
+        )
+        return self
+
+    def complete(self, *, system, messages, tools=None) -> AiReply:
+        self.calls.append({"system": system, "messages": list(messages), "tools": tools})
+        if not self.replies:
+            # Реплик не разложили — значит тесту важен сам факт вызова
+            return AiReply(text="Готово", tokens_in=7, tokens_out=11)
+        return self.replies.pop(0)
+
+    @property
+    def system(self) -> str:
+        """Системный промпт последнего запроса."""
+        return self.calls[-1]["system"]
+
+    @property
+    def tool_names(self) -> list[str]:
+        return [item["function"]["name"] for item in self.calls[-1]["tools"] or []]
+
+
+@pytest.fixture
+def ai():
+    fake = FakeAi()
+    app.dependency_overrides[get_ai] = lambda: fake
+    yield fake
+    app.dependency_overrides.pop(get_ai, None)
+
+
+@pytest.fixture(autouse=True)
+def assistant_limiter_clock():
+    """Потолок сообщений ассистенту живёт в памяти процесса: без своего
+    на каждый тест счётчик течёт из одного теста в другой."""
+    clock = FakeClock()
+    limiter = SlidingWindowLimiter(get_settings().assistant_messages_per_hour, 3600, clock)
+    app.dependency_overrides[get_assistant_limiter] = lambda: limiter
+    yield clock
+    app.dependency_overrides.pop(get_assistant_limiter, None)
+
+
+@pytest.fixture
+def tool_ctx():
+    """Контекст вызова инструмента ассистента мимо HTTP.
+
+    Реестр не предполагает, что зовёт его наш собственный чат
+    (`ASSISTANT_BRIEF`, раздел 15): `ctx` собирается из админа и сессии базы,
+    и тесту он собирается так же.
+
+    Сессия закрывается фикстурой, а не тестом: оставленная открытой, она
+    держит транзакцию, и следующий тест насмерть виснет на TRUNCATE.
+    """
+    sessions: list[OrmSession] = []
+
+    def make(
+        admin_id: int,
+        thread_id: int | None = None,
+        grants: dict | None = None,
+        course_id: int | None = None,
+    ) -> ToolCtx:
+        db = OrmSession(get_engine())
+        sessions.append(db)
+        return ToolCtx(
+            db=db,
+            admin=db.get(User, admin_id),
+            now=datetime.now(UTC),
+            thread_id=thread_id,
+            course_id=course_id,
+            grants=dict(grants or {}),
+        )
+
+    yield make
+    for db in sessions:
+        db.close()
 
 
 @pytest.fixture

@@ -2252,6 +2252,16 @@ class AdminSettingsPlatformOut(BaseModel):
     tutorial_video_url: str | None
 
 
+class AdminSettingsAssistantOut(BaseModel):
+    """Есть ли в этой установке ассистент. Только на чтение: ключ провайдера
+    живёт в настройках сервиса, а не в базе — админка его не правит.
+
+    Пусто — страницы «Ассистент» нет и кнопки «Ответить с помощью ИИ» тоже
+    (ASSISTANT_BRIEF, разделы 9 и 11)."""
+
+    enabled: bool
+
+
 class AdminSettingsOut(BaseModel):
     """Настройки одним ответом: справочник площадок и привязка бота.
 
@@ -2261,6 +2271,7 @@ class AdminSettingsOut(BaseModel):
     # Порядок — как в PLATFORMS: p1, потом p2
     platforms: list[AdminSettingsPlatformOut]
     telegram: AdminSettingsTelegramOut
+    assistant: AdminSettingsAssistantOut
 
 
 class AdminSettingsTelegramIn(BaseModel):

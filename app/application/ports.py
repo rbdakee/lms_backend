@@ -7,7 +7,7 @@
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class SmsPort(Protocol):
@@ -71,4 +71,66 @@ class StoragePort(Protocol):
 
     def read(self, key: str) -> Iterator[bytes]:
         """Содержимое кусками — для локальной раздачи байтов."""
+        ...
+
+
+# -- ИИ: чат с вызовом инструментов --------------------------------------
+#
+# Порт описывает потребность ассистента, а не API OpenAI: «дай ответ на эту
+# переписку, вот что ты умеешь вызывать». Смена провайдера — новый адаптер
+# и строчка в конфигурации, а `loop.py` не меняется вовсе.
+
+
+@dataclass(frozen=True)
+class AiToolCall:
+    """Модель просит вызвать инструмент. `id` возвращается ей обратно вместе
+    с результатом — по нему она сопоставляет ответ с вопросом."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AiMessage:
+    """Одно сообщение переписки как её видит ассистент.
+
+    Роли три, и каждая заполняет своё: `user` — текст админа, `assistant` —
+    текст модели и её просьбы о вызовах, `tool` — результат одного вызова
+    с `tool_call_id` той просьбы.
+    """
+
+    role: str
+    content: str = ""
+    tool_calls: tuple[AiToolCall, ...] = ()
+    tool_call_id: str = ""
+
+
+@dataclass(frozen=True)
+class AiReply:
+    text: str
+    tool_calls: tuple[AiToolCall, ...] = ()
+    # Токены пишутся в ленту, чтобы счёт за месяц можно было объяснить
+    # (ASSISTANT_BRIEF, раздел 9).
+    tokens_in: int = 0
+    tokens_out: int = 0
+
+
+class AiPort(Protocol):
+    def complete(
+        self,
+        *,
+        system: str,
+        messages: list[AiMessage],
+        tools: list[dict] | None = None,
+    ) -> AiReply:
+        """Один запрос к модели.
+
+        `system` отдельным аргументом, а не первым сообщением: он собирается
+        заново на каждый ход и в историю чата не попадает. `tools` пустой —
+        это черновик ответа: один вызов, без инструментов и без цикла
+        (ASSISTANT_BRIEF, раздел 11).
+
+        Неудача — исключение: «ответа нет» обязано отличаться от «ответ пуст».
+        """
         ...

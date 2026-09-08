@@ -128,6 +128,10 @@ def test_admin_settings_are_the_platform_directory_and_the_bot(client, sms):
             "notify_submissions": True,
             "notify_certificates": True,
         },
+        # Есть ли в этой установке ассистент: ключ провайдера живёт
+        # в настройках сервиса, и админка его не правит — только читает
+        # (ASSISTANT_BRIEF, раздел 9)
+        "assistant": {"enabled": True},
     }
 
 
@@ -137,7 +141,7 @@ def test_admin_settings_have_no_brand_left(client, sms):
     login_admin(client, sms)
 
     body = client.get("/admin/settings").json()
-    assert set(body) == {"platforms", "telegram"}
+    assert set(body) == {"platforms", "telegram", "assistant"}
     assert set(body["platforms"][0]) == {
         "platform",
         "platform_name",
