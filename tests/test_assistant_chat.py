@@ -72,6 +72,19 @@ def turn_system(ai, index: int = -1) -> str:
     return turn_calls(ai)[index]["system"]
 
 
+def turn_state(ai, index: int = -1) -> str:
+    """Меняющаяся половина промпта — память и состояние.
+
+    Она уходит отдельным сообщением, чтобы системное осталось побайтно
+    одинаковым у всех чатов и реестр не выпадал из кэша провайдера
+    (`prompt.py`, шапка модуля).
+    """
+    for message in turn_calls(ai)[index]["messages"]:
+        if message.role == "system":
+            return message.content
+    raise AssertionError("Меняющаяся часть промпта в ход не ушла")
+
+
 def test_only_admin_gets_the_assistant(client, sms):
     """У учителя чата нет и не появляется (ASSISTANT_BRIEF, решение 10)."""
     login(client, sms)
@@ -148,7 +161,7 @@ def test_model_sees_the_tool_list(client, sms, ai):
     assert "course_delete" in names
 
 
-def test_system_prompt_has_the_date_and_both_platforms(client, sms, ai):
+def test_the_prompt_has_the_date_and_both_platforms(client, sms, ai):
     """Без сегодняшней даты модель считает «ждёт 4 дня» от даты обучения.
     Про две площадки она забывает первым делом — поэтому это первый абзац."""
     login_admin(client, sms)
@@ -156,13 +169,15 @@ def test_system_prompt_has_the_date_and_both_platforms(client, sms, ai):
     client.post(f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "привет"})
 
     system = turn_system(ai)
-    assert today(now_utc()) in system
     assert system.index("Две учебные площадки") < system.index("Что это за система")
-    assert "Допусков к персональным данным нет" in system
-    assert "Курс у чата не закреплён" in system
-    # Шестая часть: что из инструментов опасно, видно в промпте, а не только
+    # Четвёртая часть: что из инструментов опасно, видно в промпте, а не только
     # в описаниях
     assert "course_delete" in system.split("## Инструменты")[1]
+
+    state = turn_state(ai)
+    assert today(now_utc()) in state
+    assert "Допусков к персональным данным нет" in state
+    assert "Курс у чата не закреплён" in state
 
 
 def test_prompt_names_the_pinned_course_and_the_grants(client, sms, ai):
@@ -176,9 +191,9 @@ def test_prompt_names_the_pinned_course_and_the_grants(client, sms, ai):
     )
     client.post(f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "привет"})
 
-    system = turn_system(ai)
-    assert f"#{course.id} «Оценивание»" in system
-    assert f"учитель #{teacher.id} — чтение" in system
+    state = turn_state(ai)
+    assert f"#{course.id} «Оценивание»" in state
+    assert f"учитель #{teacher.id} — чтение" in state
 
 
 def test_prompt_carries_the_memory_index(client, sms, ai):
@@ -203,10 +218,10 @@ def test_prompt_carries_the_memory_index(client, sms, ai):
         db.commit()
 
     client.post(f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "привет"})
-    system = turn_system(ai)
-    assert "`pricing` — как считаем цену" in system
+    state = turn_state(ai)
+    assert "`pricing` — как считаем цену" in state
     # Тело в промпт не уходит: индекс всегда, содержимое по нужде
-    assert "тело" not in system.split("## Память")[1].split("## Состояние")[0]
+    assert "тело" not in state.split("## Память")[1].split("## Состояние")[0]
 
 
 def test_history_comes_back_to_the_model_next_turn(client, sms, ai):
@@ -221,9 +236,11 @@ def test_history_comes_back_to_the_model_next_turn(client, sms, ai):
     client.post(f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "а теперь?"})
 
     roles = [message.role for message in ai.calls[-1]["messages"]]
-    assert roles == ["user", "assistant", "tool", "assistant", "user"]
-    asked = ai.calls[-1]["messages"][1]
-    answered = ai.calls[-1]["messages"][2]
+    # Первым идёт меняющаяся часть промпта: она уходит сообщением, а не
+    # системным промптом (`prompt.py`, шапка модуля)
+    assert roles == ["system", "user", "assistant", "tool", "assistant", "user"]
+    asked = ai.calls[-1]["messages"][2]
+    answered = ai.calls[-1]["messages"][3]
     assert asked.tool_calls[0].name == "courses_list"
     assert answered.tool_call_id == asked.tool_calls[0].id
 

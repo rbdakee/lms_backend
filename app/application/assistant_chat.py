@@ -39,7 +39,7 @@ from app.application.ratelimit import SlidingWindowLimiter
 from app.assistant import registry
 from app.assistant.loop import AiStreamBrokenError, AssistantLoop, LoopResult, Step
 from app.assistant.masking import card_placeholder
-from app.assistant.prompt import build_system
+from app.assistant.prompt import build_state, build_system
 from app.assistant.registry import ToolCtx, ToolError
 from app.domain.errors import (
     AiFailedError,
@@ -192,7 +192,21 @@ class AssistantChatService:
         """
         thread = self._own(admin, thread_id)
         now = now_utc()
-        history = self._history(thread.id)
+        # Меняющееся идёт отдельным сообщением, а не в системном промпте:
+        # тот обязан быть побайтно одинаковым у всех чатов, иначе реестр
+        # выпадает из кэша провайдера (`prompt.py`, шапка модуля)
+        history = [
+            AiMessage(
+                role="system",
+                content=build_state(
+                    now=now,
+                    memory_index=self.memory.index(thread.course_id),
+                    course=self._course_out(thread.course_id),
+                    grants=self._grants(thread.id, now),
+                ),
+            ),
+            *self._history(thread.id),
+        ]
         self.db.add(AssistantMessage(thread_id=thread.id, role="user", content=text))
         history.append(AiMessage(role="user", content=text))
 
@@ -204,13 +218,7 @@ class AssistantChatService:
             course_id=thread.course_id,
             grants=registry.load_grants(self.db, thread.id, now),
         )
-        system = build_system(
-            now=now,
-            memory_index=self.memory.index(thread.course_id),
-            course=self._course_out(thread.course_id),
-            grants=self._grants(thread.id, now),
-            tools=registry.all_tools(),
-        )
+        system = build_system(tools=registry.all_tools())
         loop = AssistantLoop(self.ai, self.max_tool_calls)
         result: LoopResult | None = None
         try:

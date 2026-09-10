@@ -41,6 +41,15 @@ class OpenAiChat:
             # и трижды повторённый каждый — это тройной счёт за месяц
             max_retries=1,
         )
+        # Срок жизни кэша промпта. Системный промпт с реестром — это почти
+        # весь вход запроса, и он один и тот же во всех чатах: чем дольше
+        # живёт кэш, тем реже за него платят полную цену. Пустая настройка
+        # значит «не посылать параметр»: с Zero Data Retention он отобьётся.
+        self._cache = (
+            {"prompt_cache_retention": cfg.openai_cache_retention}
+            if cfg.openai_cache_retention
+            else {}
+        )
 
     def complete(
         self,
@@ -55,6 +64,7 @@ class OpenAiChat:
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=payload,
+                **self._cache,
                 **({"tools": tools, "tool_choice": "auto"} if tools else {}),
             )
         except Exception as exc:
@@ -90,6 +100,7 @@ class OpenAiChat:
                 messages=payload,
                 stream=True,
                 stream_options={"include_usage": True},
+                **self._cache,
                 **({"tools": tools, "tool_choice": "auto"} if tools else {}),
             )
         except Exception as exc:
@@ -116,8 +127,7 @@ class OpenAiChat:
 
             usage = getattr(chunk, "usage", None)
             if usage is not None:
-                tokens_in = getattr(usage, "prompt_tokens", 0) or 0
-                tokens_out = getattr(usage, "completion_tokens", 0) or 0
+                tokens_in, tokens_out = _usage(usage)
             if not chunk.choices:
                 # Служебное событие с расходом приходит без вариантов ответа
                 continue
@@ -192,13 +202,33 @@ def _reply(resp) -> AiReply:
                 arguments=_args(call.function.arguments),
             )
         )
-    usage = resp.usage
+    tokens_in, tokens_out = _usage(resp.usage)
     return AiReply(
         text=choice.content or "",
         tool_calls=tuple(calls),
-        tokens_in=getattr(usage, "prompt_tokens", 0) or 0,
-        tokens_out=getattr(usage, "completion_tokens", 0) or 0,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
     )
+
+
+def _usage(usage) -> tuple[int, int]:
+    """Расход запроса, попутно в лог — сколько входа взято из кэша промпта.
+
+    В базу `cached_tokens` не пишется: в ленте чата ему делать нечего,
+    а нужен он ровно затем, чтобы видеть, работает ли кэш, и объяснять
+    счёт за месяц. Поле необязательное — за шлюзом его может не быть вовсе,
+    и тогда ноль значит «не сказали», а не «кэш не сработал».
+    """
+    tokens_in = getattr(usage, "prompt_tokens", 0) or 0
+    tokens_out = getattr(usage, "completion_tokens", 0) or 0
+    details = getattr(usage, "prompt_tokens_details", None)
+    log.info(
+        "OpenAI: вход %d, из кэша %d, выход %d",
+        tokens_in,
+        getattr(details, "cached_tokens", 0) or 0,
+        tokens_out,
+    )
+    return tokens_in, tokens_out
 
 
 def _args(raw: str) -> dict:
