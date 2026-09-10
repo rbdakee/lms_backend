@@ -5,6 +5,8 @@
 в системном промпте и что легло в базу.
 """
 
+import json
+
 from app.adapters.db.repos import now_utc
 from app.application.assistant_chat import AssistantChatService
 from app.assistant.loop import Step
@@ -17,6 +19,57 @@ def new_thread(client, **body) -> dict:
     resp = client.post("/admin/assistant/threads", json=body)
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+def read(resp) -> list[tuple[str, dict]]:
+    """Ответ хода, разобранный на события `text/event-stream`.
+
+    Отказы, которые остались обычными (`429`, `422`, `404`), сюда не приходят:
+    они случаются до начала стрима, и тесты на них зовут `client.post` сами.
+    """
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    out: list[tuple[str, dict]] = []
+    for block in resp.text.strip().split("\n\n"):
+        if not block.strip():
+            continue
+        name = block.split("event: ", 1)[1].split("\n", 1)[0]
+        out.append((name, json.loads(block.split("data: ", 1)[1])))
+    return out
+
+
+def turn_of(resp) -> dict:
+    """То, что пришло событием `done`: лента целиком и расход хода."""
+    done = [data for name, data in read(resp) if name == "done"]
+    assert len(done) == 1, "ход обязан закончиться ровно одним `done`"
+    return done[0]
+
+
+def events(client, thread_id: int, text: str = "привет") -> list[tuple[str, dict]]:
+    return read(
+        client.post(f"/admin/assistant/threads/{thread_id}/messages", json={"text": text})
+    )
+
+
+def turn(client, thread_id: int, text: str = "привет") -> dict:
+    return turn_of(
+        client.post(f"/admin/assistant/threads/{thread_id}/messages", json={"text": text})
+    )
+
+
+def turn_calls(ai) -> list[dict]:
+    """Запросы **хода**, без запроса за заголовком чата.
+
+    Заголовок спрашивается отдельно и дёшево — без списка инструментов, —
+    поэтому ходы от него отличаются наличием `tools`. Без этого разделения
+    `ai.calls[-1]` показывал бы промпт заголовка, а не тот, с которым
+    работал ассистент.
+    """
+    return [call for call in ai.calls if call["tools"]]
+
+
+def turn_system(ai, index: int = -1) -> str:
+    return turn_calls(ai)[index]["system"]
 
 
 def test_only_admin_gets_the_assistant(client, sms):
@@ -59,16 +112,15 @@ def test_turn_writes_question_and_answer(client, sms, ai):
     thread = new_thread(client)
     ai.says("На обеих площадках 12 заявок: 9 на p1, 3 на p2.", tokens_in=800, tokens_out=40)
 
-    resp = client.post(
-        f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "сколько заявок?"}
-    )
-    assert resp.status_code == 200, resp.text
-    items = resp.json()["items"]
+    body = turn(client, thread["id"], "сколько заявок?")
+    items = body["items"]
     assert [row["role"] for row in items] == ["user", "assistant"]
     assert items[1]["content"].startswith("На обеих площадках")
     # Токены пишутся, чтобы счёт за месяц можно было объяснить
     assert (items[1]["tokens_in"], items[1]["tokens_out"]) == (800, 40)
-    assert resp.json()["stopped_at_cap"] is False
+    # И тем же числом уходят в `done` — экран показывает цену хода
+    assert (body["tokens_in"], body["tokens_out"]) == (800, 40)
+    assert body["stopped_at_cap"] is False
 
 
 def test_tool_call_lands_in_the_feed_as_a_card(client, sms, ai):
@@ -77,10 +129,7 @@ def test_tool_call_lands_in_the_feed_as_a_card(client, sms, ai):
     make_course(title="Критериальное оценивание")
     ai.wants("courses_list", status="open").says("Один курс, оба на p1.")
 
-    resp = client.post(
-        f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "какие курсы?"}
-    )
-    items = resp.json()["items"]
+    items = turn(client, thread["id"], "какие курсы?")["items"]
     assert [row["role"] for row in items] == ["user", "tool", "assistant"]
     card = items[1]
     assert card["tool_name"] == "courses_list"
@@ -94,8 +143,9 @@ def test_model_sees_the_tool_list(client, sms, ai):
     login_admin(client, sms)
     thread = new_thread(client)
     client.post(f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "привет"})
-    assert "courses_list" in ai.tool_names
-    assert "course_delete" in ai.tool_names
+    names = [item["function"]["name"] for item in turn_calls(ai)[-1]["tools"]]
+    assert "courses_list" in names
+    assert "course_delete" in names
 
 
 def test_system_prompt_has_the_date_and_both_platforms(client, sms, ai):
@@ -105,7 +155,7 @@ def test_system_prompt_has_the_date_and_both_platforms(client, sms, ai):
     thread = new_thread(client)
     client.post(f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "привет"})
 
-    system = ai.system
+    system = turn_system(ai)
     assert today(now_utc()) in system
     assert system.index("Две учебные площадки") < system.index("Что это за система")
     assert "Допусков к персональным данным нет" in system
@@ -126,7 +176,7 @@ def test_prompt_names_the_pinned_course_and_the_grants(client, sms, ai):
     )
     client.post(f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "привет"})
 
-    system = ai.system
+    system = turn_system(ai)
     assert f"#{course.id} «Оценивание»" in system
     assert f"учитель #{teacher.id} — чтение" in system
 
@@ -153,9 +203,10 @@ def test_prompt_carries_the_memory_index(client, sms, ai):
         db.commit()
 
     client.post(f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "привет"})
-    assert "`pricing` — как считаем цену" in ai.system
+    system = turn_system(ai)
+    assert "`pricing` — как считаем цену" in system
     # Тело в промпт не уходит: индекс всегда, содержимое по нужде
-    assert "тело" not in ai.system.split("## Память")[1].split("## Состояние")[0]
+    assert "тело" not in system.split("## Память")[1].split("## Состояние")[0]
 
 
 def test_history_comes_back_to_the_model_next_turn(client, sms, ai):
@@ -184,10 +235,7 @@ def test_dangerous_tool_in_a_turn_only_proposes(client, sms, ai):
     course = make_course(title="Черновик")
     ai.wants("course_delete", course_id=course.id).says("Готов удалить — подтвердите.")
 
-    resp = client.post(
-        f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "удали черновик"}
-    )
-    card = resp.json()["items"][1]
+    card = turn(client, thread["id"], "удали черновик")["items"][1]
     assert card["tool_result"]["status"] == "waiting_confirmation"
     assert card["proposal"]["status"] == "waiting"
     assert "Черновик" in card["proposal"]["what_happens"]
@@ -200,10 +248,7 @@ def test_proposal_card_becomes_a_result(client, sms, ai):
     thread = new_thread(client)
     course = make_course()
     ai.wants("course_delete", course_id=course.id).says("Подтвердите.")
-    resp = client.post(
-        f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "удали"}
-    )
-    proposal_id = resp.json()["items"][1]["proposal"]["id"]
+    proposal_id = turn(client, thread["id"], "удали")["items"][1]["proposal"]["id"]
 
     assert client.post(f"/admin/assistant/proposals/{proposal_id}/execute").status_code == 200
     feed = client.get(f"/admin/assistant/threads/{thread['id']}/messages").json()["items"]
@@ -215,10 +260,7 @@ def test_proposal_can_be_cancelled(client, sms, ai):
     thread = new_thread(client)
     course = make_course()
     ai.wants("course_delete", course_id=course.id).says("Подтвердите.")
-    resp = client.post(
-        f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "удали"}
-    )
-    proposal_id = resp.json()["items"][1]["proposal"]["id"]
+    proposal_id = turn(client, thread["id"], "удали")["items"][1]["proposal"]["id"]
 
     assert client.post(f"/admin/assistant/proposals/{proposal_id}/cancel").status_code == 200
     again = client.post(f"/admin/assistant/proposals/{proposal_id}/execute")
@@ -236,10 +278,7 @@ def test_tool_cap_stops_the_turn_honestly(client, sms, ai, monkeypatch):
         ai.wants("courses_list", call_id=f"call_{number}")
     ai.says("Успел посмотреть курсы, но не уложился в один ход.")
 
-    resp = client.post(
-        f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "разберись"}
-    )
-    body = resp.json()
+    body = turn(client, thread["id"], "разберись")
     assert body["stopped_at_cap"] is True
     assert sum(1 for row in body["items"] if row["role"] == "tool") == 2
     assert body["items"][-1]["content"].startswith("Успел посмотреть")
@@ -252,11 +291,8 @@ def test_failed_tool_does_not_break_the_turn(client, sms, ai):
     login_admin(client, sms)
     thread = new_thread(client)
     ai.wants("course_card", course_id=999).says("Курса 999 нет.")
-    resp = client.post(
-        f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "курс 999"}
-    )
-    assert resp.status_code == 200
-    assert resp.json()["items"][1]["tool_result"]["error"]["code"] == "not_found"
+    items = turn(client, thread["id"], "курс 999")["items"]
+    assert items[1]["tool_result"]["error"]["code"] == "not_found"
 
 
 def test_messages_are_limited_per_admin(client, sms, ai, monkeypatch):
@@ -288,13 +324,13 @@ def test_provider_failure_leaves_no_half_turn(client, sms, ai):
 
     app.dependency_overrides[get_ai] = Broken
     try:
-        resp = client.post(
-            f"/admin/assistant/threads/{thread['id']}/messages", json={"text": "привет"}
-        )
+        got = events(client, thread["id"])
     finally:
         app.dependency_overrides.pop(get_ai, None)
-    assert resp.status_code == 502
-    assert resp.json()["error"]["code"] == "ai_failed"
+    # Статус отдан до первого события, поэтому отказ приезжает событием,
+    # а не кодом 502 — и `done` в ходе не бывает вовсе
+    assert [name for name, _ in got] == ["error"]
+    assert got[0][1]["error"]["code"] == "ai_failed"
     assert client.get(f"/admin/assistant/threads/{thread['id']}/messages").json()["items"] == []
 
 
@@ -392,7 +428,7 @@ def test_new_personal_data_does_not_stay_in_the_chat(client, sms, ai):
         f"/admin/assistant/threads/{thread['id']}/messages",
         json={"text": "исправь школу и телефон"},
     )
-    card = next(row for row in resp.json()["items"] if row["role"] == "tool")
+    card = next(row for row in turn_of(resp)["items"] if row["role"] == "tool")
     assert card["tool_args"]["school"] == "скрыто"
     assert card["tool_args"]["phone"] == "скрыто"
     # Идентификатор человека — не персональные данные, он остаётся
@@ -430,6 +466,5 @@ def test_dates_from_tools_do_not_break_the_turn(client, sms, ai):
         f"/admin/assistant/threads/{new_thread(client)['id']}/messages",
         json={"text": "когда старт?"},
     )
-    assert resp.status_code == 200, resp.text
-    card = next(row for row in resp.json()["items"] if row["role"] == "tool")
+    card = next(row for row in turn_of(resp)["items"] if row["role"] == "tool")
     assert card["tool_result"]["starts_at"].startswith("2026-10-01")

@@ -22,6 +22,7 @@ import pytest
 from app.assistant import registry
 from app.assistant.registry import ToolError
 from tests.conftest import fake_iin, login_admin, make_course, make_user
+from tests.test_assistant_chat import turn_system
 
 # Номер вымышленный: настоящих в тестах не бывает. Отличается от админского
 # номера `conftest`, чтобы тесты с входом по HTTP заводили своего человека.
@@ -196,13 +197,14 @@ def test_course_record_reaches_only_the_chat_with_that_course(client, sms, ai, t
 
     mine = client.post("/admin/assistant/threads", json={"course_id": course.id}).json()
     client.post(f"/admin/assistant/threads/{mine['id']}/messages", json={"text": "привет"})
-    assert "`tone` — тон ответов по этому курсу" in ai.system
+    system = turn_system(ai)
+    assert "`tone` — тон ответов по этому курсу" in system
     # Тело в промпт не уходит: индекс всегда, содержимое по нужде
-    assert "вычиткой" not in ai.system.split("## Память")[1].split("## Состояние")[0]
+    assert "вычиткой" not in system.split("## Память")[1].split("## Состояние")[0]
 
     alien = client.post("/admin/assistant/threads", json={"course_id": other.id}).json()
     client.post(f"/admin/assistant/threads/{alien['id']}/messages", json={"text": "привет"})
-    assert "`tone`" not in ai.system
+    assert "`tone`" not in turn_system(ai)
 
 
 # -- персональные данные ---------------------------------------------------

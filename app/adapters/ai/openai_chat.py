@@ -12,10 +12,11 @@
 
 import json
 import logging
+from collections.abc import Iterator
 
 from openai import OpenAI
 
-from app.application.ports import AiMessage, AiReply, AiToolCall
+from app.application.ports import AiDelta, AiMessage, AiReply, AiToolCall
 from app.config import Settings
 
 log = logging.getLogger(__name__)
@@ -62,6 +63,90 @@ class OpenAiChat:
             log.error("OpenAI не ответил: %s: %s", type(exc).__name__, self._safe(str(exc)))
             raise AiUnavailableError("Модель не ответила") from None
         return _reply(resp)
+
+    def stream(
+        self,
+        *,
+        system: str,
+        messages: list[AiMessage],
+        tools: list[dict] | None = None,
+    ) -> Iterator[AiDelta]:
+        """Тот же запрос, но ответ приходит кусками.
+
+        Два места, где стрим не похож на обычный вызов, и оба стоили бы дорого,
+        если их пропустить:
+
+        1. **Расход надо просить.** Без `stream_options.include_usage`
+           провайдер в стриме не присылает расход вовсе — токены молча стали бы
+           нулями, и счёт за месяц объяснить было бы нечем (раздел 9).
+        2. **Аргументы вызова приходят по буквам.** У куска есть `index`, и
+           куски одного вызова надо склеивать по нему, а не по порядку прихода.
+        """
+        payload = [{"role": "system", "content": system}]
+        payload += [_wire(message) for message in messages]
+        try:
+            chunks = self.client.chat.completions.create(
+                model=self.model,
+                messages=payload,
+                stream=True,
+                stream_options={"include_usage": True},
+                **({"tools": tools, "tool_choice": "auto"} if tools else {}),
+            )
+        except Exception as exc:
+            log.error("OpenAI не ответил: %s: %s", type(exc).__name__, self._safe(str(exc)))
+            raise AiUnavailableError("Модель не ответила") from None
+
+        parts: list[str] = []
+        calls: dict[int, dict] = {}
+        tokens_in = tokens_out = 0
+        # `next` вручную, а не `for`: обычный цикл пришлось бы завернуть
+        # в `except Exception`, и тогда исключение, брошенное потребителем
+        # в точку `yield`, тоже превратилось бы в «модель не ответила»
+        source = iter(chunks)
+        while True:
+            try:
+                chunk = next(source)
+            except StopIteration:
+                break
+            except Exception as exc:
+                log.error(
+                    "OpenAI оборвал ответ: %s: %s", type(exc).__name__, self._safe(str(exc))
+                )
+                raise AiUnavailableError("Модель не ответила") from None
+
+            usage = getattr(chunk, "usage", None)
+            if usage is not None:
+                tokens_in = getattr(usage, "prompt_tokens", 0) or 0
+                tokens_out = getattr(usage, "completion_tokens", 0) or 0
+            if not chunk.choices:
+                # Служебное событие с расходом приходит без вариантов ответа
+                continue
+            delta = chunk.choices[0].delta
+            for call in delta.tool_calls or []:
+                slot = calls.setdefault(call.index, {"id": "", "name": "", "args": ""})
+                if call.id:
+                    slot["id"] = call.id
+                if call.function is not None:
+                    if call.function.name:
+                        slot["name"] = call.function.name
+                    if call.function.arguments:
+                        slot["args"] += call.function.arguments
+            if delta.content:
+                parts.append(delta.content)
+                yield AiDelta(text=delta.content)
+
+        yield AiDelta(
+            reply=AiReply(
+                text="".join(parts),
+                tool_calls=tuple(
+                    AiToolCall(id=slot["id"], name=slot["name"], arguments=_args(slot["args"]))
+                    for _, slot in sorted(calls.items())
+                    if slot["name"]
+                ),
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+            )
+        )
 
     def _safe(self, text: str) -> str:
         return text.replace(self._key, "***") if self._key else text

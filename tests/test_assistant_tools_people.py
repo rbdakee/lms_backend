@@ -33,6 +33,7 @@ from tests.conftest import (
     make_task,
     make_user,
 )
+from tests.test_assistant_chat import turn_of
 
 # Вымышленные номер и фамилия: их ищут в тексте ответа инструментов, и найти
 # их там нельзя ни в одном списке.
@@ -217,8 +218,7 @@ def test_card_result_does_not_land_in_the_feed(client, sms, ai):
         f"/admin/assistant/threads/{thread}/messages", json={"text": "открой карточку"}
     )
 
-    assert resp.status_code == 200, resp.text
-    card = resp.json()["items"][1]
+    card = turn_of(resp)["items"][1]
     assert card["tool_name"] == "teacher_card"
     assert card["tool_result"]["hidden"] == "pd_not_stored"
     assert f"учитель #{person.id}" in card["tool_result"]["note"]
@@ -541,8 +541,9 @@ def test_queue_lands_in_the_feed_whole(client, sms, ai):
         f"/admin/assistant/threads/{thread}/messages", json={"text": "сколько заявок?"}
     )
 
-    assert resp.status_code == 200, resp.text
-    card = resp.json()["items"][1]["tool_result"]
+    # `resp.text` — весь стрим целиком, а значит проверка «фамилии нет»
+    # покрывает и куски ответа, и карточки вызовов, а не одну ленту
+    card = turn_of(resp)["items"][1]["tool_result"]
     assert card["total"] == 1
     assert card["by_platform"] == {"p1": 1, "p2": 0}
     assert card["items"][0]["teacher"]["ref"] == f"Учитель #{person.id}"

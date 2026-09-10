@@ -6,12 +6,16 @@
 **честно**: модель получает отказ «потолок исчерпан» и последним запросом,
 уже без инструментов, говорит админу, где встала.
 
-Клиент провайдера сюда не попадает вовсе — только порт `AiPort`. Ответ пока
-отдаётся целиком; стрим включает сессия B.
+Клиент провайдера сюда не попадает вовсе — только порт `AiPort`.
+
+Ход отдаётся **событиями** (`run_stream`), а не готовым результатом: карточка
+вызова обязана появиться в момент вызова, иначе на длинной задаче экран молчит
+полминуты (`ASSISTANT_BRIEF`, раздел 13, фаза B3).
 """
 
 import json
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from app.application.ports import AiMessage, AiPort, AiToolCall
@@ -20,6 +24,11 @@ from app.assistant.registry import ToolCtx, ToolError
 from app.domain.errors import AppError
 
 log = logging.getLogger(__name__)
+
+
+class AiStreamBrokenError(Exception):
+    """Стрим оборвался, не дойдя до ответа целиком. Ход при этом не состоялся:
+    наверх это уходит тем же `ai_failed`, что и молчание провайдера."""
 
 CAP_MESSAGE = (
     "Потолок вызовов инструментов за один ход исчерпан. Остановись: скажи"
@@ -49,23 +58,47 @@ class LoopResult:
     stopped_at_cap: bool = False
 
 
+@dataclass
+class LoopEvent:
+    """Что видно снаружи по ходу дела.
+
+    Ровно одно из трёх заполнено: `delta` — кусок текста по мере генерации,
+    `step` — только что отработавший вызов, `result` — ход целиком, последним
+    событием.
+    """
+
+    delta: str = ""
+    step: Step | None = None
+    result: LoopResult | None = None
+
+
 class AssistantLoop:
     def __init__(self, ai: AiPort, max_tool_calls: int):
         self.ai = ai
         self.max_tool_calls = max_tool_calls
 
-    def run(self, *, system: str, history: list[AiMessage], ctx: ToolCtx) -> LoopResult:
+    def run_stream(
+        self, *, system: str, history: list[AiMessage], ctx: ToolCtx
+    ) -> Iterator[LoopEvent]:
+        """Ход событиями: куски текста, отработавшие вызовы и результат.
+
+        Текст, сказанный перед вызовом инструмента, в ленту не ложится —
+        в ней остаётся только последний ответ. Поэтому событие `step` для
+        экрана значит ещё и «то, что я успел показать, было присказкой»:
+        собранный кусками черновик там сбрасывается.
+        """
         tools = registry.openai_tools()
         messages = list(history)
         out = LoopResult(text="")
         used = 0
         while True:
-            reply = self.ai.complete(system=system, messages=messages, tools=tools)
+            reply = yield from self._ask(system=system, messages=messages, tools=tools)
             out.tokens_in += reply.tokens_in
             out.tokens_out += reply.tokens_out
             if not reply.tool_calls:
                 out.text = reply.text
-                return out
+                yield LoopEvent(result=out)
+                return
             messages.append(
                 AiMessage(
                     role="assistant", content=reply.text, tool_calls=tuple(reply.tool_calls)
@@ -79,18 +112,43 @@ class AssistantLoop:
                 used += 1
                 step = self._one(call, ctx)
                 out.steps.append(step)
+                # Карточка уходит на экран сразу, а не после всего ответа
+                yield LoopEvent(step=step)
                 messages.append(_tool_message(call, step.result))
             if out.stopped_at_cap:
                 # Последний запрос без инструментов: модель обязана
                 # закончить словами, а не новой попыткой вызвать
-                final = self.ai.complete(
+                final = yield from self._ask(
                     system=system,
                     messages=[*messages, AiMessage(role="user", content=CAP_MESSAGE)],
+                    tools=None,
                 )
                 out.tokens_in += final.tokens_in
                 out.tokens_out += final.tokens_out
                 out.text = final.text
-                return out
+                yield LoopEvent(result=out)
+                return
+
+    def _ask(self, *, system: str, messages: list[AiMessage], tools: list[dict] | None):
+        """Один запрос к модели: куски наружу, готовый ответ — вызывающему.
+
+        Провайдер без стрима (подставной в тестах) — обычный `complete`:
+        цикл от этого не меняется, просто кусков не будет ни одного.
+        """
+        stream = getattr(self.ai, "stream", None)
+        if stream is None:
+            return self.ai.complete(system=system, messages=messages, tools=tools)
+        reply = None
+        for chunk in stream(system=system, messages=messages, tools=tools):
+            if chunk.reply is not None:
+                reply = chunk.reply
+            elif chunk.text:
+                yield LoopEvent(delta=chunk.text)
+        if reply is None:
+            # Стрим кончился, а ответа целиком не пришло: считать это удачным
+            # ходом нельзя — ход не был
+            raise AiStreamBrokenError("Модель не ответила")
+        return reply
 
     def _one(self, call: AiToolCall, ctx: ToolCtx) -> Step:
         """Один вызов вместе со всеми его бедами.

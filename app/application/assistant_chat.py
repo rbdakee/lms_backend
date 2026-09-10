@@ -5,8 +5,9 @@
 
 Ход устроен так: сохраняем сообщение админа, собираем системный промпт
 заново, отдаём модели хвост истории и список инструментов, крутим цикл
-до текстового ответа, складываем всё в ленту. Ответ пока отдаётся целиком —
-стрим включает сессия B.
+до текстового ответа, складываем всё в ленту. Наружу ход идёт **событиями**
+(`say_stream`): куски текста по мере генерации и карточка вызова в момент
+вызова.
 
 **Персданные в ленту не ложатся даже с допуском.** Инструмент, помеченный
 `pd=True`, отдаёт модели настоящую карточку, а в базу вместо неё пишется
@@ -17,6 +18,7 @@
 
 import json
 import logging
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session as DbSession
@@ -35,7 +37,7 @@ from app.application.assistant_memory import MemoryService
 from app.application.ports import AiMessage, AiPort, AiToolCall
 from app.application.ratelimit import SlidingWindowLimiter
 from app.assistant import registry
-from app.assistant.loop import AssistantLoop, Step
+from app.assistant.loop import AiStreamBrokenError, AssistantLoop, LoopResult, Step
 from app.assistant.masking import card_placeholder
 from app.assistant.prompt import build_system
 from app.assistant.registry import ToolCtx, ToolError
@@ -53,10 +55,23 @@ log = logging.getLogger(__name__)
 MESSAGE_MAX = 4000
 TITLE_MAX = 120
 
-# Пока заголовок не написан, список чатов подписывается началом первого
-# сообщения: пустая строка в списке не даёт узнать чат вовсе. Настоящий
-# заголовок ассистент напишет сам — это работа сессии B (раздел 13).
+# Запасной заголовок — начало первого сообщения: пустая строка в списке
+# не даёт узнать чат вовсе. Он же остаётся, если модель за заголовком
+# не дошла: чат без подписи хуже чата с грубой подписью.
 TITLE_FALLBACK = 60
+
+# Заголовок ассистент пишет сам после первого ответа (ASSISTANT_BRIEF,
+# раздел 8). Отдельным дешёвым запросом, а не тем же ходом: системный промпт
+# хода — это описания 68 инструментов и двадцать шесть тысяч токенов, и
+# спрашивать в нём про заголовок значило бы платить за них второй раз.
+TITLE_PROMPT = (
+    "Ты подписываешь чат администратора с ассистентом. Придумай заголовок"
+    " из двух-четырёх слов по сути разговора: по нему чат находят в списке."
+    " Ответь одним заголовком без кавычек, без точки и без пояснений."
+    " Персональных данных в заголовок не переноси: ни имён, ни телефонов."
+)
+# Столько текста хватает, чтобы понять, о чём разговор, и не платить за хвост
+TITLE_SOURCE_MAX = 400
 
 
 class AssistantChatService:
@@ -136,14 +151,15 @@ class AssistantChatService:
 
     # -- ход ----------------------------------------------------------------
 
-    def say(self, admin: User, thread_id: int, text: str) -> dict:
-        """Сообщение админа и ответ ассистента одним ходом.
+    def check_say(self, admin: User, thread_id: int, text: str) -> str:
+        """Проверки, которые обязаны стать обычным HTTP-отказом.
 
-        Ничего не коммитится до конца: провайдер не ответил — ход не был,
-        и в ленте не остаётся ни оборванного вопроса, ни половины вызовов.
-        Текст у админа в поле, он нажмёт ещё раз.
+        Стоят до стрима нарочно: как только ответ начал течь, статус уже
+        отдан, и отказ пришлось бы сообщать событием внутри `200`. Отказ
+        по потолку обращений админ должен видеть кодом `429` с числом
+        секунд, а не строкой в теле.
         """
-        thread = self._own(admin, thread_id)
+        self._own(admin, thread_id)
         text = text.strip()
         if not text:
             raise FieldError("text", "Введите сообщение")
@@ -155,7 +171,26 @@ class AssistantChatService:
                 "Слишком много сообщений ассистенту — подождите немного",
                 retry_after_sec=wait,
             )
+        return text
 
+    def say_stream(self, admin: User, thread_id: int, text: str) -> Iterator[dict]:
+        """Ход событиями: куски ответа, карточки вызовов и лента в конце.
+
+        Событий четыре вида, и на экране у каждого своё место:
+
+        - `delta` — кусок текста по мере генерации;
+        - `tool` — карточка вызова **в момент вызова**, а не после всего
+          ответа: иначе на длинной задаче экран молчит полминуты;
+        - `done` — лента целиком и расход токенов за ход;
+        - `error` — провайдер не ответил.
+
+        Ничего не коммитится до конца: провайдер замолчал — **хода не было**,
+        и в ленте не остаётся ни оборванного вопроса, ни половины вызовов.
+        Текст у админа в поле, он нажмёт ещё раз.
+
+        Проверки входа сюда не входят — они в `check_say`, до начала стрима.
+        """
+        thread = self._own(admin, thread_id)
         now = now_utc()
         history = self._history(thread.id)
         self.db.add(AssistantMessage(thread_id=thread.id, role="user", content=text))
@@ -177,10 +212,34 @@ class AssistantChatService:
             tools=registry.all_tools(),
         )
         loop = AssistantLoop(self.ai, self.max_tool_calls)
+        result: LoopResult | None = None
         try:
-            result = loop.run(system=system, history=history, ctx=ctx)
-        except AiUnavailableError:
-            raise AiFailedError() from None
+            for event in loop.run_stream(system=system, history=history, ctx=ctx):
+                if event.result is not None:
+                    result = event.result
+                elif event.step is not None:
+                    yield {
+                        "event": "tool",
+                        "data": {
+                            "tool_name": event.step.name,
+                            "tool_args": registry.json_safe(_stored_args(event.step)),
+                            "tool_result": registry.json_safe(
+                                self._stored_result(event.step, now)
+                            ),
+                        },
+                    }
+                elif event.delta:
+                    yield {"event": "delta", "data": {"text": event.delta}}
+        except (AiUnavailableError, AiStreamBrokenError):
+            # Ход не состоялся: откатываем сообщение админа вместе со всем
+            # остальным. Статус уже отдан, поэтому отказ уходит событием
+            self.db.rollback()
+            yield {
+                "event": "error",
+                "data": {"error": {"code": "ai_failed", "message": AiFailedError().message}},
+            }
+            return
+        assert result is not None
 
         for step in result.steps:
             self.db.add(
@@ -204,14 +263,50 @@ class AssistantChatService:
             )
         )
         if not thread.title:
-            thread.title = text[:TITLE_FALLBACK]
+            thread.title = self._title(text, result.text)
         thread.updated_at = now
         self.db.flush()
-        return {
-            "thread": self._thread_out(thread),
-            "messages": [self._message_out(row) for row in self._rows(thread.id)],
-            "stopped_at_cap": result.stopped_at_cap,
+        yield {
+            "event": "done",
+            "data": {
+                "thread": self._thread_out(thread),
+                "items": [self._message_out(row) for row in self._rows(thread.id)],
+                "stopped_at_cap": result.stopped_at_cap,
+                # Расход хода — тот же, что лёг в последнее сообщение ленты.
+                # Отдельным полем, чтобы экран показал его, не пересобирая
+                # ленту (ASSISTANT_BRIEF, раздел 9)
+                "tokens_in": result.tokens_in,
+                "tokens_out": result.tokens_out,
+            },
         }
+
+    def _title(self, question: str, answer: str) -> str:
+        """Как ассистент подписывает чат после первого ответа.
+
+        Неудача здесь ходу не мешает: заголовок — украшение списка, а не часть
+        разговора. Модель промолчала или ответила простынёй — берётся начало
+        вопроса админа, как было до этого.
+        """
+        try:
+            reply = self.ai.complete(
+                system=TITLE_PROMPT,
+                messages=[
+                    AiMessage(role="user", content=question[:TITLE_SOURCE_MAX]),
+                    AiMessage(role="assistant", content=answer[:TITLE_SOURCE_MAX]),
+                ],
+            )
+        except AiUnavailableError:
+            # Провайдер молчит — ход уже состоялся, и терять его из-за подписи
+            # нельзя. Текст исключения в лог не пишем: в нём бывает переписка
+            log.warning("Заголовок чата не написан — остаётся начало вопроса")
+            return question[:TITLE_FALLBACK]
+        except Exception:
+            # А это уже наша ошибка: ход всё равно сохраняем, но в лог она
+            # обязана попасть, иначе заголовки молча перестанут писаться
+            log.exception("Заголовок чата не написан")
+            return question[:TITLE_FALLBACK]
+        title = " ".join(reply.text.split()).strip("«»\"'.")
+        return title[:TITLE_MAX] if title else question[:TITLE_FALLBACK]
 
     @staticmethod
     def _stored_result(step: Step, now: datetime) -> dict:
