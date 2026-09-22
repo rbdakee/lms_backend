@@ -1,0 +1,84 @@
+id = "math_domino"
+title = "Математическое домино"
+family = "matching"
+status = "draft"
+
+summary = """
+У каждой кости слева пример, справа число; игроки берут по 5–7 костей \
+и выкладывают цепочку, приставляя число к равному ему примеру («3+4» к «7»). \
+Нет хода — берёшь кость из «базара»."""
+scoring = "Побеждает первый выложивший все кости; остальные получают штраф — число оставшихся костей."
+
+subjects = ["any"]
+content_shapes = ["pairs"]
+math_topics = ["arithmetic", "multiplication_table", "fractions", "measurement"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["active", "calm"]
+level_shift = """
+В паре без счёта времени и без штрафов: двое вместе выкладывают всю цепочку \
+до замыкания. Тихо и за партой — это уже calm."""
+lesson_phases = ["middle"]
+duration_min = 10
+duration_max = 15
+grouping = ["pairs", "small_groups"]
+print_unit = "per_group"
+group_size_min = 2
+group_size_max = 4
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "voiced"
+competition = "individual"
+teacher_role = "observer"
+
+self_check = "peer_check"
+invariants = [
+  "Набор замыкается в одно кольцо: ответ примера каждой кости стоит числом ровно на одной другой кости.",
+  "Ни у одной кости пример и число на ней самой не равны.",
+  "Никакие два примера набора не дают один и тот же ответ.",
+  "На advanced «пример — пример» обе половины приставляемых костей равны по значению.",
+]
+model_generates = [
+  "Замкнутую цепочку костей под тему урока.",
+  "Правила на полстраницы.",
+  "Название игры.",
+]
+pitfalls = [
+  "Два примера с одним ответом ломают цепочку: ставить можно в два места, и игра заходит в тупик.",
+  "Кость, где пример равен своему же числу, — пустышка, её некуда приставить.",
+  "Меньше 20 костей на 4 игроков — «базар» пуст с первого круга.",
+]
+in_class_differentiation = "Столам — наборы разной сложности с одинаковой рамкой кости: снаружи одно домино."
+combines_with = ["memory_pairs", "station_quest", "relay_ladder"]
+station_ready = true
+lang_sensitive = false
+
+props = ["envelopes"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "high"
+replayability = "replayable"
+
+source = "Картотека L5, 22.09.2026, раздел 3.2"
+export_shape = "matching"
+
+[difficulty_scaling]
+basic = "Половины «число — точки», числа до 10."
+standard = "Половины «пример — ответ»."
+advanced = "Половины «пример — пример» (5×4 | 8+12), доли и единицы (1/2 = 2/4, 100 см = 1 м)."
+
+[[print_items]]
+name = "Кости домино"
+per = "per_group"
+count = "20–28"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Правила на полстраницы"
+per = "per_group"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false

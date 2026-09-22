@@ -1,0 +1,82 @@
+id = "cut_picture"
+title = "Разрезная картинка по порядку ответов"
+family = "reveal"
+status = "draft"
+
+summary = """
+Кусочки картинки помечены не номерами, а примерами; решив пример, пара \
+узнаёт номер кусочка и кладёт его на это место в таблице-подложке. Собрано \
+верно — картинка или слово целиком; пары работают наперегонки, молча."""
+scoring = "Первая пара с верно собранной картинкой — жетон; остальные доканчивают и сверяются с образцом."
+
+subjects = ["any"]
+content_shapes = ["short_answer", "ordering"]
+math_topics = ["counting", "arithmetic", "mental_math"]
+grade_min = 1
+grade_max = 2
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["middle", "start"]
+duration_min = 5
+duration_max = 12
+grouping = ["pairs"]
+print_unit = "per_pair"
+group_size_min = 2
+group_size_max = 2
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "quiet"
+competition = "team"
+teacher_role = "observer"
+
+self_check = "self_revealing"
+invariants = [
+  "Ответы примеров на кусках — ровно номера мест подложки, каждый по одному разу.",
+  "Каждое место подложки получает ровно один кусок.",
+  "Куски-обманки на advanced дают ответы, которых нет среди номеров мест.",
+  "Картинка без примеров не собирается однозначно по контуру: куски одинаковые прямоугольники сетки.",
+]
+model_generates = [
+  "Что изображено на картинке или какое слово собирается — под тему урока.",
+  "Примеры для каждого куска и номера мест на подложке.",
+  "Куски-обманки для advanced.",
+]
+pitfalls = [
+  "Картинка с яркими деталями собирается по рисунку, без счёта: куски режутся сеткой, а рисунок — крупный и однородный.",
+  "Куски, выпавшие из конверта, теряются к следующему уроку — на обороте каждого кусок помечен знаком набора.",
+  "Для старших классов механика — только пятиминутная разминка: дольше она скучна.",
+]
+in_class_differentiation = "Та же картинка — два набора кусков: примеры в пределах 10 и в пределах 20; подложка общая."
+combines_with = ["story_journey", "station_quest", "memory_pairs"]
+station_ready = true
+lang_sensitive = false
+
+props = ["envelopes"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Картотека L5, 22.09.2026, раздел 2.7"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "6 кусков, счёт до 10, номера по порядку."
+standard = "12 кусков, счёт до 100."
+advanced = "Номера мест не по порядку и два-три куска-обманки, которые никуда не встают."
+
+[[print_items]]
+name = "Картинка с примерами и сеткой реза"
+per = "per_pair"
+count = "1"
+layout = "a4_sheet"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Таблица-подложка с номерами мест"
+per = "per_pair"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

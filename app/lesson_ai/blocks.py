@@ -25,7 +25,7 @@ from app.domain.lesson_ai import (
     objective_codes_in,
     strip_objective_codes,
 )
-from app.lesson_ai.context import LessonBrief, describe, prepare
+from app.lesson_ai.context import LessonBrief, describe, prepare, strip_codes_deep
 from app.lesson_ai.generate import KindSpec
 from app.lesson_ai.kinds import SPECS
 from app.lesson_ai.schemas import strict_schema
@@ -62,7 +62,10 @@ class BlockRewriter:
                 self._schemas[spec.kind, name] = strict_schema(model)
 
     def is_server_block(self, kind: str, block: str) -> bool:
-        return block in self.specs[kind].server_blocks
+        # Вид без схемы модели (ключи с ответами) собирает сервер целиком:
+        # правке и перегенерации у него не подлежит ни один блок
+        spec = self.specs.get(kind)
+        return spec is None or block in spec.server_blocks
 
     def validate(self, kind: str, block: str, value) -> object:
         """Ручная правка — по той же схеме, что ответ модели: пустой блок
@@ -73,8 +76,10 @@ class BlockRewriter:
         checked = model.model_validate({block: value})
         return checked.model_dump(mode="json")[block]
 
-    def prepare(self, db: DbSession, kit: LessonKit) -> LessonBrief:
-        return prepare(db, kit).brief
+    def prepare(self, db: DbSession, kit: LessonKit, kind: str) -> LessonBrief:
+        # Соседний вид видит план урока и при перегенерации блока: новый
+        # блок обязан соответствовать ходу урока так же, как весь материал
+        return prepare(db, kit, with_plan=self.specs[kind].with_plan).brief
 
     def rewrite(
         self, kind: str, block: str, brief: LessonBrief, document: dict, instruction: str
@@ -118,12 +123,14 @@ def _message(
     # Блоки сервера не показываются: в них цель обучения с кодом. Коды
     # вырезаются и из остального — учитель мог вписать код в блок руками
     shown = {
-        name: _strip(value) for name, value in document.items() if name not in spec.server_blocks
+        name: strip_codes_deep(value)
+        for name, value in document.items()
+        if name not in spec.server_blocks
     }
     description = spec.draft.model_fields[block].description or ""
     lang = "казахском" if brief.lang == "kz" else "русском"
     parts = [
-        describe(brief),
+        describe(brief, levels=spec.levels),
         "Текущий документ (JSON):\n" + json.dumps(shown, ensure_ascii=False, indent=1),
         f"Перепиши только блок «{block}». Что в нём должно быть: {description}"
         "\nОстальные блоки документа остаются как есть — новый блок должен"
@@ -134,13 +141,3 @@ def _message(
         parts.append(f"Просьба учителя: {instruction}")
     parts.append(f"Весь текст блока — на {lang} языке.")
     return "\n\n".join(parts)
-
-
-def _strip(value):
-    if isinstance(value, str):
-        return strip_objective_codes(value)
-    if isinstance(value, list):
-        return [_strip(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _strip(item) for key, item in value.items()}
-    return value

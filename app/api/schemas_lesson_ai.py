@@ -16,18 +16,28 @@ MaterialKind = Literal[
 ]
 
 
+EngagementLevel = Literal["calm", "active", "full_game"]
+DifficultyLevel = Literal["basic", "standard", "advanced"]
+
+
 class LessonKitIn(BaseModel):
     """Заказ комплекта. Язык и класс не принимаются: их знает цель обучения.
 
-    `kinds` — что подготовить. Пока генератор умеет один вид, ҚМЖ; остальные
-    шесть добавит сессия L5, расширив этот список.
+    `kinds` — что подготовить, любые из семи видов. `answer_key` не генерируется,
+    а собирается из ответов к `tasks`, `homework` и `assessment` — без них
+    он не принимается.
+
+    Два уровня (раздел 4.3 брифа): насколько игровым идёт урок и какой у класса
+    уровень. Не прислал — середина, `active` и `standard`.
     """
 
     objective_id: int
     topic: str = Field(min_length=1, max_length=200)
-    kinds: list[Literal["lesson_plan"]] = Field(min_length=1)
+    kinds: list[MaterialKind] = Field(min_length=1)
     class_size: int | None = Field(default=None, ge=1, le=60)
     notes: str = Field(default="", max_length=1000)
+    engagement_level: EngagementLevel = "active"
+    difficulty_level: DifficultyLevel = "standard"
 
 
 class LessonObjectiveOut(BaseModel):
@@ -45,6 +55,7 @@ class LessonMaterialErrorOut(BaseModel):
         "model_output_invalid",
         "interrupted",
         "program_not_published",
+        "no_sources",
         "internal_error",
     ]
     message: str
@@ -52,7 +63,7 @@ class LessonMaterialErrorOut(BaseModel):
 
 class LessonMaterialOut(BaseModel):
     """Материал комплекта. `content` пуст, пока материал не готов; форма
-    у каждого вида своя — у `lesson_plan` она в `CONTRACT.md`.
+    у каждого вида своя — все семь в `CONTRACT.md`.
 
     `error` заполнен только у упавшего материала (`status: "failed"`).
     """
@@ -77,6 +88,8 @@ class LessonKitOut(BaseModel):
     topic: str
     class_size: int | None
     notes: str
+    engagement_level: EngagementLevel
+    difficulty_level: DifficultyLevel
     status: Literal["generating", "ready", "partial", "failed"]
     created_at: datetime
     updated_at: datetime

@@ -1,0 +1,94 @@
+id = "story_journey"
+title = "Сюжетное путешествие"
+family = "story"
+status = "draft"
+
+summary = """
+Урок — история с картой пути: «помоги герою добраться…». На каждом этапе \
+сюжетный поворот и задание; решённое задание даёт ключ — жетон, букву или часть \
+артефакта. Собранные ключи в финале открывают «заклинание»: расшифрованное \
+слово или последний пример на все найденные числа."""
+scoring = "Этап пройден — ключ; команда, первой собравшая все ключи и открывшая финал, — победитель. Всем классом — без победителя, общая цель."
+
+subjects = ["any"]
+content_shapes = ["short_answer", "multi_step", "open_response"]
+math_topics = ["arithmetic", "word_problems", "logic", "measurement"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["full_game"]
+level_shift = ""
+lesson_phases = ["whole_lesson"]
+duration_min = 30
+duration_max = 40
+grouping = ["teams", "whole_class"]
+print_unit = "per_team"
+group_size_min = 4
+group_size_max = 6
+rules_complexity = "medium"
+student_reading = "short"
+movement = "at_board"
+noise = "voiced"
+competition = "team"
+teacher_role = "host"
+
+self_check = "teacher_check"
+invariants = [
+  "Каждому этапу соответствует цель урока, и все цели урока покрыты этапами.",
+  "Ключи всех этапов вместе однозначно дают финал: слово складывается или последний пример решается.",
+  "На advanced любой путь через перекрёсток собирает все ключи, нужные финалу.",
+]
+model_generates = [
+  "Сюжет по возрасту (от «спаси котёнка» до экспедиции), героя и карту пути.",
+  "Этапы: сюжетный поворот и задание на каждом.",
+  "Ключи этапов и финальное «заклинание».",
+  "Как фазы ҚМЖ переименованы в этапы пути.",
+]
+pitfalls = [
+  "Сюжет ради сюжета: длинный текст этапа съедает время задания — поворот в два предложения.",
+  "План урока строится под путешествие; этапы, не привязанные к целям, — просто развлечение.",
+  "Первоклассник не прочтёт этап сам — сюжет читает учитель, на карточке только задание и значок.",
+]
+in_class_differentiation = "На каждом этапе два задания — «тропинка» и «горная тропа»; ключ дают оба."
+combines_with = ["decode_word", "maze_chain", "math_lotto", "cut_picture", "tangram"]
+station_ready = false
+lang_sensitive = false
+
+props = ["envelopes", "magnets"]
+server_assets = ["tokens", "stickers", "diploma"]
+prep_effort = "medium"
+replayability = "single_use"
+
+source = "Картотека L5, 22.09.2026, раздел 4.3"
+export_shape = "none"
+
+[lang_notes]
+kz = "Герой и места — местные, сюжет сочиняется на казахском, а не переводится; финальное слово — казахское и короткое."
+
+[difficulty_scaling]
+basic = "3 этапа, на каждом герой-подсказка."
+standard = "4–5 этапов, по заданию на каждую цель урока."
+advanced = "Нелинейность: на перекрёстке команда выбирает путь, и финал требует всех ключей, какой бы путь ни выбрали."
+
+[[print_items]]
+name = "Карта путешествия"
+per = "per_class"
+count = "1"
+layout = "board_a3_split"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Карточки этапов"
+per = "per_team"
+count = "по числу этапов"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Части артефакта"
+per = "per_team"
+count = "по числу этапов"
+layout = "card_grid"
+cut = "contour"
+double_sided = false

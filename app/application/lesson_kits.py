@@ -11,7 +11,13 @@
 from app.adapters.db.lesson_ai_repos import LessonKitRepo
 from app.adapters.db.models import LessonKit, User
 from app.domain.errors import FieldError, NotFoundError, ProgramNotPublishedError
-from app.domain.lesson_ai import JOB_ERROR_MESSAGES, MATERIAL_KINDS
+from app.domain.lesson_ai import (
+    ANSWER_SOURCES,
+    DEFAULT_DIFFICULTY,
+    DEFAULT_ENGAGEMENT,
+    JOB_ERROR_MESSAGES,
+    MATERIAL_KINDS,
+)
 
 
 class LessonKitsService:
@@ -29,10 +35,20 @@ class LessonKitsService:
         kinds: list[str],
         class_size: int | None,
         notes: str,
+        engagement_level: str = DEFAULT_ENGAGEMENT,
+        difficulty_level: str = DEFAULT_DIFFICULTY,
     ) -> dict:
         topic = topic.strip()
         if not topic:
             raise FieldError("topic", "Тема урока не может быть пустой")
+        # Ключи собираются из ответов к заданиям, а не генерируются: без
+        # заданий, домашней или проверочной им не из чего взяться (раздел 4.2)
+        if "answer_key" in kinds and not set(kinds) & set(ANSWER_SOURCES):
+            raise FieldError(
+                "kinds",
+                "Ключи с ответами собираются из заданий, домашнего задания"
+                " или проверочной — отметьте хотя бы одно из них",
+            )
         card = self.kits.objective_card(objective_id)
         if card is None:
             raise NotFoundError("Цель обучения не найдена")
@@ -51,6 +67,8 @@ class LessonKitsService:
             lang=program.lang,
             class_size=class_size,
             notes=notes.strip(),
+            engagement_level=engagement_level,
+            difficulty_level=difficulty_level,
         )
         # Порядок видов — из брифа, а не из запроса: план урока идёт первым,
         # остальные материалы получат его на вход (раздел 4.2)
@@ -83,6 +101,8 @@ class LessonKitsService:
             "topic": kit.topic,
             "class_size": kit.class_size,
             "notes": kit.notes,
+            "engagement_level": kit.engagement_level,
+            "difficulty_level": kit.difficulty_level,
             "status": kit.status,
             "created_at": kit.created_at,
             "updated_at": kit.updated_at,

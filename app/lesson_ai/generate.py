@@ -13,7 +13,7 @@
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session as DbSession
@@ -39,6 +39,22 @@ class KindSpec:
     user_message: Callable[[LessonBrief], str]
     # Блоки сервера, в порядке формы, — впереди блоков модели
     server_blocks: tuple[str, ...]
+    # Получает ли вид готовый план урока на вход. У самого плана — нет:
+    # он идёт первым, остальные обязаны ему соответствовать (раздел 4.2)
+    with_plan: bool = True
+    # Видит ли модель уровни заказа напрямую. Презентация — нет: они доходят
+    # до неё через план урока, иначе слайды спорили бы с ходом урока (4.3)
+    levels: bool = True
+    # Строительные блоки под заказ — у игры: (текст для модели, слаги
+    # механик). Второй аргумент — зерно отбора, номер комплекта
+    references: Callable[[LessonBrief, int], tuple[str, tuple[str, ...]]] | None = None
+
+
+@dataclass(frozen=True)
+class KindPrepared(Prepared):
+    """Урок и то, что сервер отобрал под этот вид: механики каталога игр."""
+
+    mechanics: tuple[str, ...] = ()
 
 
 class SchemaGenerator:
@@ -49,16 +65,25 @@ class SchemaGenerator:
         # Схема не меняется от урока к уроку — собирается один раз
         self.schema = strict_schema(spec.draft)
 
-    def prepare(self, db: DbSession, kit: LessonKit) -> Prepared:
-        return prepare(db, kit)
+    def prepare(self, db: DbSession, kit: LessonKit) -> KindPrepared:
+        prepared = prepare(db, kit, with_plan=self.spec.with_plan)
+        mechanics: tuple[str, ...] = ()
+        brief = prepared.brief
+        if self.spec.references is not None:
+            text, mechanics = self.spec.references(brief, kit.id)
+            brief = replace(brief, references=text)
+        return KindPrepared(
+            brief=brief,
+            section=prepared.section,
+            objectives=prepared.objectives,
+            mechanics=mechanics,
+        )
 
     def generate(self, prepared: Prepared) -> Generated:
         try:
             reply = self.ai.complete_json(
                 system=self.spec.system,
-                messages=[
-                    AiMessage(role="user", content=self.spec.user_message(prepared.brief))
-                ],
+                messages=[AiMessage(role="user", content=self.spec.user_message(prepared.brief))],
                 name=self.spec.kind,
                 schema=self.schema,
             )
@@ -69,7 +94,7 @@ class SchemaGenerator:
         server = {"section": prepared.section, "learning_objectives": prepared.objectives}
         content = {name: server[name] for name in self.spec.server_blocks}
         content.update(draft)
-        return Generated(content=content, **tokens)
+        return Generated(content=content, mechanics=getattr(prepared, "mechanics", ()), **tokens)
 
     def _checked(self, text: str, tokens: dict) -> dict:
         try:

@@ -1,0 +1,72 @@
+id = "flashcards"
+title = "Сорбонки"
+family = "flashcards"
+status = "draft"
+
+summary = """
+Двусторонние карточки: с одной стороны пример, с другой ответ. Ученик \
+перебирает их сам или в паре: знает — в стопку «знаю», нет — в стопку \
+«повторю»; второй круг идёт только по «повторю». Разминка на первые минуты урока."""
+scoring = "Без соревнования: итог — самооценка двумя числами, «знаю» и «повторю»."
+
+subjects = ["any"]
+content_shapes = ["short_answer"]
+math_topics = ["number_composition", "arithmetic", "multiplication_table", "mental_math"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["start"]
+duration_min = 3
+duration_max = 7
+grouping = ["individual", "pairs"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 2
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "quiet"
+competition = "none"
+teacher_role = "observer"
+
+self_check = "answer_key"
+invariants = [
+  "Ответ на обороте стоит ровно за своим примером: при двусторонней печати зеркально по длинной стороне.",
+  "У каждого примера один однозначный ответ.",
+  "Карточек столько, чтобы первый круг укладывался в 3–4 минуты: 8–16.",
+]
+model_generates = [
+  "Примеры для лицевой стороны и ответы для оборота.",
+  "Подпись набора под тему урока.",
+]
+pitfalls = [
+  "Без двусторонней печати ответ оказывается на соседней карточке — нужна раскладка «сложи пополам и склей».",
+  "Соревнование «кто больше знает» превращает самооценку в гонку и прячет стопку «повторю».",
+  "Разминка дольше семи минут съедает объяснение новой темы.",
+]
+in_class_differentiation = "Набор делится на две колоды разной сложности; ребёнок берёт вторую, когда первая вся в «знаю»."
+combines_with = ["memory_pairs", "card_duel", "true_false_signals"]
+station_ready = false
+lang_sensitive = false
+
+props = ["envelopes"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Картотека L5, 22.09.2026, раздел 2.5"
+export_shape = "quiz_4_options"
+
+[difficulty_scaling]
+basic = "Состав числа и круглые десятки."
+standard = "Все четыре действия вперемешку."
+advanced = "Обратные вопросы («на что умножить 7, чтобы вышло 56»), цепочки («прибавляй 8 к каждому ответу»)."
+
+[[print_items]]
+name = "Лист карточек 2×4, пример — ответ"
+per = "per_student"
+count = "1–2 листа (8–16 карточек)"
+layout = "card_grid"
+cut = "grid"
+double_sided = true

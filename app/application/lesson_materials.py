@@ -32,9 +32,18 @@ from app.domain.errors import (
     NotFoundError,
     ProgramNotPublishedError,
 )
-from app.domain.lesson_ai import FILE_FORMATS, BlockOutputInvalidError, JobError
+from app.domain.lesson_ai import (
+    ANSWER_SOURCES,
+    FILE_FORMATS,
+    BlockOutputInvalidError,
+    JobError,
+    assemble_answer_key,
+)
 
 log = logging.getLogger(__name__)
+
+# Шапка ключей с ответами — блоки сервера из справочника, впереди ответов
+KEY_HEAD = ("section", "learning_objectives")
 
 
 class BlockRewriterPort(Protocol):
@@ -45,7 +54,7 @@ class BlockRewriterPort(Protocol):
 
     def validate(self, kind: str, block: str, value: Any) -> Any: ...
 
-    def prepare(self, db: DbSession, kit: LessonKit) -> Any: ...
+    def prepare(self, db: DbSession, kit: LessonKit, kind: str) -> Any: ...
 
     def rewrite(
         self, kind: str, block: str, brief: Any, document: dict, instruction: str
@@ -122,7 +131,7 @@ class LessonMaterialsService:
         kind, document = material.kind, dict(material.content)
         token = self.materials.last_version_id(block.id)
         try:
-            brief = self.rewriter.prepare(self.db, kit)
+            brief = self.rewriter.prepare(self.db, kit, kind)
         except JobError as exc:
             if exc.code == "program_not_published":
                 raise ProgramNotPublishedError() from None
@@ -162,6 +171,7 @@ class LessonMaterialsService:
             user_id=user.id,
             instruction=instruction or None,
         )
+        self._sync_answer_key(material, user)
         return self._block_out(material, block)
 
     # -- PUT /lesson_ai/materials/{id}/blocks/{block} -----------------------
@@ -237,7 +247,28 @@ class LessonMaterialsService:
             raise MaterialNotReadyError()
         block = self.materials.block(material_id, block_kind)
         self.materials.write_block(material, block, value, source=source, user_id=user.id)
+        self._sync_answer_key(material, user)
         return self._block_out(material, block)
+
+    def _sync_answer_key(self, material: LessonMaterial, user: User) -> None:
+        """Правка задачи — правка ключей: ответ живёт в той же схеме, что
+        задача, и ключи — его сводка (раздел 4.2). Иначе учитель, поправивший
+        пример на карточке, проверял бы тетради по старому ответу.
+
+        Пересборка — той же транзакцией, что правка, и ключи под замком
+        после материала: порядок замков один у всех правок, взаимной
+        блокировки нет.
+        """
+        if material.kind not in ANSWER_SOURCES:
+            return
+        key = self.materials.sibling(material.kit_id, "answer_key")
+        if key is None or key.status != "ready" or key.content is None:
+            return
+        # Раздел и цель обучения остаются как были — это строка справочника.
+        # Порядок — формы, а не `content`: JSONB раскладывает ключи по-своему
+        content = {name: key.content[name] for name in KEY_HEAD if name in key.content}
+        content |= assemble_answer_key(self.materials.ready_blocks(material.kit_id, ANSWER_SOURCES))
+        self.materials.replace_content(key, content, user_id=user.id)
 
     def _block_out(self, material: LessonMaterial, block: LessonMaterialBlock) -> dict:
         return {

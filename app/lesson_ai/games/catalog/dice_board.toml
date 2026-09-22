@@ -1,0 +1,90 @@
+id = "dice_board"
+title = "Ходилка с кубиком"
+family = "board_race"
+status = "draft"
+
+summary = """
+Поле-тропа из нумерованных клеток с отметками событий; игрок бросает кубик, \
+встаёт на клетку и тянет карточку с её номером: решил верно — стоит (на клетке \
+бонуса — ещё ход), неверно — шаг назад. За столом 2–4 игрока, класс — на несколько столов."""
+scoring = "Побеждает первый дошедший до финиша; когда первый финишировал, остальные доигрывают круг за места."
+
+subjects = ["any"]
+content_shapes = ["short_answer", "multi_step"]
+math_topics = ["arithmetic", "mental_math", "counting", "word_problems"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["active"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 10
+duration_max = 20
+grouping = ["small_groups"]
+print_unit = "per_group"
+group_size_min = 2
+group_size_max = 4
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "voiced"
+competition = "individual"
+teacher_role = "facilitator"
+
+self_check = "peer_check"
+invariants = [
+  "Номер на каждой карточке задания совпадает с номером клетки поля, и у каждой клетки-задания есть карточка.",
+  "Шаг назад с любой клетки не уводит раньше старта, а цепочка событий не зацикливается (событие не ведёт на клетку с событием).",
+  "Ответы карточек есть в ключе стола.",
+  "Поле проходится в среднем за 10–15 бросков: при кубике 1–6 это 30–40 клеток.",
+]
+model_generates = [
+  "Сюжет тропы и названия клеток-событий под тему урока.",
+  "Задания на карточки по номерам клеток и ключ.",
+  "Тексты событий («пропусти ход», «двойной ход за ответ с объяснением вслух»).",
+]
+pitfalls = [
+  "Примеры, напечатанные прямо на поле, убивают раму: следующую тему на это поле уже не положить — задания только на карточках.",
+  "Поле длиннее 40 клеток за 15 минут не проходится — игра кончается звонком, а не финишем.",
+  "Цепочка «событие на событие» гоняет фишку по кругу — дети теряют, где стояли.",
+]
+in_class_differentiation = "Карточки двух уровней одной рубашкой: игрок тянет из своей стопки, поле общее."
+combines_with = ["living_board", "card_duel", "story_journey", "track_race"]
+station_ready = false
+lang_sensitive = false
+
+props = ["die", "counters"]
+server_assets = ["die_net", "tokens", "diploma"]
+prep_effort = "medium"
+replayability = "reusable_frame"
+
+source = "Картотека L5, 22.09.2026, раздел 3.1"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "Задания одного действия в пределах 20."
+standard = "Все действия вперемешку, события «пропусти ход» и «двойной ход за ответ с объяснением вслух»."
+advanced = "Задачи в два действия и клетка «проверь ответ соседа» с ролью арбитра."
+
+[[print_items]]
+name = "Поле-тропа"
+per = "per_group"
+count = "1"
+layout = "board_a3_split"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Карточки заданий по номерам клеток"
+per = "per_group"
+count = "20–30"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Ключ стола"
+per = "per_group"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false

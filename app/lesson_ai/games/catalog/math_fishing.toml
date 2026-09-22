@@ -1,0 +1,89 @@
+id = "math_fishing"
+title = "Математическая рыбалка"
+family = "card_draw"
+status = "draft"
+
+summary = """
+Карточки-рыбки с примерами лежат рубашкой вверх на «пруду» — в центре стола. \
+В свой ход ребёнок «ловит» рыбку и решает: верно — рыбка в улов, неверно — \
+отпускает обратно в пруд. Игра по кругу 5–7 минут."""
+scoring = "Рыбка — 1 очко; уловы пересчитываются вслух в конце. При счёте по рядам — командный улов на табло-«ведре»."
+
+subjects = ["any"]
+content_shapes = ["short_answer", "open_response"]
+math_topics = ["counting", "number_composition", "arithmetic", "mental_math"]
+grade_min = 1
+grade_max = 2
+engagement_levels = ["active"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 5
+duration_max = 10
+grouping = ["small_groups"]
+print_unit = "per_group"
+group_size_min = 3
+group_size_max = 5
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "voiced"
+competition = "individual"
+teacher_role = "facilitator"
+
+self_check = "peer_check"
+invariants = [
+  "Рыбок в пруду хватает на 3–4 круга стола: 15–20 на группу.",
+  "У каждой рыбки один однозначный ответ; на advanced задание-категория выполнимо за один ход.",
+  "Ключ группы перечисляет ответы всех рыбок по номерам.",
+]
+model_generates = [
+  "Примеры или задания-категории для рыбок.",
+  "Ключ группы по номерам рыбок.",
+  "Название пруда и фразу сюжета.",
+]
+pitfalls = [
+  "Рыбка с примером на лицевой стороне видна до «лова» — дети выбирают лёгкие; пример на обороте, рыбка лежит контуром вверх.",
+  "Резать рыбок по контуру первоклассникам — долго; учитель режет заранее, контур простой.",
+  "Отпущенная рыбка возвращается в ту же точку — её узнают; пруд перемешивают.",
+]
+in_class_differentiation = "Рыбки двух размеров: маленькие проще, большие стоят двух очков — ребёнок выбирает сам."
+combines_with = ["story_journey", "living_board", "card_duel"]
+station_ready = true
+lang_sensitive = false
+
+props = ["envelopes", "magnets"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Картотека L5, 22.09.2026, раздел 3.5"
+export_shape = "quiz_4_options"
+
+[difficulty_scaling]
+basic = "Состав числа до 10."
+standard = "Сложение и вычитание до 20 и круглые десятки."
+advanced = "На обороте не пример, а категория: «составь задачу по этому выражению», «назови соседей числа»."
+
+[[print_items]]
+name = "Рыбки-карточки"
+per = "per_group"
+count = "15–20"
+layout = "card_grid"
+cut = "contour"
+double_sided = false
+
+[[print_items]]
+name = "Ключ группы"
+per = "per_group"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Табло-«ведро» для доски"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

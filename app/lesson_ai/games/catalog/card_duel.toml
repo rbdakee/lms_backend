@@ -1,0 +1,81 @@
+id = "card_duel"
+title = "Карточная дуэль («бой примеров»)"
+family = "card_duel"
+status = "draft"
+
+summary = """
+Колода карт: на каждой пример, ответ — на обороте. Двое одновременно \
+вскрывают по карте и наперегонки решают; кто первым назвал верный ответ, \
+забирает обе. Третий участник — судья с ключом."""
+scoring = "Побеждает тот, у кого за 7–10 минут больше взятых карт; роль судьи переходит по кругу между партиями."
+
+subjects = ["any"]
+content_shapes = ["short_answer"]
+math_topics = ["number_composition", "arithmetic", "multiplication_table", "mental_math"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["active"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 7
+duration_max = 15
+grouping = ["small_groups"]
+print_unit = "per_group"
+group_size_min = 3
+group_size_max = 3
+rules_complexity = "medium"
+student_reading = "none"
+movement = "seated"
+noise = "loud"
+competition = "individual"
+teacher_role = "observer"
+
+self_check = "answer_key"
+invariants = [
+  "Ответ на обороте каждой карты стоит ровно за её примером и совпадает с ключом судьи.",
+  "Примеры одной колоды близки по времени решения: иначе дуэль решает удача вскрытия, а не счёт.",
+  "На advanced карты «сравни выражения» имеют однозначный ответ (больше, меньше или равно).",
+]
+model_generates = [
+  "Колоду примеров с ответами под тему урока.",
+  "Ключ-табличку судьи.",
+  "Особые карты для advanced и их правила одной строкой.",
+]
+pitfalls = [
+  "Без двусторонней печати ответ уезжает на соседнюю карту — нужна раскладка «сложи пополам и склей».",
+  "Смешанная колода, где рядом «2+3» и «48:6», превращает дуэль в лотерею.",
+  "Судья без ключа спорит с игроками — ключ-табличка обязательна.",
+]
+in_class_differentiation = "Дуэлянтам равной силы — общая колода; сильному против слабого — «фора»: он решает карты из второй колоды."
+combines_with = ["flashcards", "knowledge_auction", "math_fishing", "dice_board"]
+station_ready = false
+lang_sensitive = false
+
+props = ["envelopes"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "high"
+replayability = "replayable"
+
+source = "Картотека L5, 22.09.2026, раздел 3.3"
+export_shape = "quiz_4_options"
+
+[difficulty_scaling]
+basic = "Состав числа, примеры одного типа."
+standard = "Четыре действия вперемешку, но одной трудности."
+advanced = "Карты-«щиты» (задача вместо примера), карты-«удвоения» (очки ×2), карты «сравни выражения» («что больше: 6×7 или 8×5?»)."
+
+[[print_items]]
+name = "Колода: пример — ответ на обороте"
+per = "per_group"
+count = "30–40"
+layout = "card_grid"
+cut = "grid"
+double_sided = true
+
+[[print_items]]
+name = "Ключ-табличка судьи"
+per = "per_group"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

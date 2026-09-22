@@ -1,0 +1,83 @@
+id = "true_false_signals"
+title = "«Верю — не верю» с сигнальными карточками"
+family = "signal_vote"
+status = "draft"
+
+summary = """
+Ведущий читает утверждение («7×8 = 54», «периметр квадрата со стороной 3 см \
+равен 12 см»); по команде «три» каждый поднимает карточку «да» или «нет». \
+Учитель видит весь класс разом."""
+scoring = "Верный ответ — жетон; по настроению класса ошибившийся выбывает до следующего раунда. Раунд — 3–5 минут."
+
+subjects = ["any"]
+content_shapes = ["true_false"]
+math_topics = ["arithmetic", "multiplication_table", "measurement", "patterns", "logic"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["active"]
+level_shift = ""
+lesson_phases = ["start", "end"]
+duration_min = 3
+duration_max = 10
+grouping = ["whole_class"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 1
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "voiced"
+competition = "individual"
+teacher_role = "host"
+
+self_check = "teacher_check"
+invariants = [
+  "Каждое утверждение однозначно верно или неверно (на advanced — однозначно «всегда», «иногда» или «никогда»).",
+  "Верных и неверных утверждений примерно поровну и без чередования по шаблону.",
+  "Неверное утверждение ошибается правдоподобно: типичной ошибкой, а не абсурдом.",
+]
+model_generates = [
+  "Список из 15–20 утверждений с ответами и короткими пояснениями для учителя.",
+  "Подписи сигнальных карточек на языке урока.",
+]
+pitfalls = [
+  "Утверждение с двусмысленной формулировкой — половина класса права по-своему, и игра превращается в спор.",
+  "Выбывание на basic выключает из урока тех, кому практика нужнее всего — там без выбывания.",
+  "Дети поднимают карточку, глядя на соседа: сигнал строго на счёт «три», всем разом.",
+]
+in_class_differentiation = "Утверждения по нарастающей: первые — всем, последние — «на звёздочку», за них двойной жетон."
+combines_with = ["knowledge_auction", "math_detective", "story_journey", "living_board"]
+station_ready = false
+lang_sensitive = false
+
+props = []
+server_assets = ["tokens", "diploma"]
+prep_effort = "low"
+replayability = "reusable_frame"
+
+source = "Картотека L5, 22.09.2026, раздел 3.7"
+export_shape = "true_false"
+
+[lang_notes]
+kz = "Подписи карточек — «Иә / Жоқ»; на advanced — «әрқашан / кейде / ешқашан»."
+
+[difficulty_scaling]
+basic = "Утверждения в пределах 10 и «на внимательность», без выбывания."
+standard = "Таблица умножения и именованные числа."
+advanced = "Три карточки «всегда / иногда / никогда» и утверждения о свойствах («сумма двух чётных всегда чётная»)."
+
+[[print_items]]
+name = "Сигнальные карточки «да / нет» крупным шрифтом"
+per = "per_student"
+count = "по числу детей"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Список утверждений с ответами"
+per = "per_class"
+count = "15–20 утверждений"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

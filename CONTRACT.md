@@ -6953,3 +6953,195 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
 - **Учёта расхода** на перегенерацию блока: токены пишутся только в лог (L7,
   `lesson_ai_usage`).
 - **Файлов остальных видов** — `.pptx` и пять `.docx` приходят с L5.
+
+# Жоспар: семь видов материалов, два уровня, `.pptx` (сессия L5)
+
+С L5 комплект собирается из любых видов брифа (раздел 4): план урока, презентация,
+задания, домашнее, проверочная, игра и ключи с ответами. Ручки те же, что в L3 и L4 —
+изменились допустимые значения и появились два поля заказа.
+
+## POST /lesson_ai/kits — что добавилось
+
+```json
+// запрос
+{
+  "objective_id": 845,
+  "topic": "Сложение и вычитание двузначных чисел",
+  "kinds": ["lesson_plan", "presentation", "tasks", "homework", "assessment", "game", "answer_key"],
+  "engagement_level": "active",
+  "difficulty_level": "standard",
+  "class_size": 24,
+  "notes": ""
+}
+```
+
+- `kinds` — любые из семи: `lesson_plan`, `presentation`, `tasks`, `homework`,
+  `assessment`, `game`, `answer_key`. Повтор вида не заводит второй материал.
+- `engagement_level` — `calm` (спокойно), `active` (с соревнованием), `full_game` (весь урок
+  игра). Необязательно, по умолчанию `active`.
+- `difficulty_level` — `basic` (база), `standard` (по программе), `advanced` (с запасом).
+  Необязательно, по умолчанию `standard`.
+- `answer_key` модель не генерирует: его собирает сервер из ответов к `tasks`, `homework`
+  и `assessment`. Без хотя бы одного из них заказ отбивается:
+
+```json
+// 422 validation_error — ключи без источника
+{
+  "error": {
+    "code": "validation_error",
+    "message": "Проверьте заполнение полей",
+    "details": { "fields": [ { "field": "kinds", "message": "Ключи с ответами собираются из заданий, домашнего задания или проверочной — отметьте хотя бы одно из них" } ] }
+  }
+}
+```
+
+Ответ на заказ и на опрос (`GET /lesson_ai/kits/{id}`) получил оба уровня:
+
+```json
+// 201 (фрагмент — остальное как в L3)
+{
+  "id": 7,
+  "engagement_level": "active",
+  "difficulty_level": "standard",
+  "status": "generating",
+  "materials": [
+    { "id": 21, "kind": "lesson_plan", "status": "queued", "error": null, "content": null, "updated_at": "…" },
+    { "id": 22, "kind": "presentation", "status": "queued", "error": null, "content": null, "updated_at": "…" },
+    { "id": 27, "kind": "answer_key", "status": "queued", "error": null, "content": null, "updated_at": "…" }
+  ]
+}
+```
+
+**Порядок сборки.** План урока — первым. Презентация, задания, домашнее, проверочная
+и игра стоят `queued`, пока план не закрыт, и получают готовый план на вход. Ключи ждут
+задания, домашнее и проверочную. Упавший план соседей не валит: они генерируются
+по цели и теме без плана. Экран ожидания рисует это теми же статусами, что в L3.
+
+Новый код отказа у материала:
+
+```json
+// материал answer_key, status "failed" — ни задания, ни домашнее, ни проверочная не собрались
+{ "code": "no_sources", "message": "Не из чего собрать ключи: задания, домашняя и проверочная не готовы" }
+```
+
+## `content` по видам
+
+У всех видов, кроме плана и ключей, впереди два блока сервера — как у плана:
+`section` (`{ "title", "subsection" }`) и `learning_objectives` (`[{ "code", "text", "marker" }]`,
+дословно из справочника, `editable: false`). Дальше — блоки модели; каждый блок — отдельная
+единица правки (`/blocks/{block}` из L4). Любая задача — объект с `text` (условие) и
+`answer` (ответ); ответ **в сам файл материала не печатается**, он уходит в ключи.
+
+**`presentation`**
+
+```json
+{
+  "goals": ["Научимся складывать двузначные числа без перехода через десяток"],
+  "slides_beginning": [ { "title": "Вспомним", "lines": ["40 + 7", "56 − 6"], "visual": "10 палочек пучком и 7 отдельно", "notes": "Начало урока, шаг 1: устный счёт хором." } ],
+  "slides_middle":    [ { "title": "…", "lines": ["…"], "visual": "…", "notes": "…" } ],
+  "slides_end":       [ { "title": "…", "lines": ["…"], "visual": "…", "notes": "…" } ]
+}
+```
+
+**`tasks`** — три блока карточек по уровням (А — кому трудно, В — большинству, С — кто
+справился быстро):
+
+```json
+{
+  "intro": "…",
+  "game_rules": ["…"],
+  "cards_support":   [ { "title": "Разминка по разрядам", "plan_step": "Середина урока, шаг 2", "instruction": "…", "tasks": [ { "text": "30 + 20 = ___", "answer": "50" } ] } ],
+  "cards_core":      [ { "title": "…", "plan_step": "…", "instruction": "…", "tasks": [ { "text": "…", "answer": "…" } ] } ],
+  "cards_challenge": [ { "title": "…", "plan_step": "…", "instruction": "…", "tasks": [ { "text": "…", "answer": "…" } ] } ],
+  "teacher_notes": ["…"]
+}
+```
+
+**`homework`**
+
+```json
+{
+  "minutes": 15,
+  "intro": "…",
+  "play_legend": ["…"],
+  "required": { "title": "Обязательно", "tasks": [ { "text": "…", "answer": "…" } ] },
+  "optional": { "title": "По желанию", "tasks": [ { "text": "…", "answer": "…" } ] },
+  "parent_note": "…"
+}
+```
+
+**`assessment`** — формативное оценивание, два параллельных варианта; критерии,
+уровни мыслительных навыков (`knowledge`, `application`, `higher_order`) и дескрипторы —
+у первого варианта, таблица учителя одна на оба:
+
+```json
+{
+  "instructions": "…",
+  "variant_1": { "title": "Вариант 1", "tasks": [ { "text": "…", "answer": "…", "criterion": "…", "thinking_level": "application", "descriptors": [ { "text": "…", "points": 1 } ] } ] },
+  "variant_2": { "title": "Вариант 2", "tasks": [ { "text": "…", "answer": "…" } ] },
+  "self_assessment": ["Я умею…"]
+}
+```
+
+**`game`** — схема нарочно шире остальных (раздел 4.3 брифа): механику модель придумывает
+сама. Жетоны, грамоту, развёртку кубика (`rules.needs_die`) и монеты (`rules.coins`, номиналы
+в тенге) рисует сервер в файле.
+
+```json
+{
+  "title": "…",
+  "story": "…",
+  "placement": { "stage": "stage_middle", "minutes": 12, "fit": "…" },
+  "mechanic": "…",
+  "roles": [ { "name": "…", "who": "…", "does": "…" } ],
+  "rules": { "steps": ["…"], "needs_die": false, "coins": [] },
+  "preparation": { "cutting": "…", "sets": "…", "room": "…", "noise": "voiced", "props": ["…"] },
+  "printables": [ { "title": "…", "instructions": "…", "copies": "…", "cut": "grid", "columns": 3, "cells": ["43 + 25", "…"] } ],
+  "scoring": "…",
+  "reward": { "token_label": "…", "tokens_for": "…", "diploma_text": "…" },
+  "differentiation": { "support": "…", "challenge": "…" },
+  "host_key": [ { "item": "…", "answer": "…" } ]
+}
+```
+
+`placement.stage` — `stage_beginning | stage_middle | stage_end | whole_lesson`;
+`preparation.noise` — `quiet | voiced | loud`; `printables[].cut` — `grid | none`.
+
+**`answer_key`** — собирает сервер. Все блоки — `editable: false`: ни перегенерации,
+ни правки, ни отката (`409 block_locked`). После любой правки задачи в `tasks`, `homework`
+или `assessment` ключи пересобираются сами, той же транзакцией.
+
+```json
+{
+  "section": { "title": "Числа и величины", "subsection": "Операции над числами" },
+  "learning_objectives": [ { "code": "2.1.2.6", "text": "…", "marker": "" } ],
+  "tasks": [ { "block": "cards_core", "title": "Раунд 1. Устный счёт", "answers": [ { "number": 1, "task": "34 + 25", "answer": "59" } ] } ],
+  "homework": [ { "block": "required", "title": "Обязательно", "answers": [ … ] } ],
+  "assessment": [ { "block": "variant_1", "title": "Вариант 1", "answers": [ … ] } ]
+}
+```
+
+Ключ вида есть, только если его материал готов. `block` — из какого блока источника
+группа: у заданий это уровень карточки.
+
+## GET /lesson_ai/materials/{id}/file — все семь видов
+
+| `kind` | `content-type` | Имя (`filename*`), ru / kz |
+|---|---|---|
+| `lesson_plan` | `…wordprocessingml.document` | «ҚМЖ — тема.docx» |
+| `presentation` | `application/vnd.openxmlformats-officedocument.presentationml.presentation` | «Презентация — тема.pptx» |
+| `tasks` | `…wordprocessingml.document` | «Задания — тема.docx» / «Тапсырмалар — …» |
+| `homework` | `…wordprocessingml.document` | «Домашнее задание — …» / «Үй тапсырмасы — …» |
+| `assessment` | `…wordprocessingml.document` | «Проверочная работа — …» / «Формативті бағалау — …» |
+| `game` | `…wordprocessingml.document` | «Игра — …» / «Ойын — …» |
+| `answer_key` | `…wordprocessingml.document` | «Ключи с ответами — …» / «Жауаптар кілті — …» |
+
+`filename` (ASCII) — `<kind>_<kit_id>.<docx|pptx>`. Файл, как и в L4, собирается при каждом
+скачивании из текущего `content`.
+
+## Что изменилось против L3 и L4
+
+- `LessonKitIn.kinds` — все семь видов вместо одного `lesson_plan`.
+- `LessonKitOut` — поля `engagement_level`, `difficulty_level`.
+- `LessonMaterialErrorOut.code` — добавлен `no_sources`.
+- Форма ответа ручек блоков, версий и отката не менялась.

@@ -1,0 +1,82 @@
+id = "relay_ladder"
+title = "Лесенка-эстафета"
+family = "chain"
+status = "draft"
+
+summary = """
+На команду — лист-лесенка из 8–10 ступеней, где ответ каждой ступени входит \
+в пример следующей. Первый игрок решает нижнюю ступень и передаёт лист дальше \
+по ряду; последний отдаёт вершину на проверку."""
+scoring = "Побеждает команда, первой поднявшаяся без ошибок; проверяет соседняя команда или учитель, ошибка возвращает лист на эту ступень."
+
+subjects = ["any"]
+content_shapes = ["multi_step", "short_answer"]
+math_topics = ["arithmetic", "mental_math", "word_problems"]
+grade_min = 2
+grade_max = 4
+engagement_levels = ["active"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 7
+duration_max = 12
+grouping = ["teams"]
+print_unit = "per_team"
+group_size_min = 4
+group_size_max = 8
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "voiced"
+competition = "team"
+teacher_role = "referee"
+
+self_check = "teacher_check"
+invariants = [
+  "Ответ каждой ступени — вход примера следующей, и первая ступень решается без опоры на другие.",
+  "Все промежуточные ответы — целые, неотрицательные, в пределах чисел класса; деление без остатка.",
+  "Ключ учителя даёт ответ каждой ступени, а не только вершины: ошибку находят по месту.",
+  "На advanced оба столбца двойной тропы сходятся в одну вершину с одним ответом.",
+]
+model_generates = [
+  "Цепочку ступеней под тему урока и ключ по ступеням.",
+  "Задачу-«флаг» на вершине для advanced.",
+  "Название и сюжет подъёма («на вершину горы»).",
+]
+pitfalls = [
+  "Ошибка на нижней ступени тянет за собой всю лесенку — проверка по ступеням, а не по вершине.",
+  "Ступеней больше, чем детей в ряду, — последние решают по две и тормозят команду.",
+  "Одинаковые лесенки у соседних рядов — списывают через проход; числа старта разные при той же лестнице.",
+]
+in_class_differentiation = "Нижние ступени проще верхних: слабый игрок садится первым в ряду, и его вклад виден."
+combines_with = ["maze_chain", "station_quest", "track_race", "math_domino"]
+station_ready = true
+lang_sensitive = false
+
+props = []
+server_assets = ["tokens", "diploma"]
+prep_effort = "low"
+replayability = "single_use"
+
+source = "Картотека L5, 22.09.2026, раздел 3.4"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "5 ступеней одной темы, ответ стоит готовым первым числом следующего примера."
+standard = "8–10 ступеней вперемешку."
+advanced = "На вершине задача-«флаг» в два действия; двойная тропа: два столбца сходятся в одну вершину."
+
+[[print_items]]
+name = "Лист-лесенка"
+per = "per_team"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Ключ учителя по ступеням"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

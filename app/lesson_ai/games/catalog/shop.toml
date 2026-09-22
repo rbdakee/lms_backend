@@ -1,0 +1,113 @@
+id = "shop"
+title = "Магазин"
+family = "economy"
+status = "draft"
+
+summary = """
+В классе открывается магазин: товары-карточки с ценниками в тенге, у каждого \
+покупателя стартовый капитал жетонами. Покупая, считаешь сумму и сдачу; роли — \
+продавец, кассир, контролёр чека. Дополнительные жетоны зарабатываются \
+«на фабрике» — решением примеров."""
+scoring = "Побеждает не самый богатый, а выполнивший свой план покупок без ошибок в чеке."
+
+subjects = ["any"]
+content_shapes = ["money", "multi_step", "short_answer"]
+math_topics = ["money", "arithmetic", "mental_math", "word_problems"]
+grade_min = 2
+grade_max = 4
+engagement_levels = ["full_game", "active"]
+level_shift = """
+Фрагмент на 10–15 минут: одна «касса» на ряд, покупатели за партами, \
+один план покупок и без фабрики. Остаётся счёт и сдача, уходит перемещение."""
+lesson_phases = ["whole_lesson"]
+duration_min = 10
+duration_max = 40
+grouping = ["small_groups"]
+print_unit = "per_group"
+group_size_min = 4
+group_size_max = 6
+rules_complexity = "medium"
+student_reading = "short"
+movement = "around_class"
+noise = "loud"
+competition = "individual"
+teacher_role = "facilitator"
+
+self_check = "peer_check"
+invariants = [
+  "Каждый план покупок выполним стартовым капиталом плюс посильным заработком на фабрике.",
+  "Все цены и сдача набираются жетонами имеющихся достоинств (1, 5, 10, 20).",
+  "На standard есть набор товаров ровно на названную сумму («купи ровно на 100 тенге»).",
+  "На advanced цена со скидкой — целое число тенге.",
+]
+model_generates = [
+  "Товары под тему урока, цены и вывеску магазина.",
+  "Планы покупок и стартовый капитал.",
+  "Примеры для фабрики и бланк чека.",
+]
+pitfalls = [
+  "Денег жетонами меньше, чем нужно на все планы, — в середине урока касса пуста; печатать с запасом.",
+  "Цена, которую не набрать имеющимися достоинствами, делает покупку невозможной.",
+  "Роль кассира достаётся одним и тем же — на advanced очередь ролей обязательна.",
+  "Проценты скидки — только для 4 класса и только круглые (10 %, 50 %).",
+]
+in_class_differentiation = "Планы покупок разной трудности: «без сдачи» и «с остатком меньше 10 тенге»; ценники общие."
+combines_with = ["knowledge_auction", "station_quest", "relay_ladder"]
+station_ready = false
+lang_sensitive = false
+
+props = ["envelopes"]
+server_assets = ["money", "tokens", "diploma"]
+prep_effort = "high"
+replayability = "reusable_frame"
+
+source = "Картотека L5, 22.09.2026, раздел 4.4"
+export_shape = "none"
+
+[lang_notes]
+kz = "Товары и названия — местные (нан, сүт, алма), цены в теңге; роли подписаны на казахском: сатушы, кассир, тексеруші."
+
+[difficulty_scaling]
+basic = "Круглые цены в пределах 20, оплата без сдачи."
+standard = "Сдача и «купи ровно на 100 тенге»."
+advanced = "Скидки в процентах, «семейный бюджет» — план покупок с ограниченной суммой, очередь ролей: кассиром побывает каждый."
+
+[[print_items]]
+name = "Товарные карточки с ценниками"
+per = "per_group"
+count = "12–16"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Бланки чеков"
+per = "per_student"
+count = "2–3"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Планы покупок"
+per = "per_student"
+count = "1"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Примеры «фабрики»"
+per = "per_class"
+count = "20–30"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Вывеска магазина"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

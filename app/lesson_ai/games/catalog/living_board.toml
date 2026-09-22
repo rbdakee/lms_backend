@@ -1,0 +1,90 @@
+id = "living_board"
+title = "Живая ходилка (гигантское поле)"
+family = "board_race"
+status = "draft"
+
+summary = """
+Поле раскладывается на полу класса листами; фишки — сами дети или команды. \
+Бросок — крупным кубиком из развёртки; на клетке — карточка из стопки: команда \
+решает шёпотом и даёт один ответ. Роли меняются по кругу: бросающий, счётчик, арбитр."""
+scoring = "Верно — ход засчитан, неверно — возврат на прежнюю клетку; финиш открывает «сундук» с грамотами."
+
+subjects = ["any"]
+content_shapes = ["short_answer", "measurement", "open_response"]
+math_topics = ["counting", "arithmetic", "measurement", "word_problems"]
+grade_min = 1
+grade_max = 2
+engagement_levels = ["full_game"]
+level_shift = ""
+lesson_phases = ["whole_lesson"]
+duration_min = 25
+duration_max = 35
+grouping = ["teams", "whole_class"]
+print_unit = "per_class"
+group_size_min = 4
+group_size_max = 8
+rules_complexity = "simple"
+student_reading = "none"
+movement = "around_class"
+noise = "loud"
+competition = "team"
+teacher_role = "host"
+
+self_check = "teacher_check"
+invariants = [
+  "Клеток столько, чтобы команда дошла до финиша за 8–12 бросков: 20–30 листов.",
+  "Карточек в стопке хватает на все ходы всех команд без повторов: не меньше 30.",
+  "Каждая карточка однозначно проверяется учителем на слух — ответ числом или действием.",
+]
+model_generates = [
+  "Карточки-задания для стопки и ответы для учителя.",
+  "Тексты клеток-событий и сюжет пути к «сундуку».",
+  "Задания клеток-испытаний для advanced.",
+]
+pitfalls = [
+  "Поле посреди класса без сдвинутых парт — дети спотыкаются; в записке учителю: сдвинуть парты до урока.",
+  "Листы скользят по полу — закрепить скотчем или раскладывать на ковре.",
+  "Одна команда ходит, остальные ждут и шумят: ход короткий, остальные решают ту же карточку «про себя» и показывают ответ пальцами.",
+  "Задания на поле, а не в стопке, убивают раму: поле нужно переиспользовать.",
+]
+in_class_differentiation = "Две стопки карточек — «лёгкая» и «звёздная»: команда выбирает, звёздная даёт лишний шаг."
+combines_with = ["dice_board", "math_fishing", "true_false_signals", "story_journey"]
+station_ready = false
+lang_sensitive = false
+
+props = ["die", "ruler"]
+server_assets = ["die_net", "tokens", "diploma"]
+prep_effort = "medium"
+replayability = "reusable_frame"
+
+source = "Картотека L5, 22.09.2026, раздел 4.6"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "Клетки «назови следующее число», «назови соседей числа»."
+standard = "Карточки-примеры всех действий в пределах программы."
+advanced = "Клетки-испытания: «составь задачу по картинке», «измерь предмет линейкой и назови в сантиметрах»."
+
+[[print_items]]
+name = "Листы-клетки с крупной разметкой"
+per = "per_class"
+count = "20–30"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Стопка карточек-заданий"
+per = "per_class"
+count = "30–40"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Карточки ролей: бросающий, счётчик, арбитр"
+per = "per_team"
+count = "3"
+layout = "card_grid"
+cut = "grid"
+double_sided = false

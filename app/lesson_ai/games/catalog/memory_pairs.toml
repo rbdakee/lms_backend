@@ -1,0 +1,85 @@
+id = "memory_pairs"
+title = "Найди пару (мемори)"
+family = "matching"
+status = "draft"
+
+summary = """
+Карточки лежат рубашкой вверх; в свой ход игрок открывает две: нашёл пример \
+и его ответ — забирает пару и ходит снова, нет — переворачивает обратно \
+и передаёт ход. Пересчёт собранных пар вслух — ещё одна практика счёта."""
+scoring = "Пара — 1 очко. Побеждает собравший больше пар; партия — 7–10 минут, открыты все карточки."
+
+subjects = ["any"]
+content_shapes = ["pairs"]
+math_topics = ["counting", "number_composition", "arithmetic", "multiplication_table"]
+grade_min = 1
+grade_max = 3
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 7
+duration_max = 12
+grouping = ["pairs"]
+print_unit = "per_pair"
+group_size_min = 2
+group_size_max = 2
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "quiet"
+competition = "individual"
+teacher_role = "observer"
+
+self_check = "answer_key"
+invariants = [
+  "У каждой карточки ровно одна пара в наборе: ответ одного примера не совпадает с ответом другого.",
+  "Число карточек чётное, все они складываются в пары без остатка.",
+  "Рубашки всех карточек одинаковы: по обороту пару не угадать.",
+  "Лист-ключ перечисляет все пары набора и только их.",
+]
+model_generates = [
+  "Пары «пример — ответ» (или другие пары по уровню) под тему урока.",
+  "Лист-ключ с парами.",
+  "Название игры и одну фразу сюжета.",
+]
+pitfalls = [
+  "Два примера с одинаковым ответом дают спорную пару — дети спорят, а не считают.",
+  "Больше 12 пар на двоих первоклассников — игра тянется, память устаёт раньше, чем кончается счёт.",
+  "Просвечивающая бумага выдаёт карточку: рубашка должна быть плотным узором, а не тонкой рамкой.",
+]
+in_class_differentiation = "Паре посильнее — набор «равное — равному», послабее — «пример — ответ»: рубашки одинаковые."
+combines_with = ["math_domino", "station_quest", "story_journey", "flashcards"]
+station_ready = true
+lang_sensitive = false
+
+props = ["envelopes"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Картотека L5, 22.09.2026, раздел 2.2"
+export_shape = "matching"
+
+[lang_notes]
+kz = "Пары «термин — смысл» на advanced — казахскими терминами (қосынды, айырма, көбейтінді), а не переводом с русского."
+
+[difficulty_scaling]
+basic = "Пары «число — карточка с точками», 6–8 пар."
+standard = "Пары «пример — ответ», 8–10 пар."
+advanced = "Пары «равное — равному» (5×4 и 8+12), «задача — решение», «термин — его смысл»; 10–12 пар."
+
+[[print_items]]
+name = "Карточки с рубашкой"
+per = "per_pair"
+count = "16–24 (8–12 пар)"
+layout = "card_grid"
+cut = "grid"
+double_sided = true
+
+[[print_items]]
+name = "Лист-ключ для самопроверки"
+per = "per_pair"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

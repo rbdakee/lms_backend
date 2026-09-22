@@ -20,9 +20,35 @@ MATERIAL_KINDS = (
     "answer_key",
 )
 
-# В каком формате материал скачивается файлом. `.pptx` у презентации и
-# `.docx` у остальных пяти появятся с сессией L5 — вместе с их видами.
-FILE_FORMATS = {"lesson_plan": "docx"}
+# В каком формате материал скачивается файлом. Презентация — настоящий `.pptx`:
+# учитель правит слайд под свой класс, а PDF не правится (раздел 5).
+FILE_FORMATS = {kind: "docx" for kind in MATERIAL_KINDS} | {"presentation": "pptx"}
+
+# Два уровня заказа вместо флага «геймификация» (раздел 4.3). Середина —
+# значение по умолчанию: учитель проскочил вопрос, комплект всё равно собирается.
+ENGAGEMENT_LEVELS = ("calm", "active", "full_game")
+DIFFICULTY_LEVELS = ("basic", "standard", "advanced")
+DEFAULT_ENGAGEMENT = "active"
+DEFAULT_DIFFICULTY = "standard"
+
+# Из каких материалов собирается `answer_key`: у каждой их задачи есть поле
+# `answer`, заполненное тогда же, когда задача придумана (раздел 4.2).
+ANSWER_SOURCES = ("tasks", "homework", "assessment")
+
+# Чего ждёт задание, прежде чем его можно взять. План урока идёт первым,
+# пять видов получают его на вход; ключи собираются из готовых задач
+# (раздел 4.2). Ждут, пока задание-предшественник живо (`queued` или
+# `running`, включая паузу между попытками); закрытое любым исходом
+# отпускает зависимых — упавший план не должен оставить учителя без
+# остального комплекта (раздел 7).
+WAITS_FOR = {
+    "presentation": ("lesson_plan",),
+    "tasks": ("lesson_plan",),
+    "homework": ("lesson_plan",),
+    "assessment": ("lesson_plan",),
+    "game": ("lesson_plan",),
+    "answer_key": ANSWER_SOURCES,
+}
 
 KIT_STATUSES = ("generating", "ready", "partial", "failed")
 MATERIAL_STATUSES = ("queued", "generating", "ready", "failed")
@@ -67,6 +93,7 @@ JOB_ERROR_MESSAGES = {
     "model_output_invalid": "Модель вернула документ не по форме",
     "interrupted": "Генерация прервалась",
     "program_not_published": "Программа снята с публикации — генерация по ней закрыта",
+    "no_sources": "Не из чего собрать ключи: задания, домашняя и проверочная не готовы",
     "internal_error": "Внутренняя ошибка сервера",
 }
 
@@ -134,3 +161,52 @@ def _strings(value) -> Iterator[str]:
     elif isinstance(value, list):
         for item in value:
             yield from _strings(item)
+
+
+def assemble_answer_key(sources: Iterable[tuple[str, Iterable[tuple[str, object]]]]) -> dict:
+    """Ключи с ответами — из готовых материалов, без модели (раздел 4.2).
+
+    `sources` — материалы в порядке видов, каждый — блоками в порядке формы.
+    Группа задач в любой схеме — объект с `title` и списком `tasks`, у каждой
+    задачи есть `text` и `answer`; остальное устройство схемы вида ключам
+    безразлично. Поэтому новая форма задания не требует правки сборки.
+
+    Ответ: по ключу на вид, внутри — группы в порядке документа и задачи
+    с номером внутри группы, как их видит ребёнок на карточке.
+    """
+    key: dict[str, list[dict]] = {}
+    for kind, blocks in sources:
+        groups = [
+            {
+                # Блок, из которого группа: у заданий это уровень карточек, и без
+                # него две карточки «Найди пару» разных уровней в ключах не различить
+                "block": name,
+                "title": group.get("title") or "",
+                "answers": [
+                    {"number": number, "task": task["text"], "answer": task["answer"]}
+                    for number, task in enumerate(group["tasks"], start=1)
+                ],
+            }
+            for name, value in blocks
+            for group in _task_groups(value)
+        ]
+        if groups:
+            key[kind] = groups
+    return key
+
+
+def _task_groups(value) -> Iterator[dict]:
+    if isinstance(value, dict):
+        tasks = value.get("tasks")
+        if isinstance(tasks, list) and tasks and all(_is_task(task) for task in tasks):
+            yield value
+            return
+        for item in value.values():
+            yield from _task_groups(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _task_groups(item)
+
+
+def _is_task(value) -> bool:
+    return isinstance(value, dict) and "text" in value and "answer" in value

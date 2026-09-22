@@ -1,0 +1,85 @@
+id = "magic_square"
+title = "Магический квадрат"
+family = "grid_puzzle"
+status = "draft"
+
+summary = """
+Квадрат из клеток, в котором суммы каждой строки, каждого столбца и обеих \
+диагоналей равны. Часть чисел дана, остальные ребёнок восстанавливает, \
+рассуждая от строки, где пропуск один."""
+scoring = "Очков нет: квадрат, где все суммы сошлись, решён; пара, первой нашедшая все пропуски, — жетон."
+
+subjects = ["math"]
+content_shapes = ["short_answer", "multi_step"]
+math_topics = ["arithmetic", "mental_math", "logic", "patterns"]
+grade_min = 3
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["middle", "end"]
+duration_min = 7
+duration_max = 15
+grouping = ["individual", "pairs"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 2
+rules_complexity = "medium"
+student_reading = "short"
+movement = "seated"
+noise = "quiet"
+competition = "none"
+teacher_role = "observer"
+
+self_check = "self_revealing"
+invariants = [
+  "Все строки, столбцы и обе диагонали полного квадрата дают одну и ту же сумму.",
+  "Данных чисел хватает, чтобы пропуски восстанавливались однозначно.",
+  "Есть хотя бы одна строка, столбец или диагональ с единственным пропуском — с неё начинают.",
+  "Магическая сумма названа в задании или однозначно выводится из полной строки.",
+]
+model_generates = [
+  "Полный квадрат и какие клетки оставить пустыми.",
+  "Магическую сумму и формулировку задания под сюжет.",
+  "Ключ; на advanced — числовой ребус с буквами.",
+]
+pitfalls = [
+  "Квадрат, не проверенный по диагоналям, — ребёнок находит противоречие и решает, что ошибся сам.",
+  "Слишком много пропусков без строки с одним пропуском — задача превращается в перебор.",
+  "Большие числа в клетках 3 класса переводят игру из логики в счёт столбиком.",
+]
+in_class_differentiation = "Один квадрат — разное число пропусков: у кого-то два, у кого-то пять."
+combines_with = ["number_crossword", "math_detective", "station_quest"]
+station_ready = true
+lang_sensitive = false
+
+props = []
+server_assets = ["tokens", "diploma"]
+prep_effort = "none"
+replayability = "single_use"
+
+source = "Картотека L5, 22.09.2026, раздел 2.8"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "Квадрат 3×3 с числами до 20, три пропуска, магическая сумма дана."
+standard = "Квадрат 3×3 с числами до 100 или 4–5 пропусков; сумму надо найти по полной строке."
+advanced = "Квадрат 4×4 с двумя пропусками по строкам; числовые ребусы с буквами (М + М = КМ)."
+
+[lang_notes]
+kz = "Буквы в ребусе на advanced — казахские, как в слове урока; ребус не переводится с русского."
+
+[[print_items]]
+name = "Сетка квадрата с заданием"
+per = "per_student"
+count = "по числу детей"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Ключ"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

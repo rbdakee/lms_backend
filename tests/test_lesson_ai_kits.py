@@ -215,6 +215,9 @@ def test_order_answers_with_the_contract_shape(client, sms, scene):
         "topic": TOPIC,
         "class_size": 24,
         "notes": NOTES,
+        # Уровни не присланы — середина по умолчанию (L5, раздел 4.3 брифа)
+        "engagement_level": "active",
+        "difficulty_level": "standard",
         "status": "generating",
         "created_at": body["created_at"],
         "updated_at": body["updated_at"],
@@ -296,13 +299,13 @@ def test_unknown_objective_is_404(client, sms, scene):
 
 
 def test_contract_validation_errors(client, sms, scene):
-    """Два отказа из контракта — дословно: вид, которого генератор не умеет,
+    """Два отказа из контракта — дословно: вид, которого нет среди семи,
     и тема из одних пробелов. Экран подсвечивает поле по имени."""
     login(client, sms)
 
-    game = order(client, scene.objective.id, kinds=["game"])
-    assert game.status_code == 422
-    assert game.json() == invalid("kinds.0", "Input should be 'lesson_plan'")
+    unknown = order(client, scene.objective.id, kinds=["quiz"])
+    assert unknown.status_code == 422
+    assert unknown.json()["error"]["details"]["fields"][0]["field"] == "kinds.0"
 
     blank = order(client, scene.objective.id, topic="   \t ")
     assert blank.status_code == 422

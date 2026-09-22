@@ -1,0 +1,85 @@
+id = "sea_battle"
+title = "Морской бой с примерами"
+family = "hidden_grid"
+status = "draft"
+
+summary = """
+У каждого в паре — своё поле 5×5 с уже расставленными кораблями и пустое поле \
+соперника. Ход: назвал координату клетки — соперник читает пример из неё; \
+верный ответ по кораблю — «попал», неверный или пустая клетка — «мимо»."""
+scoring = "Побеждает первым потопивший все корабли соперника; заодно закрепляется адресация «столбец — строка»."
+
+subjects = ["any"]
+content_shapes = ["short_answer", "spatial"]
+math_topics = ["coordinates", "arithmetic", "multiplication_table"]
+grade_min = 3
+grade_max = 4
+engagement_levels = ["active"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 15
+duration_max = 20
+grouping = ["pairs"]
+print_unit = "per_pair"
+group_size_min = 2
+group_size_max = 2
+rules_complexity = "medium"
+student_reading = "short"
+movement = "seated"
+noise = "voiced"
+competition = "individual"
+teacher_role = "facilitator"
+
+self_check = "peer_check"
+invariants = [
+  "Корабли расставлены заранее; у двух бланков пары одинаковые число и размеры кораблей, но разная расстановка.",
+  "Каждая клетка корабля несёт пример, и его ответ напечатан на бланке владельца рядом с примером.",
+  "Корабли не касаются друг друга и не выходят за поле.",
+  "Координаты подписаны одинаково на обоих бланках: столбцы буквами, строки числами.",
+]
+model_generates = [
+  "Две расстановки кораблей для пары.",
+  "Примеры с ответами для клеток кораблей.",
+  "Морской сюжет под тему урока и правила на полстраницы.",
+]
+pitfalls = [
+  "Самостоятельная расстановка кораблей съедает пол-урока — только готовые бланки.",
+  "Ответы не на бланке владельца — он не может проверить соперника, и партия встаёт.",
+  "Одинаковые бланки у соседних пар — «подсмотрели» через парту; расстановок нужно несколько.",
+]
+in_class_differentiation = "Два набора бланков: у одних пар табличные случаи, у других — задачи; поля одинаковые."
+combines_with = ["math_detective", "knowledge_auction", "station_quest"]
+station_ready = false
+lang_sensitive = false
+
+props = ["pencils"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "low"
+replayability = "single_use"
+
+source = "Картотека L5, 22.09.2026, раздел 3.6"
+export_shape = "none"
+
+[lang_notes]
+kz = "Столбцы подписываются буквами казахского алфавита по порядку (А, Ә, Б, В, Г…) или числами — одинаково на обоих бланках."
+
+[difficulty_scaling]
+basic = "Поле 4×4, табличные случаи умножения и деления."
+standard = "Поле 6×6, все действия."
+advanced = "Попадание — только по решённой задаче в два действия; корабль из двух клеток требует двух разных верных ответов подряд."
+
+[[print_items]]
+name = "Бланк игрока: своё поле с кораблями и пустое поле соперника"
+per = "per_pair"
+count = "2 (разные расстановки)"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Правила на полстраницы"
+per = "per_pair"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false

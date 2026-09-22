@@ -12,8 +12,9 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Response
 
+from app.adapters import lesson_files
 from app.adapters.db.models import User
-from app.adapters.docx.lesson_plan import PlanHeader, render_lesson_plan
+from app.adapters.docx.common import DocHeader
 from app.api import deps
 from app.api.schemas_lesson_ai import (
     LessonBlockEditIn,
@@ -44,6 +45,8 @@ def create_kit(
             kinds=list(body.kinds),
             class_size=body.class_size,
             notes=body.notes,
+            engagement_level=body.engagement_level,
+            difficulty_level=body.difficulty_level,
         )
     )
 
@@ -57,9 +60,7 @@ def kit(
     return LessonKitOut(**svc.kit(user, kit_id))
 
 
-# -- Материал: файл, блоки, история (сессия L4) ---------------------------
-
-DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# -- Материал: файл, блоки, история (сессии L4 и L5) ----------------------
 
 Materials = Annotated[LessonMaterialsService, Depends(deps.get_lesson_materials_service)]
 CurrentUser = Annotated[User, Depends(deps.get_current_user)]
@@ -68,28 +69,35 @@ CurrentUser = Annotated[User, Depends(deps.get_current_user)]
 @router.get(
     "/materials/{material_id}/file",
     response_class=Response,
-    responses={200: {"content": {DOCX: {}}, "description": "Документ Word"}},
+    responses={
+        200: {
+            "content": {media: {} for media in lesson_files.MEDIA_TYPES.values()},
+            "description": "Документ Word, у презентации — PowerPoint",
+        }
+    },
 )
 def material_file(material_id: int, user: CurrentUser, svc: Materials) -> Response:
     # Сборка документа из данных сценария — сериализация ответа, как PDF
     # сертификата: свести содержимое в байты роутеру можно
     file = svc.file(user, material_id)
-    header = PlanHeader(
+    header = DocHeader(
         lang=file.lang, teacher_name=file.teacher_name, grade=file.grade, topic=file.topic
     )
     return Response(
-        render_lesson_plan(file.content, header),
-        media_type=DOCX,
+        lesson_files.render(file.kind, file.content, header),
+        media_type=lesson_files.MEDIA_TYPES[file.format],
         headers={"content-disposition": _disposition(file)},
     )
 
 
 def _disposition(file: MaterialFile) -> str:
-    """Имя файла — «ҚМЖ — тема урока.docx»: учитель складывает планы
-    в одну папку, и по номеру их не различить. Имя в UTF-8 уходит
-    в `filename*`, а в `filename` — запасное из ASCII для старых клиентов."""
+    """Имя файла — «Вид — тема урока.docx» на языке обучения: учитель
+    складывает материалы в одну папку, и по номеру их не различить. Имя
+    в UTF-8 уходит в `filename*`, а в `filename` — запасное из ASCII для
+    старых клиентов."""
+    title = lesson_files.TITLES[file.lang][file.kind]
     topic = "".join(ch for ch in file.topic if ch not in '\\/:*?"<>|\r\n\t')[:80].strip()
-    name = f"ҚМЖ — {topic}.{file.format}" if topic else f"ҚМЖ.{file.format}"
+    name = f"{title} — {topic}.{file.format}" if topic else f"{title}.{file.format}"
     fallback = f"{file.kind}_{file.kit_id}.{file.format}"
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name)}"
 

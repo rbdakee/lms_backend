@@ -1,0 +1,98 @@
+id = "track_race"
+title = "Гонка по трассе"
+family = "board_race"
+status = "draft"
+
+summary = """
+На общей трассе из клеток-этапов у каждой команды своя фишка-машинка. \
+Команда решает свой комплект заданий и за каждый верный ответ передвигает \
+фишку на клетку вперёд. Дистанция у всех одна, комплекты разные, чтобы не списывать."""
+scoring = "Первая у финиша — победила; верность проверяет учитель по ключу, неверный ответ — машинка стоит."
+
+subjects = ["any"]
+content_shapes = ["short_answer", "multi_step"]
+math_topics = ["arithmetic", "mental_math", "word_problems"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["active"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 10
+duration_max = 15
+grouping = ["teams"]
+print_unit = "per_team"
+group_size_min = 4
+group_size_max = 6
+rules_complexity = "simple"
+student_reading = "short"
+movement = "at_board"
+noise = "voiced"
+competition = "team"
+teacher_role = "referee"
+
+self_check = "teacher_check"
+invariants = [
+  "Число заданий в комплекте каждой команды равно числу клеток трассы до финиша.",
+  "Комплекты команд равны по трудности и различаются числами, а не видом заданий.",
+  "Ключ учителя сгруппирован по комплектам, чтобы проверка шла за секунды.",
+  "На advanced обе ветки развилки приводят к финишу, короткая — через более трудные клетки.",
+]
+model_generates = [
+  "Комплекты заданий по числу команд и ключ по каждому.",
+  "Названия этапов трассы под сюжет урока.",
+  "Задания пит-стопов для advanced.",
+]
+pitfalls = [
+  "Комплекты «по цвету» на чёрно-белом принтере не различить — комплекты помечаются значками: круг, звезда, треугольник, квадрат.",
+  "Учитель не успевает проверять шесть команд сразу — ответы на полоске, одна проверка за раз, остальные решают дальше.",
+  "Трасса длиннее комплекта — никто не финиширует.",
+]
+in_class_differentiation = "Внутри команды задания распределены по силе: у каждого своё, двигают машинку вместе."
+combines_with = ["relay_ladder", "knowledge_auction", "true_false_signals", "dice_board"]
+station_ready = false
+lang_sensitive = false
+
+props = ["magnets"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "reusable_frame"
+
+source = "Картотека L5, 22.09.2026, раздел 3.8"
+export_shape = "quiz_4_options"
+
+[difficulty_scaling]
+basic = "Задания одного вида, трасса короткая — 6–8 клеток."
+standard = "Задания вразброс, трасса 10–12 клеток."
+advanced = "«Пит-стопы»: на отмеченных клетках команда объясняет решение вслух; «развилки»: короткий трудный путь или длинный простой — выбор команды."
+
+[[print_items]]
+name = "Трасса"
+per = "per_class"
+count = "1"
+layout = "board_a3_split"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Фишки-машинки со значком команды"
+per = "per_team"
+count = "1"
+layout = "card_grid"
+cut = "contour"
+double_sided = false
+
+[[print_items]]
+name = "Комплект заданий со значком команды"
+per = "per_team"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Ключ учителя по комплектам"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

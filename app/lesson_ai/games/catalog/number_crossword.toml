@@ -1,0 +1,82 @@
+id = "number_crossword"
+title = "Числовой кроссворд"
+family = "grid_puzzle"
+status = "draft"
+
+summary = """
+Кроссворд, в клетках которого не буквы, а цифры ответов: примеры-вопросы \
+идут по горизонтали и вертикали, по одной цифре в клетку. Пересечения \
+проверяют сами себя — цифра, не сходящаяся на пересечении, сигналит об ошибке."""
+scoring = "Очков нет: кроссворд заполнен и все пересечения сошлись — задание решено."
+
+subjects = ["math"]
+content_shapes = ["short_answer"]
+math_topics = ["arithmetic", "multiplication_table", "place_value", "column_arithmetic"]
+grade_min = 2
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 10
+duration_max = 20
+grouping = ["individual"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 1
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "quiet"
+competition = "none"
+teacher_role = "observer"
+
+self_check = "self_revealing"
+invariants = [
+  "Число клеток слова равно числу цифр его ответа.",
+  "На каждом пересечении цифры горизонтального и вертикального ответа совпадают.",
+  "Каждый ответ однозначен, и нумерация вопросов совпадает с нумерацией клеток сетки.",
+  "Ни один ответ не начинается с нуля.",
+]
+model_generates = [
+  "Примеры-вопросы по горизонтали и вертикали и их ответы.",
+  "Расстановку ответов в сетке с пересечениями.",
+  "Ключ отдельным листом и название под тему урока.",
+]
+pitfalls = [
+  "Сетку придумывают раньше ответов — пересечения не сходятся, и кроссворд нерешаем.",
+  "Однозначные ответы не дают пересечений: нужны двух-трёхзначные.",
+  "Без пересечений кроссворд — просто столбик примеров, самопроверка пропадает.",
+]
+in_class_differentiation = "Часть ответов уже вписана у тех, кому нужна опора: сетка та же."
+combines_with = ["magic_square", "decode_word", "station_quest"]
+station_ready = true
+lang_sensitive = false
+
+props = []
+server_assets = ["tokens", "diploma"]
+prep_effort = "none"
+replayability = "single_use"
+
+source = "Картотека L5, 22.09.2026, раздел 2.8"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "5–6 примеров на сложение и вычитание, двузначные ответы."
+standard = "10–12 примеров на все действия, двух- и трёхзначные ответы."
+advanced = "Ответы — результаты действий в два шага; часть вопросов — уравнения с неизвестным."
+
+[[print_items]]
+name = "Сетка кроссворда с вопросами"
+per = "per_student"
+count = "по числу детей"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Ключ"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

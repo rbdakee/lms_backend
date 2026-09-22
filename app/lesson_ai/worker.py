@@ -18,6 +18,7 @@ from app.adapters.ai.openai_chat import OpenAiChat
 from app.adapters.db.base import get_engine
 from app.application.lesson_ai_queue import JobRunner
 from app.config import Settings
+from app.lesson_ai.games.mechanic import catalog
 from app.lesson_ai.kinds import generators
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,9 @@ def lease_seconds(cfg: Settings) -> int:
 
 
 def start_workers(cfg: Settings) -> Workers:
+    # Каталог игр читается сразу: кривая карточка — отказ старта с именем
+    # файла, а не упавшая посреди ночи генерация игры
+    log.info("Жоспар: механик в каталоге игр: %s", len(catalog()))
     ai = OpenAiChat(cfg, model=cfg.lesson_ai_model, timeout_sec=cfg.lesson_ai_timeout_sec)
     runner = JobRunner(
         lambda: DbSession(get_engine()),

@@ -1,0 +1,82 @@
+id = "color_by_answer"
+title = "Раскрась по ответу"
+family = "reveal"
+status = "draft"
+
+summary = """
+Картинка разбита на области, в каждой — пример; легенда внизу говорит, какой \
+штриховкой закрашивается каждый ответ. Правильность проверяет сама картинка: \
+ошибся — узор не сходится с образцом. Мотор игры — любопытство «что там нарисовано»."""
+scoring = "Очков нет: результат — открывшаяся картинка, сверка с образцом учителя."
+
+subjects = ["any"]
+content_shapes = ["short_answer"]
+math_topics = ["arithmetic", "multiplication_table", "mental_math", "fractions"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["middle", "end"]
+duration_min = 10
+duration_max = 20
+grouping = ["individual"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 1
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "quiet"
+competition = "none"
+teacher_role = "observer"
+
+self_check = "self_revealing"
+invariants = [
+  "Ответ каждой области есть в легенде, и ему соответствует ровно одна штриховка.",
+  "Области одной штриховки вместе дают узнаваемую часть картинки; ответ-ловушка на advanced ведёт к чужой штриховке.",
+  "Штриховок не больше пяти, и они различимы на чёрно-белой печати: точки, полоски, клетка, косая, без узора.",
+  "Каждая область достаточно крупная, чтобы в неё вписался пример и её можно было заштриховать.",
+]
+model_generates = [
+  "Примеры для областей и их ответы.",
+  "Легенду «ответ — штриховка».",
+  "Что изображено на картинке — под сюжет урока — и какие области каким ответом помечены.",
+]
+pitfalls = [
+  "Цвет заливкой на чёрно-белом принтере превращается в серые пятна — только штриховки.",
+  "Мелкие области с примерами внутри не прочесть и не закрасить — ребёнок бросает на середине.",
+  "Картинка угадывается по контуру раньше решения — дети закрашивают на глаз, не считая.",
+]
+in_class_differentiation = "Одна картинка — два набора примеров: легенда общая, примеры в областях разной сложности."
+combines_with = ["decode_word", "story_journey", "maze_chain"]
+station_ready = false
+lang_sensitive = false
+
+props = ["pencils"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "none"
+replayability = "single_use"
+
+source = "Картотека L5, 22.09.2026, раздел 2.3"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "Действия в пределах 10, 4–5 областей."
+standard = "В пределах 100 и таблица умножения, 8–10 областей."
+advanced = "Примеры в несколько действий, доли («заштрихуй половину области»), две области с ответом-ловушкой, отличающимся на единицу."
+
+[[print_items]]
+name = "Раскраска с легендой"
+per = "per_student"
+count = "по числу детей"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Образец учителя"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

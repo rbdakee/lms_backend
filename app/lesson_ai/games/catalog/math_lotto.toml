@@ -1,0 +1,83 @@
+id = "math_lotto"
+title = "Математическое лото"
+family = "call_and_mark"
+status = "draft"
+
+summary = """
+Ведущий тянет карточки с примерами и читает вслух; игроки решают в уме \
+и закрывают фишкой клетку с ответом на своей карточке. Побеждает первый \
+закрытый ряд, затем «полный дом»."""
+scoring = "Ряд — 1 балл, вся карточка — 3. Партия — 5–10 минут, за урок — две-три партии."
+
+subjects = ["any"]
+content_shapes = ["short_answer"]
+math_topics = ["arithmetic", "multiplication_table", "mental_math"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm", "active"]
+level_shift = """
+Ряд против ряда: одна карточка на ряд, ответ ряд даёт хором, очки на доске. \
+Появляется шум и командный счёт — это уже active."""
+lesson_phases = ["middle"]
+duration_min = 5
+duration_max = 15
+grouping = ["individual", "teams"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 1
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "quiet"
+competition = "individual"
+teacher_role = "host"
+
+self_check = "teacher_check"
+invariants = [
+  "Каждый ответ из карточек вызова есть хотя бы на одной карточке игрока.",
+  "Внутри одной карточки игрока числа не повторяются.",
+  "Никакие две карточки игроков не совпадают целиком.",
+  "На карточке игрока нет чисел, которых нет среди ответов вызова.",
+]
+model_generates = [
+  "Примеры для карточек вызова и их ответы.",
+  "Раскладку ответов по карточкам игроков.",
+  "Название игры и одну фразу сюжета под тему урока.",
+]
+pitfalls = [
+  "Число, которого нет среди ответов вызова, делает клетку незакрываемой — ребёнок ждёт до конца и скучает.",
+  "Ответы, различающиеся на единицу, на одной карточке — хорошая ловушка для advanced и плохая для basic.",
+]
+in_class_differentiation = "Разным детям — карточки разной сложности при общем вызове: снаружи они одинаковые."
+combines_with = ["story_journey", "station_quest"]
+station_ready = true
+lang_sensitive = false
+
+props = ["counters"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Картотека L5, 22.09.2026, раздел 2.1"
+export_shape = "quiz_4_options"
+
+[difficulty_scaling]
+basic = "Ответы в пределах 10, примеры одного действия, карточка 3×3."
+standard = "В пределах 100 и таблица умножения; для 3–4 классов карточка 4×4."
+advanced = "Примеры в два действия («7×8−6»), пропущенный множитель; обратное лото: ведущий называет число, игрок ищет пример с таким ответом."
+
+[[print_items]]
+name = "Карточки игроков"
+per = "per_student"
+count = "по числу детей, не меньше 6 разных"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Карточки вызова"
+per = "per_class"
+count = "20–30"
+layout = "card_grid"
+cut = "grid"
+double_sided = false

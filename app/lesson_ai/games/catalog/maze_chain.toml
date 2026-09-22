@@ -1,0 +1,82 @@
+id = "maze_chain"
+title = "Лабиринт-цепочка"
+family = "chain"
+status = "draft"
+
+summary = """
+Поле из клеток с числами; из каждой клетки несколько выходов к соседям. \
+Ребёнок идёт от старта туда, где стоит верный ответ примера текущей клетки, \
+и доходит до выхода; путь обводит карандашом. Неверный ответ ведёт в тупик."""
+scoring = "Очко за каждый верный поворот; дошёл до выхода без тупиков — жетон."
+
+subjects = ["any"]
+content_shapes = ["short_answer"]
+math_topics = ["arithmetic", "mental_math", "multiplication_table"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 5
+duration_max = 12
+grouping = ["individual"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 1
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "quiet"
+competition = "individual"
+teacher_role = "observer"
+
+self_check = "self_revealing"
+invariants = [
+  "Среди соседей каждой клетки пути верный ответ её примера стоит ровно в одной.",
+  "Верный путь от старта единственный и кончается на выходе.",
+  "Каждый неверный соседний ответ ведёт в тупик или обратно, а не на выход.",
+  "Клетка выхода достижима только верным путём.",
+]
+model_generates = [
+  "Верный путь и примеры на его клетках.",
+  "Числа-ловушки в соседних клетках (типичные ошибки: ±1, перепутанное действие).",
+  "Сюжет выхода («помоги ёжику добраться до дома») и ключ учителя.",
+]
+pitfalls = [
+  "Верный ответ стоит у двух соседей сразу — лабиринт распадается на два пути, ключ врёт.",
+  "Ловушки — случайные числа, а не типичные ошибки: их отбрасывают на глаз, не решая.",
+  "Поле больше 6×6 для 1 класса не читается — клетки мелкие, стрелки теряются.",
+]
+in_class_differentiation = "Одно поле — два маршрута: слабому старт ближе к выходу, путь короче."
+combines_with = ["station_quest", "decode_word", "relay_ladder", "story_journey"]
+station_ready = true
+lang_sensitive = false
+
+props = ["pencils"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "none"
+replayability = "single_use"
+
+source = "Картотека L5, 22.09.2026, раздел 2.6"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "Выбор из двух соседей, путь в 5–6 шагов."
+standard = "Выбор из трёх соседей, путь длиннее, тупики-ловушки."
+advanced = "Обратный ход — от ответа к примеру; «выпиши по пути все числа — выйдет пароль»."
+
+[[print_items]]
+name = "Поле лабиринта"
+per = "per_student"
+count = "по числу детей"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Ключ учителя с верным путём"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

@@ -26,7 +26,7 @@ from app.adapters.db.models import (
     LessonMaterialBlock,
     LessonMaterialVersion,
 )
-from app.domain.lesson_ai import MATERIAL_KINDS, kit_status
+from app.domain.lesson_ai import MATERIAL_KINDS, WAITS_FOR, kit_status
 
 
 class LessonKitRepo:
@@ -67,6 +67,9 @@ class LessonKitRepo:
         rows = self.db.scalars(select(LessonMaterial).where(LessonMaterial.kit_id == kit_id))
         return sorted(rows, key=lambda material: MATERIAL_KINDS.index(material.kind))
 
+    def ready_blocks(self, kit_id: int, kinds: tuple[str, ...]) -> list[tuple[str, list]]:
+        return ready_blocks(self.db, kit_id, kinds)
+
     def last_errors(self, kit_id: int) -> dict[str, str]:
         """Код отказа последнего задания по каждому виду — то, что увидит
         учитель у упавшего материала."""
@@ -100,7 +103,8 @@ class LessonAiJobRepo:
                 or_(
                     and_(LessonAiJob.status == "queued", LessonAiJob.run_after <= func.now()),
                     and_(LessonAiJob.status == "running", LessonAiJob.lease_until < func.now()),
-                )
+                ),
+                _not_waiting(),
             )
             .order_by(LessonAiJob.run_after, LessonAiJob.id)
             .limit(1)
@@ -142,13 +146,16 @@ class LessonAiJobRepo:
             .with_for_update()
         )
 
-    def done(self, job: LessonAiJob, content: dict, *, user_id: int) -> None:
+    def done(
+        self, job: LessonAiJob, content: dict, *, user_id: int, mechanics: tuple[str, ...] = ()
+    ) -> None:
         """Материал готов: документ, блоки и первые версии блоков — вместе."""
         material = self._material(job)
         material.content = content
+        material.mechanics = list(mechanics)
         material.status = "ready"
         material.updated_at = func.now()
-        self._save_blocks(material.id, content, user_id=user_id)
+        save_blocks(self.db, material.id, content, user_id=user_id)
         job.status = "done"
         job.error = None
         self._close(job)
@@ -204,41 +211,91 @@ class LessonAiJobRepo:
             .values(status=status, updated_at=func.now())
         )
 
-    def _save_blocks(self, material_id: int, content: dict, *, user_id: int) -> None:
-        """Блок на каждое поле верхнего уровня и версия на каждый блок.
 
-        Блок, уже существующий, переписывается, а не заводится заново:
-        снести его — значит снести каскадом и историю правок. Блок, которого
-        в новом документе нет, удаляется: иначе он всплывал бы в документе
-        из прошлой генерации.
-        """
-        existing = {
-            block.kind: block
-            for block in self.db.scalars(
-                select(LessonMaterialBlock).where(LessonMaterialBlock.material_id == material_id)
+def ready_blocks(db: DbSession, kit_id: int, kinds: tuple[str, ...]) -> list[tuple[str, list]]:
+    """Готовые материалы комплекта из `kinds` — блоками в порядке формы.
+
+    Порядок блоков берётся из `order_index`, а не из `content`: JSONB
+    раскладывает ключи по-своему (короткие первыми), и план урока пришёл
+    бы модели с концом урока впереди начала. Не готовые — пропускаются:
+    упавший план не повод оставлять без материалов остальной комплект.
+    """
+    rows = db.execute(
+        select(LessonMaterial.kind, LessonMaterialBlock.kind, LessonMaterialBlock.content)
+        .join(LessonMaterialBlock, LessonMaterialBlock.material_id == LessonMaterial.id)
+        .where(
+            LessonMaterial.kit_id == kit_id,
+            LessonMaterial.kind.in_(kinds),
+            LessonMaterial.status == "ready",
+        )
+        .order_by(LessonMaterialBlock.order_index)
+    )
+    found: dict[str, list] = {}
+    for kind, block, content in rows:
+        found.setdefault(kind, []).append((block, content))
+    return [(kind, found[kind]) for kind in kinds if kind in found]
+
+
+def save_blocks(db: DbSession, material_id: int, content: dict, *, user_id: int) -> None:
+    """Блок на каждое поле верхнего уровня и версия на каждый блок.
+
+    Пишут двое: очередь, закрывая задание, и пересборка ключей с ответами
+    после правки задачи (`LessonMaterialRepo.replace_content`).
+
+    Блок, уже существующий, переписывается, а не заводится заново:
+    снести его — значит снести каскадом и историю правок. Блок, которого
+    в новом документе нет, удаляется: иначе он всплывал бы в документе
+    из прошлой генерации.
+    """
+    existing = {
+        block.kind: block
+        for block in db.scalars(
+            select(LessonMaterialBlock).where(LessonMaterialBlock.material_id == material_id)
+        )
+    }
+    for order_index, (kind, value) in enumerate(content.items()):
+        block = existing.pop(kind, None)
+        if block is None:
+            block = LessonMaterialBlock(material_id=material_id, kind=kind)
+            db.add(block)
+        block.order_index = order_index
+        block.content = value
+        block.updated_at = func.now()
+        db.flush()
+        db.add(
+            LessonMaterialVersion(
+                block_id=block.id, content=value, source="generated", user_id=user_id
             )
-        }
-        for order_index, (kind, value) in enumerate(content.items()):
-            block = existing.pop(kind, None)
-            if block is None:
-                block = LessonMaterialBlock(material_id=material_id, kind=kind)
-                self.db.add(block)
-            block.order_index = order_index
-            block.content = value
-            block.updated_at = func.now()
-            self.db.flush()
-            self.db.add(
-                LessonMaterialVersion(
-                    block_id=block.id, content=value, source="generated", user_id=user_id
-                )
+        )
+    if existing:
+        db.execute(
+            delete(LessonMaterialBlock).where(
+                LessonMaterialBlock.id.in_([block.id for block in existing.values()])
             )
-        if existing:
-            self.db.execute(
-                delete(LessonMaterialBlock).where(
-                    LessonMaterialBlock.id.in_([block.id for block in existing.values()])
-                )
+        )
+    db.flush()
+
+
+def _not_waiting():
+    """Задание не ждёт предшественника (`WAITS_FOR`): план урока идёт первым,
+    ключи собираются после задач. Предшественник, упавший окончательно,
+    зависимых отпускает — один сбойный вид не оставляет учителя без комплекта
+    (TEACHER_AI_BRIEF, раздел 7)."""
+    ahead = aliased(LessonAiJob)
+    conditions = [
+        or_(
+            LessonAiJob.kind != kind,
+            ~select(ahead.id)
+            .where(
+                ahead.kit_id == LessonAiJob.kit_id,
+                ahead.kind.in_(before),
+                ahead.status.in_(("queued", "running")),
             )
-        self.db.flush()
+            .exists(),
+        )
+        for kind, before in WAITS_FOR.items()
+    ]
+    return and_(*conditions)
 
 
 def objective_sections(db: DbSession, objective: LearningObjective) -> tuple[str, str]:
@@ -340,6 +397,27 @@ class LessonMaterialRepo:
                 LessonMaterialVersion.block_id == block_id,
             )
         )
+
+    def ready_blocks(self, kit_id: int, kinds: tuple[str, ...]) -> list[tuple[str, list]]:
+        return ready_blocks(self.db, kit_id, kinds)
+
+    def sibling(self, kit_id: int, kind: str) -> LessonMaterial | None:
+        """Соседний материал того же комплекта — под замок: ключи с ответами
+        пересобираются после правки задачи, и две правки разом не должны
+        перетереть ключи друг другу."""
+        return self.db.scalar(
+            select(LessonMaterial)
+            .where(LessonMaterial.kit_id == kit_id, LessonMaterial.kind == kind)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+    def replace_content(self, material: LessonMaterial, content: dict, *, user_id: int) -> None:
+        """Документ целиком — заново, как при генерации: блоки и по версии
+        на каждый. Так пересобираются ключи с ответами — сервером, не моделью."""
+        material.content = content
+        material.updated_at = func.now()
+        save_blocks(self.db, material.id, content, user_id=user_id)
 
     def write_block(
         self,

@@ -35,6 +35,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.domain.iin import IIN_PLACEHOLDER
 from app.domain.lesson_ai import (
+    DEFAULT_DIFFICULTY,
+    DEFAULT_ENGAGEMENT,
+    DIFFICULTY_LEVELS,
+    ENGAGEMENT_LEVELS,
     JOB_STATUSES,
     KIT_STATUSES,
     MATERIAL_KINDS,
@@ -1037,6 +1041,14 @@ class LessonKit(Base):
     # Необязательное из заказа: сколько детей и на чём сделать акцент.
     class_size: Mapped[int | None] = mapped_column(Integer)
     notes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Два уровня заказа (раздел 4.3): насколько игровым идёт урок и какой
+    # у класса уровень. Середина по умолчанию — вопрос не блокирующий.
+    engagement_level: Mapped[str] = mapped_column(
+        Text, default=DEFAULT_ENGAGEMENT, server_default=DEFAULT_ENGAGEMENT
+    )
+    difficulty_level: Mapped[str] = mapped_column(
+        Text, default=DEFAULT_DIFFICULTY, server_default=DEFAULT_DIFFICULTY
+    )
     # Сводка по материалам, а не отдельное состояние: пишется только
     # пересчётом после каждого закрытого задания (`kit_status` в домене).
     status: Mapped[str] = mapped_column(Text, default="generating", server_default="generating")
@@ -1047,6 +1059,8 @@ class LessonKit(Base):
         CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
         CheckConstraint(_in("status", KIT_STATUSES), name="status"),
         CheckConstraint("class_size BETWEEN 1 AND 60", name="class_size"),
+        CheckConstraint(_in("engagement_level", ENGAGEMENT_LEVELS), name="engagement_level"),
+        CheckConstraint(_in("difficulty_level", DIFFICULTY_LEVELS), name="difficulty_level"),
         # Свои уроки учитель видит списком, свежие сверху
         Index("ix_lesson_kit_user_id_id", "user_id", "id"),
     )
@@ -1070,6 +1084,14 @@ class LessonMaterial(Base):
     content: Mapped[dict | None] = mapped_column(JSONB)
     # Готовый файл — .docx или .pptx; появится с выгрузкой (сессии L4 и L5).
     file_path: Mapped[str | None] = mapped_column(Text)
+    # Слаги механик из каталога игр, отданных модели как строительные блоки
+    # (`app/lesson_ai/games/catalog`). Пишет сервер: он знает, что отдал, а модель
+    # могла бы ответить неправду. Массив строк, а не внешний ключ — таблицы
+    # механик нет, каталог — файлы. Нужен, чтобы потом посчитать, из каких
+    # механик вырастают игры, которые нравятся методистам.
+    mechanics: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), default=list, server_default="{}"
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 

@@ -35,6 +35,8 @@ class Generated:
     content: dict
     tokens_in: int = 0
     tokens_out: int = 0
+    # Механики каталога игр, отданные модели как строительные блоки
+    mechanics: tuple[str, ...] = ()
 
 
 class MaterialGenerator(Protocol):
@@ -43,9 +45,12 @@ class MaterialGenerator(Protocol):
     `prepare` читает базу и отказывает, если генерировать нельзя
     (`JobError`); `generate` зовёт модель и в базу не ходит вовсе —
     поэтому долгий вызов идёт без открытой транзакции.
+
+    `model` — None у вида, который собирает сервер без модели (ключи
+    с ответами): расхода нет, и записывать нечего.
     """
 
-    model: str
+    model: str | None
 
     def prepare(self, db: DbSession, kit: LessonKit) -> Any: ...
 
@@ -113,7 +118,7 @@ class JobRunner:
             repo.add_usage(
                 job, tokens_in=result.tokens_in, tokens_out=result.tokens_out, model=generator.model
             )
-            repo.done(job, result.content, user_id=user_id)
+            repo.done(job, result.content, user_id=user_id, mechanics=result.mechanics)
             db.commit()
 
     def _fail(self, job_id: int, attempt: int, exc: JobError, *, model: str | None = None) -> None:

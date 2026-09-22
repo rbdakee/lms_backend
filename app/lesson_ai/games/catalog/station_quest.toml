@@ -1,0 +1,89 @@
+id = "station_quest"
+title = "Квест по станциям"
+family = "stations"
+status = "draft"
+
+summary = """
+Команды проходят 5–7 станций, расставленных по классу; на каждой — конверт \
+с заданием и запечатанный ключ для самопроверки. Пройденная станция — печать \
+в паспорт команды; в финале печати складываются в слово или открывают «сундук»."""
+scoring = "Побеждает команда, первой собравшая все печати без ошибок; ошибка — вернуться и перерешать, а не штраф."
+
+subjects = ["any"]
+content_shapes = ["short_answer", "multi_step", "spatial", "open_response"]
+math_topics = ["arithmetic", "word_problems", "logic", "shapes"]
+grade_min = 2
+grade_max = 4
+engagement_levels = ["full_game"]
+level_shift = ""
+lesson_phases = ["whole_lesson"]
+duration_min = 30
+duration_max = 35
+grouping = ["teams"]
+print_unit = "per_team"
+group_size_min = 4
+group_size_max = 6
+rules_complexity = "medium"
+student_reading = "sentences"
+movement = "around_class"
+noise = "loud"
+competition = "team"
+teacher_role = "facilitator"
+
+self_check = "answer_key"
+invariants = [
+  "Ответ каждой станции однозначен и есть в её ключе.",
+  "Буквы или числа всех станций вместе дают финальное слово или код ровно одним способом.",
+  "На advanced ответ станции — координата следующей, и маршрут каждой команды проходит все станции.",
+]
+model_generates = [
+  "Сюжет квеста под тему урока и названия станций.",
+  "Задание и ключ каждой станции.",
+  "Финальное слово или код и то, как станции в него складываются.",
+  "Роли в команде: навигатор, хранитель паспорта, счётчик.",
+]
+pitfalls = [
+  "Все команды на одной станции — очередь и шум; на advanced маршруты в разном порядке, на basic — хотя бы разные стартовые станции.",
+  "Станция дольше 6 минут ломает весь урок: 5–7 станций за 30 минут.",
+  "План урока строится под квест, а не наоборот: фазы ҚМЖ переименованы, но соблюдены.",
+]
+combines_with = ["math_lotto", "maze_chain", "tangram", "decode_word"]
+station_ready = false
+lang_sensitive = false
+
+props = ["envelopes"]
+server_assets = ["stickers", "tokens", "diploma"]
+prep_effort = "high"
+replayability = "single_use"
+
+source = "Картотека L5, 22.09.2026, раздел 4.1"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "4 станции по 3 однотипных примера, проверка прямым ключом."
+standard = "6 станций разных типов: пример, задача, головоломка, лабиринт."
+advanced = "Маршрут зашифрован: ответ станции — координата следующей; у команд маршруты в разном порядке."
+
+[[print_items]]
+name = "Паспорт команды"
+per = "per_team"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Табличка и задание станции"
+per = "per_class"
+count = "по числу станций"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Ключ станции для конверта"
+per = "per_class"
+count = "по числу станций"
+layout = "strip"
+cut = "grid"
+double_sided = false

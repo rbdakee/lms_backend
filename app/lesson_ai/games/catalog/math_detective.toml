@@ -1,0 +1,101 @@
+id = "math_detective"
+title = "Математический детектив"
+family = "deduction"
+status = "draft"
+
+summary = """
+В классе «происшествие» — пропал торт, приходил таинственный гость; у каждой \
+команды «дело»: список подозреваемых и улики-задания. Решённая улика исключает \
+подозреваемых («рост виновника больше 120 см — реши и узнай») или добавляет \
+деталь портрета."""
+scoring = "Побеждает команда, первой назвавшая верного виновника с цепочкой улик; ответ сверяется с «секретным конвертом»."
+
+subjects = ["any"]
+content_shapes = ["multi_step", "measurement", "classification"]
+math_topics = ["word_problems", "logic", "measurement", "arithmetic"]
+grade_min = 3
+grade_max = 4
+engagement_levels = ["full_game"]
+level_shift = ""
+lesson_phases = ["whole_lesson"]
+duration_min = 30
+duration_max = 40
+grouping = ["teams"]
+print_unit = "per_team"
+group_size_min = 4
+group_size_max = 6
+rules_complexity = "complex"
+student_reading = "sentences"
+movement = "seated"
+noise = "voiced"
+competition = "team"
+teacher_role = "facilitator"
+
+self_check = "answer_key"
+invariants = [
+  "После всех верных улик остаётся ровно один подозреваемый.",
+  "Каждая улика исключает хотя бы одного подозреваемого или сужает портрет; ни одна не решает дело в одиночку.",
+  "Признаки подозреваемых на карточках однозначно сравниваются с ответами улик: числа, единицы измерения, «больше — меньше».",
+  "На advanced ложная улика выдаёт себя вычислением: принятая на веру, она противоречит двум другим или исключает всех.",
+]
+model_generates = [
+  "Сюжет происшествия под тему урока и 4–6 вымышленных подозреваемых с признаками.",
+  "5–7 улик-заданий и что каждая исключает.",
+  "Схему места происшествия и текст «секретного конверта».",
+  "Роли в команде: следователь, секретарь, эксперт по вычислениям.",
+]
+pitfalls = [
+  "Улики, решённые не в том порядке, противоречат друг другу — каждая должна работать независимо от порядка.",
+  "Виновник угадывается по картинке или имени раньше вычислений — признаки только числовые, портреты одинаково нейтральны.",
+  "Подозреваемые — вымышленные персонажи; ни реальных людей, ни одноклассников, ни учителей.",
+  "План урока строится под расследование, фазы ҚМЖ переименованы, но соблюдены.",
+]
+in_class_differentiation = "Улики в деле разной трудности; секретарь команды распределяет их по силам."
+combines_with = ["magic_square", "sea_battle", "decode_word", "tangram"]
+station_ready = false
+lang_sensitive = false
+
+props = ["envelopes"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "high"
+replayability = "single_use"
+
+source = "Картотека L5, 22.09.2026, раздел 4.2"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "Улики исключают по одному признаку, 4 подозреваемых."
+standard = "Улики по двум признакам и не по порядку важности, 5–6 подозреваемых."
+advanced = "Одна улика намеренно ложная и проверяется вычислением; финал — «обвинение с доказательством»: записать всю цепочку умозаключений."
+
+[[print_items]]
+name = "Карточки подозреваемых"
+per = "per_team"
+count = "4–6"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Улики-задания"
+per = "per_team"
+count = "5–7"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Схема места происшествия и бланк дела"
+per = "per_team"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "«Секретный конверт» с ответом"
+per = "per_class"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false

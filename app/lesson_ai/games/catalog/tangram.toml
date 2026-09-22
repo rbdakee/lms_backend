@@ -1,0 +1,90 @@
+id = "tangram"
+title = "Танграм и геометрическая мозаика"
+family = "spatial"
+status = "draft"
+
+summary = """
+Семь фигур, вырезанных из квадрата, складываются по силуэту: зверь, дом, \
+корабль. По ходу дети называют и считают фигуры, стороны и углы; усложнение — \
+«сложи фигуру площадью 8 клеток»."""
+scoring = "Соревнование мягкое: силуэт сложен — жетон, у кого больше силуэтов за время."
+
+subjects = ["any"]
+content_shapes = ["spatial", "measurement"]
+math_topics = ["shapes", "measurement"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["middle"]
+duration_min = 5
+duration_max = 20
+grouping = ["individual"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 1
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "quiet"
+competition = "individual"
+teacher_role = "observer"
+
+self_check = "self_revealing"
+invariants = [
+  "Набор — ровно семь классических частей квадрата: два больших треугольника, средний, два малых, квадрат, параллелограмм.",
+  "Каждый силуэт складывается из всех семи частей без наложений и дыр.",
+  "Силуэт напечатан в том же масштабе, что и части: сложенные части ложатся прямо на карточку.",
+  "Вопросы по фигурам (сколько треугольников, какой площади) проверяются по самому набору.",
+]
+model_generates = [
+  "Выбор силуэтов под сюжет урока и подписи к ним.",
+  "Вопросы по ходу: назови, посчитай стороны и углы, найди площадь в клетках.",
+  "Задание advanced «составь свой силуэт и опиши его».",
+]
+pitfalls = [
+  "Силуэт в другом масштабе, чем части, не собирается — выглядит как ошибка ребёнка.",
+  "Резать тонкую бумагу первоклассникам — пол-урока и мятые части; раскрой режет учитель заранее на плотной бумаге.",
+  "Придуманный силуэт, который из семи частей не складывается, — только из проверенных силуэтов.",
+]
+in_class_differentiation = "Слабому — силуэт с внутренними линиями, сильному — только контур: карточки на одной странице."
+combines_with = ["station_quest", "story_journey", "math_detective"]
+station_ready = true
+lang_sensitive = false
+
+props = ["scissors", "envelopes"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "high"
+replayability = "reusable_frame"
+
+source = "Картотека L5, 22.09.2026, раздел 2.9"
+export_shape = "none"
+
+[difficulty_scaling]
+basic = "Силуэты с внутренними линиями-подсказками, считаем треугольники."
+standard = "Только внешний контур силуэта; называем фигуры и считаем углы."
+advanced = "«Составь свой силуэт и опиши его: сколько треугольников и какого они вида»; фигуры заданной площади в клетках."
+
+[[print_items]]
+name = "Раскрой танграма"
+per = "per_student"
+count = "по числу детей"
+layout = "a4_sheet"
+cut = "contour"
+double_sided = false
+
+[[print_items]]
+name = "Карточки силуэтов"
+per = "per_class"
+count = "6–10"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Инструкция учителю по раскрою"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
