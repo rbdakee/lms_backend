@@ -7,12 +7,18 @@
 продукт закрыт выключателем `LESSON_AI_ENABLED`.
 """
 
-from typing import Annotated
+import json
+from collections.abc import Iterator
+from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session as DbSession
 
 from app.adapters import lesson_files
+from app.adapters.db.base import get_engine
+from app.adapters.db.lesson_ai_repos import LessonKitRepo
 from app.adapters.db.models import User
 from app.adapters.docx.common import DocHeader
 from app.api import deps
@@ -22,11 +28,22 @@ from app.api.schemas_lesson_ai import (
     LessonBlockRegenerateIn,
     LessonBlocksOut,
     LessonBlockVersionsOut,
+    LessonChatConfirmIn,
+    LessonChatConfirmOut,
+    LessonChatOrderPatchIn,
+    LessonChatOut,
+    LessonChatSayIn,
+    LessonChatTurnOut,
     LessonKitIn,
     LessonKitOut,
+    LessonObjectivesOut,
 )
+from app.application.lesson_ai_chat import LessonChatService
 from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService, MaterialFile
+from app.application.ports import AiPort
+from app.application.ratelimit import SlidingWindowLimiter
+from app.config import get_settings
 
 router = APIRouter(prefix="/lesson_ai", dependencies=[Depends(deps.require_lesson_ai)])
 
@@ -133,3 +150,130 @@ def restore_block(
     material_id: int, block: str, version_id: int, user: CurrentUser, svc: Materials
 ) -> LessonBlockOut:
     return LessonBlockOut(**svc.restore(user, material_id, block, version_id))
+
+
+# -- Чат сбора заказа (сессия L6) ---------------------------------------------
+
+Chats = Annotated[LessonChatService, Depends(deps.get_lesson_chat_service)]
+
+
+@router.post("/chats", status_code=201)
+def create_chat(user: CurrentUser, svc: Chats) -> LessonChatOut:
+    return LessonChatOut(**svc.create(user))
+
+
+@router.get("/chats/{chat_id}")
+def chat(chat_id: int, user: CurrentUser, svc: Chats) -> LessonChatOut:
+    return LessonChatOut(**svc.chat(user, chat_id))
+
+
+@router.post(
+    "/chats/{chat_id}/messages",
+    response_class=StreamingResponse,
+    responses={
+        # Модель названа, чтобы форма события `done` осталась в схеме OpenAPI:
+        # из неё фронт генерирует типы
+        200: {
+            "model": LessonChatTurnOut,
+            "description": (
+                "Ход событиями `text/event-stream`: `delta`, `tool`, `done`, `error`."
+                " Событие `done` несёт эту форму — чат целиком."
+            ),
+            "content": {
+                "text/event-stream": {"schema": {"$ref": "#/components/schemas/LessonChatTurnOut"}}
+            },
+        }
+    },
+)
+def say(
+    chat_id: int,
+    body: LessonChatSayIn,
+    user: CurrentUser,
+    ai: Annotated[AiPort, Depends(deps.get_lesson_block_ai)],
+    limiter: Annotated[SlidingWindowLimiter, Depends(deps.get_lesson_chat_limiter)],
+    svc: Chats,
+) -> StreamingResponse:
+    """Реплика учителя и ответ помощника — стримом. Проверки входа идут
+    **до** стрима и остаются обычными отказами: `404`, `409`, `422`, `429`."""
+    text = svc.check_say(user, chat_id, body.text)
+    return StreamingResponse(
+        _turn(user.id, chat_id, text, ai, limiter),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Nginx иначе копит ответ в буфере и отдаёт его целиком
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _turn(
+    user_id: int, chat_id: int, text: str, ai: AiPort, limiter: SlidingWindowLimiter
+) -> Iterator[str]:
+    """Тело стрима — со **своей** сессией базы: зависимости с `yield`
+    FastAPI закрывает до того, как отдаёт тело ответа (как у ассистента)."""
+    db = DbSession(get_engine())
+    try:
+        cfg = get_settings()
+        svc = LessonChatService(
+            db,
+            ai,
+            kits=LessonKitsService(LessonKitRepo(db)),
+            limiter=limiter,
+            max_tool_calls=cfg.lesson_ai_chat_max_tool_calls,
+            history_messages=cfg.lesson_ai_chat_history_messages,
+        )
+        user = db.get(User, user_id)
+        if user is None:
+            return
+        for event in svc.say_stream(user, chat_id, text):
+            yield _sse(event["event"], event["data"])
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _sse(event: str, data: dict) -> str:
+    body = json.dumps(data, ensure_ascii=False, default=str)
+    return f"event: {event}\ndata: {body}\n\n"
+
+
+@router.patch("/chats/{chat_id}/order")
+def patch_order(
+    chat_id: int, body: LessonChatOrderPatchIn, user: CurrentUser, svc: Chats
+) -> LessonChatOut:
+    # exclude_unset: «поля нет» и «прислали null» — разные случаи
+    return LessonChatOut(**svc.patch_order(user, chat_id, body.model_dump(exclude_unset=True)))
+
+
+@router.post("/chats/{chat_id}/confirm", status_code=201)
+def confirm(
+    chat_id: int, body: LessonChatConfirmIn, user: CurrentUser, svc: Chats
+) -> LessonChatConfirmOut:
+    result = svc.confirm(
+        user,
+        chat_id,
+        kinds=list(body.kinds),
+        engagement_level=body.engagement_level,
+        difficulty_level=body.difficulty_level,
+        class_size=body.class_size,
+        notes=body.notes,
+        fields_set=frozenset(body.model_fields_set),
+    )
+    return LessonChatConfirmOut(**result)
+
+
+@router.get("/objectives")
+def objectives(
+    user: CurrentUser,
+    svc: Chats,
+    q: Annotated[str, Query(max_length=200)] = "",
+    grade: Annotated[int | None, Query(ge=1, le=12)] = None,
+    lang: Annotated[Literal["ru", "kz"] | None, Query()] = None,
+) -> LessonObjectivesOut:
+    # Учитель вошёл — этого достаточно: справочник государственный, а видно
+    # в нём только опубликованное
+    return LessonObjectivesOut(**svc.objectives(q=q, grade=grade, lang=lang))

@@ -50,6 +50,69 @@ WAITS_FOR = {
     "answer_key": ANSWER_SOURCES,
 }
 
+# Чат сбора заказа (раздел 1). Пятеро, без которых генерация не запускается.
+# Предмет и класс знает цель обучения: её программа — предмет, её код — класс,
+# отдельно их не хранят. Язык — нет: учитель с русским интерфейсом ведёт
+# казахский класс, и язык обучения спрашивается, а не выводится из цели.
+ORDER_REQUIRED = ("subject", "grade", "lang", "objective", "topic")
+CHAT_STATUSES = ("collecting", "confirmed")
+# Что отмечено в списке материалов, пока учитель не сказал иначе, — как на
+# экране брифа (раздел 1): проверочная и игра нужны не к каждому уроку.
+DEFAULT_KINDS = ("lesson_plan", "presentation", "tasks", "homework", "answer_key")
+
+
+def order_missing(
+    *, subject: str | None, grade: int | None, lang: str | None, objective: bool, topic: str | None
+) -> list[str]:
+    """Кого из пятерых ещё нет — в порядке `ORDER_REQUIRED`. Пустой список
+    значит, что заказ можно подтверждать."""
+    known = {
+        "subject": bool(subject),
+        "grade": grade is not None,
+        "lang": bool(lang),
+        "objective": objective,
+        "topic": bool(topic and topic.strip()),
+    }
+    return [name for name in ORDER_REQUIRED if not known[name]]
+
+
+# Поиск цели по тексту (раздел 1): код наизусть не помнит никто. Отдельного
+# поискового движка в продукте нет (CLAUDE.md), поэтому поиск — по основам
+# слов прямо в базе: «двузначных» и «двузначные» сходятся на «двузнач».
+# Основа — слово без хвоста в три буквы, но не короче четырёх: так русские
+# падежи и казахские аффиксы отрезаются, а корень остаётся.
+_WORD = re.compile(r"[^\W\d_]{3,}")
+# Слова разговора про урок, которых в формулировках целей нет: они только
+# шумят в счёте совпадений
+SEARCH_STOPWORDS = frozenset(
+    {
+        "завтра", "сегодня", "урок", "урока", "уроке", "уроки", "класс", "класса",
+        "классе", "тема", "теме", "тему", "будем", "делаем", "проходим", "изучаем",
+        "нужно", "надо", "хочу", "про", "для", "или", "как", "что", "это", "все",
+        "сабақ", "сабақта", "сынып", "сыныпта", "ертең", "бүгін", "тақырып", "және",
+    }
+)
+SEARCH_STEMS_MAX = 8
+
+
+def search_stems(query: str) -> list[str]:
+    """Основы значимых слов запроса — по порядку, без повторов."""
+    stems: list[str] = []
+    for word in _WORD.findall(query.lower().replace("ё", "е")):
+        if word in SEARCH_STOPWORDS:
+            continue
+        stem = word[: max(4, len(word) - 3)] if len(word) > 4 else word
+        if stem not in stems:
+            stems.append(stem)
+    return stems[:SEARCH_STEMS_MAX]
+
+
+def objective_code_in(text: str) -> str | None:
+    """Код цели, если учитель назвал его в запросе, — первый найденный."""
+    found = _CODE.findall(text)
+    return found[0] if found else None
+
+
 KIT_STATUSES = ("generating", "ready", "partial", "failed")
 MATERIAL_STATUSES = ("queued", "generating", "ready", "failed")
 JOB_STATUSES = ("queued", "running", "done", "failed")

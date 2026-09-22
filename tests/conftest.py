@@ -62,6 +62,7 @@ from app.api.deps import (
     get_ai,
     get_assistant_limiter,
     get_lesson_block_ai,
+    get_lesson_chat_limiter,
     get_playback_limiter,
     get_sms,
     get_storage,
@@ -327,6 +328,17 @@ def assistant_limiter_clock():
     app.dependency_overrides[get_assistant_limiter] = lambda: limiter
     yield clock
     app.dependency_overrides.pop(get_assistant_limiter, None)
+
+
+@pytest.fixture(autouse=True)
+def lesson_chat_limiter_clock():
+    """Потолок реплик чату «Жоспара» — тот же случай: счётчик в памяти
+    процесса, и без своего на каждый тест он течёт из теста в тест."""
+    clock = FakeClock()
+    limiter = SlidingWindowLimiter(get_settings().lesson_ai_chat_messages_per_hour, 3600, clock)
+    app.dependency_overrides[get_lesson_chat_limiter] = lambda: limiter
+    yield clock
+    app.dependency_overrides.pop(get_lesson_chat_limiter, None)
 
 
 @pytest.fixture

@@ -63,6 +63,7 @@ from app.application.curriculum_admin import CurriculumAdminService
 from app.application.curriculum_import import CurriculumImportService
 from app.application.files import FilesService
 from app.application.leads import LeadsService
+from app.application.lesson_ai_chat import LessonChatService
 from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService
 from app.application.lessons import LessonsService
@@ -764,8 +765,9 @@ _block_rewriter: BlockRewriter | None = None
 
 
 def get_lesson_block_ai() -> AiPort:
-    """Клиент перегенерации блока: модель «Жоспара», но свой потолок ожидания —
-    запрос держит учитель у экрана, а не воркер очереди."""
+    """Клиент запросов «Жоспара», которые учитель ждёт у экрана: перегенерация
+    блока и чат сбора заказа. Модель «Жоспара», но свой потолок ожидания —
+    запрос держит учитель, а не воркер очереди."""
     global _lesson_block_ai
     if _lesson_block_ai is None:
         cfg = get_settings()
@@ -773,6 +775,31 @@ def get_lesson_block_ai() -> AiPort:
             cfg, model=cfg.lesson_ai_model, timeout_sec=cfg.lesson_ai_block_timeout_sec
         )
     return _lesson_block_ai
+
+
+# Чат сбора заказа стоит денег на каждой реплике: потолок сообщений на учителя
+# в час. Счётчик один на всё приложение — по той же причине, что у ассистента
+_lesson_chat_limiter = SlidingWindowLimiter(get_settings().lesson_ai_chat_messages_per_hour, 3600)
+
+
+def get_lesson_chat_limiter() -> SlidingWindowLimiter:
+    return _lesson_chat_limiter
+
+
+def get_lesson_chat_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    ai: Annotated[AiPort, Depends(get_lesson_block_ai)],
+    limiter: Annotated[SlidingWindowLimiter, Depends(get_lesson_chat_limiter)],
+) -> LessonChatService:
+    cfg = get_settings()
+    return LessonChatService(
+        db,
+        ai,
+        kits=LessonKitsService(LessonKitRepo(db)),
+        limiter=limiter,
+        max_tool_calls=cfg.lesson_ai_chat_max_tool_calls,
+        history_messages=cfg.lesson_ai_chat_history_messages,
+    )
 
 
 def get_lesson_materials_service(

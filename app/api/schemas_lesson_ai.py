@@ -148,3 +148,111 @@ class LessonBlockVersionsOut(BaseModel):
 
     block: str
     items: list[LessonBlockVersionOut]
+
+
+# -- Чат сбора заказа (сессия L6) --------------------------------------------
+
+
+class LessonChatObjectiveOut(BaseModel):
+    """Цель обучения строкой справочника — дословно, с кодом, разделом
+    и подразделом. В этой форме её отдают инструменты чата (карточки
+    в `tool_result`), карточка заказа и список «выбрать самому»."""
+
+    id: int
+    code: str
+    text: str
+    marker: str
+    grade: int
+    lang: Literal["ru", "kz"]
+    subject_code: str
+    section: str
+    subsection: str
+
+
+class LessonChatOrderOut(BaseModel):
+    """Заказ, каким его записал сервер. Предмет и класс — из цели.
+
+    `missing` — кого из пятерых ещё нет; пусто и `ready: true` — карточку
+    с галочками и кнопкой «Готовить» можно показывать. Уровни и виды —
+    с учётом сказанного в разговоре, иначе середина и список по умолчанию.
+    """
+
+    subject_code: str | None
+    grade: int | None
+    lang: Literal["ru", "kz"] | None
+    objective: LessonChatObjectiveOut | None
+    topic: str | None
+    engagement_level: EngagementLevel
+    difficulty_level: DifficultyLevel
+    kinds: list[MaterialKind]
+    class_size: int | None
+    notes: str
+    missing: list[Literal["subject", "grade", "lang", "objective", "topic"]]
+    ready: bool
+
+
+class LessonChatMessageOut(BaseModel):
+    """Строка ленты. `role: "tool"` — поиск по программе: в `tool_result.items`
+    найденные цели формы `LessonChatObjectiveOut`, отказ — в `tool_result.error`."""
+
+    id: int
+    role: Literal["user", "assistant", "tool"]
+    content: str
+    tool_name: str | None
+    tool_args: dict[str, Any] | None
+    tool_result: dict[str, Any] | None
+    created_at: datetime
+
+
+class LessonChatOut(BaseModel):
+    id: int
+    status: Literal["collecting", "confirmed"]
+    kit_id: int | None
+    order: LessonChatOrderOut
+    items: list[LessonChatMessageOut]
+    created_at: datetime
+    updated_at: datetime
+
+
+class LessonChatSayIn(BaseModel):
+    text: str
+
+
+class LessonChatTurnOut(BaseModel):
+    """Событие `done` хода: чат целиком — лента и заказ."""
+
+    chat: LessonChatOut
+    stopped_at_cap: bool
+
+
+class LessonChatOrderPatchIn(BaseModel):
+    """Кнопки под сообщениями: «Да, она», «Русский» / «Қазақша», правка темы.
+    Прислано `null` — поле стёрто; не прислано — не тронуто."""
+
+    objective_id: int | None = None
+    lang: Literal["ru", "kz"] | None = None
+    topic: str | None = None
+
+
+class LessonChatConfirmIn(BaseModel):
+    """Кнопка «Готовить» — карточка заказа целиком.
+
+    Оба уровня **обязательны** (раздел 4.3 брифа): у них есть середина,
+    но экран обязан показать вопрос и прислать ответ, пусть и нетронутый.
+    `class_size` и `notes` не прислали — берутся из разговора.
+    """
+
+    kinds: list[MaterialKind] = Field(min_length=1)
+    engagement_level: EngagementLevel
+    difficulty_level: DifficultyLevel
+    class_size: int | None = Field(default=None, ge=1, le=60)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class LessonChatConfirmOut(BaseModel):
+    chat: LessonChatOut
+    kit: LessonKitOut
+
+
+class LessonObjectivesOut(BaseModel):
+    items: list[LessonChatObjectiveOut]

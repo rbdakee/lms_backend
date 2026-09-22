@@ -6,12 +6,13 @@
 
 Два репозитория по двум сторонам одной таблицы заданий: учитель заказывает
 комплект и смотрит на него (`LessonKitRepo`), воркер берёт задания и закрывает
-их (`LessonAiJobRepo`).
+их (`LessonAiJobRepo`). Третий — чат сбора заказа и поиск цели по справочнику
+(`LessonChatRepo`, сессия L6).
 """
 
 from datetime import timedelta
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import Integer, and_, case, delete, func, or_, select, update
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import aliased
 
@@ -20,6 +21,8 @@ from app.adapters.db.models import (
     CurriculumSection,
     CurriculumSubject,
     LearningObjective,
+    LessonAiChat,
+    LessonAiChatMessage,
     LessonAiJob,
     LessonKit,
     LessonMaterial,
@@ -449,3 +452,173 @@ class LessonMaterialRepo:
             )
         )
         self.db.flush()
+
+
+# Цель вместе со всем, что о ней показывают учителю: программа — язык,
+# предмет — код предмета, раздел и подраздел — названиями
+ObjectiveRow = tuple[LearningObjective, CurriculumProgram, CurriculumSubject, str, str]
+
+
+class LessonChatRepo:
+    """Чат сбора заказа и справочник глазами этого чата.
+
+    Справочник здесь виден **только опубликованным**: загруженная программа
+    ещё не вычитана владельцем, и цель из неё учитель не должен даже увидеть
+    (TEACHER_AI_BRIEF, раздел 3.1). Фильтр стоит в каждом запросе, а не
+    у вызывающего — забыть его негде.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    # -- чат --------------------------------------------------------------
+
+    def create_chat(self, user_id: int, now) -> LessonAiChat:
+        # Обе метки одними часами, как у чатов ассистента
+        chat = LessonAiChat(user_id=user_id, created_at=now, updated_at=now)
+        self.db.add(chat)
+        self.db.flush()
+        return chat
+
+    def chat(self, chat_id: int) -> LessonAiChat | None:
+        return self.db.get(LessonAiChat, chat_id)
+
+    def lock_chat(self, chat_id: int) -> LessonAiChat | None:
+        """Чат под замком строки: два «Готовить» подряд не заводят два комплекта."""
+        return self.db.execute(
+            select(LessonAiChat).where(LessonAiChat.id == chat_id).with_for_update()
+        ).scalar_one_or_none()
+
+    def messages(self, chat_id: int) -> list[LessonAiChatMessage]:
+        return list(
+            self.db.execute(
+                select(LessonAiChatMessage)
+                .where(LessonAiChatMessage.chat_id == chat_id)
+                .order_by(LessonAiChatMessage.id)
+            ).scalars()
+        )
+
+    def add_message(self, chat_id: int, **fields) -> LessonAiChatMessage:
+        row = LessonAiChatMessage(chat_id=chat_id, **fields)
+        self.db.add(row)
+        return row
+
+    # -- справочник -------------------------------------------------------
+
+    def _objectives(self):
+        parent = aliased(CurriculumSection)
+        return (
+            select(
+                LearningObjective,
+                CurriculumProgram,
+                CurriculumSubject,
+                func.coalesce(parent.title, CurriculumSection.title),
+                case((parent.id.is_(None), ""), else_=CurriculumSection.title),
+            )
+            .join(CurriculumProgram, CurriculumProgram.id == LearningObjective.program_id)
+            .join(CurriculumSubject, CurriculumSubject.id == CurriculumProgram.subject_id)
+            .join(CurriculumSection, CurriculumSection.id == LearningObjective.section_id)
+            .outerjoin(parent, parent.id == CurriculumSection.parent_id)
+            .where(CurriculumProgram.status == "published")
+        )
+
+    def find_objectives(
+        self,
+        stems: list[str],
+        *,
+        code: str | None,
+        grade: int | None,
+        lang: str | None,
+        limit: int,
+    ) -> list[ObjectiveRow]:
+        """Цели, в тексте которых больше всего основ запроса, — сверху.
+
+        Счёт — сколько разных основ нашлось в тексте; названный код цели
+        перевешивает любой счёт. Ни одного совпадения — цели в выдаче нет.
+        """
+        text = func.replace(func.lower(LearningObjective.text), "ё", "е")
+        score = sum(
+            (case((text.contains(stem, autoescape=True), 1), else_=0) for stem in stems),
+            start=func.cast(0, Integer),
+        )
+        if code:
+            score = score + case((LearningObjective.code == code, 100), else_=0)
+        query = self._objectives().where(score > 0)
+        if grade is not None:
+            query = query.where(LearningObjective.grade == grade)
+        if lang is not None:
+            query = query.where(CurriculumProgram.lang == lang)
+        rows = self.db.execute(
+            query.order_by(
+                score.desc(), LearningObjective.grade, CurriculumProgram.lang, LearningObjective.id
+            ).limit(limit)
+        ).all()
+        return [tuple(row) for row in rows]
+
+    def grade_objectives(self, grade: int, lang: str) -> list[ObjectiveRow]:
+        """Все цели класса в одной редакции — в порядке приказа: учитель
+        открывает список и выбирает сам (раздел 1). Порядок строк импорта
+        и есть порядок документа."""
+        rows = self.db.execute(
+            self._objectives()
+            .where(LearningObjective.grade == grade, CurriculumProgram.lang == lang)
+            .order_by(CurriculumProgram.id, LearningObjective.id)
+        ).all()
+        return [tuple(row) for row in rows]
+
+    def objectives_by_code(self, code: str, lang: str | None) -> list[ObjectiveRow]:
+        query = self._objectives().where(LearningObjective.code == code)
+        if lang is not None:
+            query = query.where(CurriculumProgram.lang == lang)
+        rows = self.db.execute(query.order_by(CurriculumProgram.lang, LearningObjective.id)).all()
+        return [tuple(row) for row in rows]
+
+    def objective(self, objective_id: int) -> ObjectiveRow | None:
+        row = self.db.execute(
+            self._objectives().where(LearningObjective.id == objective_id)
+        ).first()
+        return tuple(row) if row is not None else None
+
+    def objective_lang(self, objective_id: int) -> tuple[str, str] | None:
+        """Код цели и язык её редакции — **без фильтра публикации**: заказ
+        уже ссылается на эту строку, и сменить язык надо, даже если её
+        программу сейчас сняли на правку."""
+        row = self.db.execute(
+            select(LearningObjective.code, CurriculumProgram.lang)
+            .join(CurriculumProgram, CurriculumProgram.id == LearningObjective.program_id)
+            .where(LearningObjective.id == objective_id)
+        ).first()
+        return tuple(row) if row is not None else None
+
+    def counterpart(self, objective_id: int, lang: str) -> ObjectiveRow | None:
+        """Та же цель в другой языковой редакции приказа — по коду.
+
+        Коды целей в русской и казахской редакциях одни и те же (раздел 3.1),
+        а тексты — два официальных корпуса: казахский комплект берёт казахскую
+        строку, а не перевод русской. Сначала ищется редакция того же приказа,
+        потом любая опубликованная по тому же предмету.
+        """
+        source = self.db.execute(
+            select(LearningObjective, CurriculumProgram)
+            .join(CurriculumProgram, CurriculumProgram.id == LearningObjective.program_id)
+            .where(LearningObjective.id == objective_id)
+        ).first()
+        if source is None:
+            return None
+        objective, program = source
+        if program.lang == lang:
+            return self.objective(objective.id)
+        row = self.db.execute(
+            self._objectives()
+            .where(
+                LearningObjective.code == objective.code,
+                CurriculumProgram.subject_id == program.subject_id,
+                CurriculumProgram.lang == lang,
+            )
+            .order_by(
+                (CurriculumProgram.order_number != program.order_number),
+                CurriculumProgram.id.desc(),
+            )
+            .limit(1)
+        ).first()
+        return tuple(row) if row is not None else None

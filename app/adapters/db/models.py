@@ -35,6 +35,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.domain.iin import IIN_PLACEHOLDER
 from app.domain.lesson_ai import (
+    CHAT_STATUSES,
     DEFAULT_DIFFICULTY,
     DEFAULT_ENGAGEMENT,
     DIFFICULTY_LEVELS,
@@ -1210,4 +1211,77 @@ class LessonAiJob(Base):
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
         ),
+    )
+
+
+class LessonAiChat(Base):
+    """Чат сбора заказа — вход в «Жоспар» (TEACHER_AI_BRIEF, раздел 1).
+
+    Заказ лежит колонками, а не выводится из переписки на каждый запрос:
+    чат может сказать что угодно, а генерацию запускает сервер по тому, что
+    записано здесь. Пустая колонка значит «ещё не собрано».
+
+    Цель — ссылкой на строку справочника: в комплект уходит она, а не пересказ
+    модели. Предмета и класса здесь нет — их знает цель. После подтверждения
+    чат закрыт и указывает на заведённый комплект.
+    """
+
+    __tablename__ = "lesson_ai_chat"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
+    status: Mapped[str] = mapped_column(Text, default="collecting", server_default="collecting")
+    # Без каскада, как у комплекта: повторный импорт программы не должен
+    # выдернуть цель из-под заказа, который учитель уже видит
+    objective_id: Mapped[int | None] = mapped_column(ForeignKey("learning_objective.id"))
+    lang: Mapped[str | None] = mapped_column(Text)
+    topic: Mapped[str | None] = mapped_column(Text)
+    # Что учитель сказал в разговоре о двух уровнях, списке материалов
+    # и классе. Пусто — не говорил; карточка заказа тогда предлагает середину
+    # и список по умолчанию, а окончательные значения приходят с подтверждением.
+    engagement_level: Mapped[str | None] = mapped_column(Text)
+    difficulty_level: Mapped[str | None] = mapped_column(Text)
+    kinds: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    class_size: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str | None] = mapped_column(Text)
+    kit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lesson_kit.id", ondelete="SET NULL"), unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(_in("status", CHAT_STATUSES), name="status"),
+        CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
+        CheckConstraint(_in("engagement_level", ENGAGEMENT_LEVELS), name="engagement_level"),
+        CheckConstraint(_in("difficulty_level", DIFFICULTY_LEVELS), name="difficulty_level"),
+        CheckConstraint("class_size BETWEEN 1 AND 60", name="class_size"),
+        Index("ix_lesson_ai_chat_user_id_id", "user_id", "id"),
+    )
+
+
+class LessonAiChatMessage(Base):
+    """Лента чата сбора заказа — той же формы, что у ассистента: роль `tool` —
+    карточка вызова, и экран показывает найденные цели из её `tool_result`,
+    то есть строками справочника, а не словами модели."""
+
+    __tablename__ = "lesson_ai_chat_message"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey("lesson_ai_chat.id", ondelete="CASCADE"))
+    role: Mapped[str] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(Text, default="", server_default="")
+    tool_name: Mapped[str | None] = mapped_column(Text)
+    tool_args: Mapped[dict | None] = mapped_column(JSONB)
+    tool_result: Mapped[dict | None] = mapped_column(JSONB)
+    # Связь «просьба вызвать — результат»: хвост истории уходит модели как есть
+    tool_call_id: Mapped[str | None] = mapped_column(Text)
+    # Расход хода — на ответе помощника; учёт по учителю — сессия L7
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("role IN ('user', 'assistant', 'tool')", name="role"),
+        Index("ix_lesson_ai_chat_message_chat_id_id", "chat_id", "id"),
     )

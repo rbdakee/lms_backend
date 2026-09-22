@@ -684,3 +684,47 @@ class BlockChangedError(AppError):
         self, message: str = "Блок изменился, пока шла перегенерация — обновите и повторите"
     ):
         super().__init__(message)
+
+
+class ChatConfirmedError(AppError):
+    """Заказ этого чата уже подтверждён и комплект заведён. Чат — про один
+    урок: следующий урок — новый чат, а не правка отправленного заказа."""
+
+    status = 409
+    code = "chat_confirmed"
+
+    def __init__(self, kit_id: int | None):
+        super().__init__(
+            "Заказ уже отправлен — для следующего урока начните новый чат",
+            details={"kit_id": kit_id},
+        )
+
+
+class OrderIncompleteError(AppError):
+    """Пока не собраны все пятеро — предмет, класс, язык, цель и тема, —
+    генерация не запускается (TEACHER_AI_BRIEF, раздел 1)."""
+
+    status = 409
+    code = "order_incomplete"
+
+    def __init__(self, missing: list[str]):
+        super().__init__(
+            "В заказе не хватает данных — ответьте помощнику", details={"missing": missing}
+        )
+
+
+class ObjectiveLangMissingError(AppError):
+    """Цель выбрана в одной языковой редакции программы, а класс учится
+    на другом, и в опубликованной редакции этого языка такой цели нет.
+    Переводить формулировку нельзя: казахский комплект берёт казахскую
+    строку приказа (TEACHER_AI_BRIEF, раздел 1)."""
+
+    status = 409
+    code = "objective_lang_missing"
+
+    def __init__(self, code: str, lang: str):
+        edition = "казахской" if lang == "kz" else "русской"
+        super().__init__(
+            f"Цели {code} нет в {edition} редакции опубликованной программы",
+            details={"code": code, "lang": lang},
+        )
