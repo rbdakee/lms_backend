@@ -23,6 +23,7 @@ from app.adapters.db.repos import (
     CourseAdminRepo,
     CoursePlatformRepo,
     CourseRepo,
+    CurriculumRepo,
     EnrollmentRepo,
     LeadRepo,
     LessonAdminRepo,
@@ -57,6 +58,8 @@ from app.application.certificates import CertificatesService
 from app.application.certificates_admin import CertificatesAdminService
 from app.application.courses import CoursesService
 from app.application.courses_admin import CoursesAdminService
+from app.application.curriculum_admin import CurriculumAdminService
+from app.application.curriculum_import import CurriculumImportService
 from app.application.files import FilesService
 from app.application.leads import LeadsService
 from app.application.lessons import LessonsService
@@ -727,6 +730,17 @@ def get_categories_service(db: Annotated[DbSession, Depends(get_db)]) -> Categor
     # Один сервис на публичный справочник и на его редактор: список категорий
     # у обоих один и тот же
     return CategoriesService(categories=CategoryRepo(db))
+
+
+def get_curriculum_admin_service(
+    db: Annotated[DbSession, Depends(get_db)],
+) -> CurriculumAdminService:
+    # Сценарий импорта отдаётся тем же репозиторием и без своего commit:
+    # публикация — его правило, а транзакцию запроса закрывает get_db
+    curriculum = CurriculumRepo(db)
+    return CurriculumAdminService(
+        curriculum=curriculum, imports=CurriculumImportService(curriculum)
+    )
 
 
 def get_settings_service(db: Annotated[DbSession, Depends(get_db)]) -> SettingsService:

@@ -3825,3 +3825,242 @@ class CurriculumRepo:
             )
             or 0
         )
+
+    # -- экран сверки (CONTRACT.md, «Справочник учебной программы») ----------
+
+    def _counted_programs(self, *conds):
+        """Программа вместе со счётчиками экрана: предмет, цели, подозрения.
+
+        Счётчики — подзапросы с группировкой, а не запрос на строку списка:
+        программ в списке немного, но целей в каждой сотни, и N+1 здесь стоил бы
+        экрану заметной паузы на ровном месте.
+        """
+        objectives = (
+            select(LearningObjective.program_id, func.count().label("total"))
+            .group_by(LearningObjective.program_id)
+            .subquery()
+        )
+        issues = (
+            select(
+                CurriculumIssue.program_id,
+                func.count().label("open"),
+                # Ошибки считаются той же строкой: по ним закрыта публикация,
+                # и второй проход по таблице ради одного числа не нужен
+                func.count()
+                .filter(CurriculumIssue.severity == "error")
+                .label("errors"),
+            )
+            .where(CurriculumIssue.resolved_at.is_(None))
+            .group_by(CurriculumIssue.program_id)
+            .subquery()
+        )
+        return (
+            select(
+                CurriculumProgram,
+                CurriculumSubject.code,
+                CurriculumSubject.title,
+                func.coalesce(objectives.c.total, 0),
+                func.coalesce(issues.c.open, 0),
+                func.coalesce(issues.c.errors, 0),
+            )
+            .join(CurriculumSubject, CurriculumSubject.id == CurriculumProgram.subject_id)
+            .outerjoin(objectives, objectives.c.program_id == CurriculumProgram.id)
+            .outerjoin(issues, issues.c.program_id == CurriculumProgram.id)
+            .where(*conds)
+        )
+
+    def programs_page(
+        self,
+        *,
+        subject_code: str | None,
+        lang: str | None,
+        status: str | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[tuple], int]:
+        """Список программ, свежие сверху. Площадки у справочника нет:
+        государственная программа одна на обе (TEACHER_AI_BRIEF, раздел 8)."""
+        conds = []
+        if subject_code is not None:
+            conds.append(CurriculumSubject.code == subject_code)
+        if lang is not None:
+            conds.append(CurriculumProgram.lang == lang)
+        if status is not None:
+            conds.append(CurriculumProgram.status == status)
+
+        total = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(CurriculumProgram)
+                .join(CurriculumSubject, CurriculumSubject.id == CurriculumProgram.subject_id)
+                .where(*conds)
+            )
+            or 0
+        )
+        rows = self.db.execute(
+            self._counted_programs(*conds)
+            .order_by(CurriculumProgram.imported_at.desc(), CurriculumProgram.id.desc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [tuple(row) for row in rows], total
+
+    def program_card(self, program_id: int) -> tuple | None:
+        """Одна программа теми же счётчиками, что и в списке: экран открывается
+        с карточки и не должен показать другое число, чем строка списка."""
+        row = self.db.execute(
+            self._counted_programs(CurriculumProgram.id == program_id)
+        ).first()
+        return tuple(row) if row is not None else None
+
+    def program_by_id(self, program_id: int) -> CurriculumProgram | None:
+        return self.db.get(CurriculumProgram, program_id)
+
+    def sections(self, program_id: int) -> list[tuple[CurriculumSection, int]]:
+        """Разделы и подразделы вперемешку, по порядку приказа, с числом целей.
+
+        Дерево из двух уровней собирает сценарий: в базе они одной таблицей,
+        и второй запрос ради вложенности — лишний.
+        """
+        counts = (
+            select(LearningObjective.section_id, func.count().label("total"))
+            .where(LearningObjective.program_id == program_id)
+            .group_by(LearningObjective.section_id)
+            .subquery()
+        )
+        rows = self.db.execute(
+            select(CurriculumSection, func.coalesce(counts.c.total, 0))
+            .outerjoin(counts, counts.c.section_id == CurriculumSection.id)
+            .where(CurriculumSection.program_id == program_id)
+            .order_by(CurriculumSection.order_index, CurriculumSection.id)
+        ).all()
+        return [tuple(row) for row in rows]
+
+    def objectives_page(
+        self,
+        *,
+        program_id: int,
+        grade: int | None,
+        subsection: str | None,
+        q: str | None,
+        has_image: bool | None,
+        edited: bool | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[tuple[LearningObjective, str, str]], int]:
+        """Цели программы по порядку приказа: класс, раздел, подраздел, номер.
+
+        Порядок собран из колонок, а не из строки кода: `1.1.1.10` текстом
+        встало бы перед `1.1.1.2`, а на экране это выглядит поломкой.
+        """
+        sub = aliased(CurriculumSection)
+        parent = aliased(CurriculumSection)
+
+        conds = [LearningObjective.program_id == program_id]
+        if grade is not None:
+            conds.append(LearningObjective.grade == grade)
+        if subsection is not None:
+            conds.append(sub.code == subsection)
+        if q:
+            # Одним полем и по тексту, и по коду: на экране это одна строка
+            # поиска, и человек набирает в неё то, что видит перед глазами
+            like = f"%{q.strip()}%"
+            conds.append(
+                or_(LearningObjective.text.ilike(like), LearningObjective.code.ilike(like))
+            )
+        if has_image is not None:
+            conds.append(LearningObjective.has_image.is_(has_image))
+        if edited is not None:
+            conds.append(
+                LearningObjective.edited_at.isnot(None)
+                if edited
+                else LearningObjective.edited_at.is_(None)
+            )
+
+        total = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(LearningObjective)
+                .join(sub, sub.id == LearningObjective.section_id)
+                .where(*conds)
+            )
+            or 0
+        )
+        rows = self.db.execute(
+            select(LearningObjective, sub.code, sub.title)
+            .join(sub, sub.id == LearningObjective.section_id)
+            .outerjoin(parent, parent.id == sub.parent_id)
+            .where(*conds)
+            .order_by(
+                LearningObjective.grade,
+                parent.order_index,
+                sub.order_index,
+                LearningObjective.index,
+                LearningObjective.id,
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [tuple(row) for row in rows], total
+
+    def objective(self, objective_id: int) -> tuple | None:
+        """Цель вместе с программой и подразделом: правку отбивает состояние
+        программы, а в ответ уходит подраздел — оба нужны тем же запросом."""
+        sub = aliased(CurriculumSection)
+        row = self.db.execute(
+            select(LearningObjective, CurriculumProgram, sub.code, sub.title)
+            .join(CurriculumProgram, CurriculumProgram.id == LearningObjective.program_id)
+            .join(sub, sub.id == LearningObjective.section_id)
+            .where(LearningObjective.id == objective_id)
+        ).first()
+        return tuple(row) if row is not None else None
+
+    def issues_page(
+        self,
+        *,
+        program_id: int,
+        severity: str | None,
+        resolved: bool | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[tuple[CurriculumIssue, User | None]], int]:
+        """Подозрения: ошибки сверху, внутри — по коду цели.
+
+        `error` < `warning` по алфавиту, и отдельного порядка сортировки
+        для этого не нужно. Подозрения о программе целиком (`count_mismatch`,
+        `empty_section`) идут без кода и встают в конец своей половины.
+        """
+        conds = [CurriculumIssue.program_id == program_id]
+        if severity is not None:
+            conds.append(CurriculumIssue.severity == severity)
+        if resolved is not None:
+            conds.append(
+                CurriculumIssue.resolved_at.isnot(None)
+                if resolved
+                else CurriculumIssue.resolved_at.is_(None)
+            )
+
+        total = (
+            self.db.scalar(select(func.count()).select_from(CurriculumIssue).where(*conds)) or 0
+        )
+        rows = self.db.execute(
+            select(CurriculumIssue, User)
+            .outerjoin(User, User.id == CurriculumIssue.resolved_by)
+            .where(*conds)
+            .order_by(
+                CurriculumIssue.severity,
+                CurriculumIssue.objective_code,
+                CurriculumIssue.id,
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return [tuple(row) for row in rows], total
+
+    def issue(self, issue_id: int) -> tuple[CurriculumIssue, User | None] | None:
+        row = self.db.execute(
+            select(CurriculumIssue, User)
+            .outerjoin(User, User.id == CurriculumIssue.resolved_by)
+            .where(CurriculumIssue.id == issue_id)
+        ).first()
+        return tuple(row) if row is not None else None
