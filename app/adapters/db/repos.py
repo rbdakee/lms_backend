@@ -44,6 +44,7 @@ from app.adapters.db.models import (
     LearningObjective,
     Lesson,
     LessonFile,
+    LessonKit,
     LessonProgress,
     Module,
     Notification,
@@ -3822,6 +3823,23 @@ class CurriculumRepo:
                     LearningObjective.program_id == program_id,
                     LearningObjective.edited_at.isnot(None),
                 )
+            )
+            or 0
+        )
+
+    def kits_on_program(self, program_id: int) -> int:
+        """Сколько комплектов к урокам собрано по целям программы.
+
+        Такую программу повторный импорт снести не может: цели уйдут каскадом,
+        а комплекты на них ссылаются (TEACHER_AI_BRIEF, раздел 3). База
+        остановит это и сама, но ошибкой внешнего ключа; число нужно человеку.
+        """
+        return (
+            self.db.scalar(
+                select(func.count())
+                .select_from(LessonKit)
+                .join(LearningObjective, LearningObjective.id == LessonKit.objective_id)
+                .where(LearningObjective.program_id == program_id)
             )
             or 0
         )

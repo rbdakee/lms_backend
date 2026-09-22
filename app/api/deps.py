@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.ai.openai_chat import OpenAiChat
 from app.adapters.db.base import get_db
+from app.adapters.db.lesson_ai_repos import LessonKitRepo
 from app.adapters.db.models import Session, User
 from app.adapters.db.preview import (
     PreviewEnrollmentRepo,
@@ -62,6 +63,7 @@ from app.application.curriculum_admin import CurriculumAdminService
 from app.application.curriculum_import import CurriculumImportService
 from app.application.files import FilesService
 from app.application.leads import LeadsService
+from app.application.lesson_kits import LessonKitsService
 from app.application.lessons import LessonsService
 from app.application.lessons_admin import LessonsAdminService
 from app.application.notifications import NotificationsService
@@ -88,6 +90,7 @@ from app.domain.errors import (
     AssistantOffError,
     BlockedError,
     ForbiddenError,
+    LessonAiOffError,
     UnauthorizedError,
 )
 from app.domain.platform import DEFAULT_PLATFORM
@@ -741,6 +744,17 @@ def get_curriculum_admin_service(
     return CurriculumAdminService(
         curriculum=curriculum, imports=CurriculumImportService(curriculum)
     )
+
+
+def require_lesson_ai() -> None:
+    """Есть ли «Жоспар» в этой установке — как `require_assistant`: выключенный
+    продукт отвечает внятным кодом, а остальное API работает как работало."""
+    if not get_settings().lesson_ai_on:
+        raise LessonAiOffError()
+
+
+def get_lesson_kits_service(db: Annotated[DbSession, Depends(get_db)]) -> LessonKitsService:
+    return LessonKitsService(LessonKitRepo(db))
 
 
 def get_settings_service(db: Annotated[DbSession, Depends(get_db)]) -> SettingsService:

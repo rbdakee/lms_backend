@@ -29,6 +29,7 @@ from app.api.routers import (
     dictionaries,
     files,
     health,
+    lesson_ai,
     lessons,
     me,
     notifications,
@@ -46,6 +47,7 @@ from app.application.bootstrap import ensure_bootstrap_admin
 # пуст, и модель не умеет ничего.
 from app.assistant import tools as _assistant_tools  # noqa: F401
 from app.config import check_providers, get_settings
+from app.lesson_ai.worker import start_workers
 
 
 @asynccontextmanager
@@ -67,7 +69,15 @@ async def lifespan(app: FastAPI):
     task = None
     if cfg.telegram_provider == "bot" and cfg.telegram_updates == "poll":
         task = asyncio.create_task(run_poller(cfg))
+    # Очередь генерации «Жоспара» — тоже здесь: отдельного сервиса бриф
+    # не разрешает (TEACHER_AI_BRIEF, раздел 7). Выключенный продукт воркеров
+    # не поднимает вовсе, тесты — тоже (`LESSON_AI_WORKERS=0`)
+    workers = None
+    if cfg.lesson_ai_on and cfg.lesson_ai_workers > 0:
+        workers = start_workers(cfg)
     yield
+    if workers is not None:
+        workers.stop()
     if task is not None:
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -125,6 +135,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_admins.router)
     app.include_router(admin_assistant.router)
     app.include_router(admin_curriculum.router)
+    app.include_router(lesson_ai.router)
     app.include_router(settings.admin_router)
     app.include_router(telegram.admin_router)
     app.include_router(questions.admin_router)

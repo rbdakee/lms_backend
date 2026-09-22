@@ -610,3 +610,38 @@ class AssistantActionError(AppError):
     def __init__(self, code: str, message: str, details: dict | None = None):
         super().__init__(message, details=details)
         self.code = code
+
+
+# «Жоспар» — помощник учителя (TEACHER_AI_BRIEF).
+
+
+class LessonAiOffError(AppError):
+    """«Жоспара» в этой установке нет: выключатель не включён или нет ключа.
+
+    Ручки при этом остаются в схеме OpenAPI — из неё фронт генерирует типы.
+    Фронт по этому коду прячет вход в продукт, а не показывает поломку.
+    """
+
+    status = 503
+    code = "lesson_ai_off"
+
+    def __init__(self, message: str = "Помощник учителя недоступен"):
+        super().__init__(message)
+
+
+class ProgramNotPublishedError(AppError):
+    """Программа, к которой относится цель, не опубликована.
+
+    Генерация видит только опубликованный справочник (TEACHER_AI_BRIEF,
+    раздел 3.1): загруженный ещё не вычитан, и документ по нему завуч может
+    не принять. Отказ внятный, а не пустой документ.
+    """
+
+    status = 409
+    code = "program_not_published"
+
+    def __init__(
+        self,
+        message: str = "Программа ещё не опубликована — готовить материалы по ней нельзя",
+    ):
+        super().__init__(message)

@@ -28,15 +28,18 @@ class AiUnavailableError(Exception):
 
 
 class OpenAiChat:
-    def __init__(self, cfg: Settings):
-        self.model = cfg.openai_model
+    def __init__(self, cfg: Settings, *, model: str = "", timeout_sec: int = 0):
+        """`model` и `timeout_sec` — для второго продукта на том же ключе:
+        «Жоспар» генерирует своей моделью и ждёт дольше ассистента
+        (TEACHER_AI_BRIEF, решение 10). Пусто — настройки ассистента."""
+        self.model = model or cfg.openai_model
         self._key = cfg.openai_api_key
         self.client = OpenAI(
             api_key=cfg.openai_api_key,
             # Пустой адрес значит «к провайдеру напрямую»: у SDK своё
             # умолчание, и подставлять сюда пустую строку нельзя
             base_url=cfg.openai_base_url or None,
-            timeout=cfg.openai_timeout_sec,
+            timeout=timeout_sec or cfg.openai_timeout_sec,
             # Повтор один: ход ассистента и так может стоить десяти вызовов,
             # и трижды повторённый каждый — это тройной счёт за месяц
             max_retries=1,
@@ -70,6 +73,37 @@ class OpenAiChat:
         except Exception as exc:
             # Ключ не попадает ни в лог, ни в текст ошибки: репозитории
             # публичные, а лог читают не только мы
+            log.error("OpenAI не ответил: %s: %s", type(exc).__name__, self._safe(str(exc)))
+            raise AiUnavailableError("Модель не ответила") from None
+        return _reply(resp)
+
+    def complete_json(
+        self,
+        *,
+        system: str,
+        messages: list[AiMessage],
+        name: str,
+        schema: dict,
+    ) -> AiReply:
+        """Ответ по JSON-схеме в строгом режиме провайдера (Structured Outputs).
+
+        Строгий режим гарантирует форму, но не смысл: пустые строки и отказ
+        модели отвечать (`refusal`, текста тогда нет вовсе) ловит вызывающий
+        при разборе — пустой `text` для него просто кривой ответ.
+        """
+        payload = [{"role": "system", "content": system}]
+        payload += [_wire(message) for message in messages]
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=payload,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": name, "schema": schema, "strict": True},
+                },
+                **self._cache,
+            )
+        except Exception as exc:
             log.error("OpenAI не ответил: %s: %s", type(exc).__name__, self._safe(str(exc)))
             raise AiUnavailableError("Модель не ответила") from None
         return _reply(resp)

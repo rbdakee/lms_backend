@@ -13,6 +13,7 @@
 
 import uuid
 from datetime import UTC, date, datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -33,6 +34,13 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.domain.iin import IIN_PLACEHOLDER
+from app.domain.lesson_ai import (
+    JOB_STATUSES,
+    KIT_STATUSES,
+    MATERIAL_KINDS,
+    MATERIAL_STATUSES,
+    VERSION_SOURCES,
+)
 from app.domain.platform import PLATFORMS
 
 
@@ -993,4 +1001,191 @@ class CurriculumIssue(Base):
 
     __table_args__ = (
         CheckConstraint("severity IN ('error', 'warning')", name="severity"),
+    )
+
+
+# «Жоспар» — помощник учителя (TEACHER_AI_BRIEF, разделы 4, 7 и 8). Комплект
+# к уроку, его материалы, блоки материала с историей правок и очередь
+# генерации. К курсам отношения не имеет: общий с ними только `user`.
+#
+# Площадки здесь нет ни у одной таблицы: продукт один на обе площадки,
+# и учитель в нём один и тот же человек (раздел 8).
+
+
+def _in(column: str, values: tuple[str, ...]) -> str:
+    return f"{column} IN (" + ", ".join(f"'{value}'" for value in values) + ")"
+
+
+class LessonKit(Base):
+    """Комплект к одному уроку: заказ учителя и сводный статус его материалов.
+
+    `grade` и `lang` берутся из цели обучения, а не из запроса: язык документов
+    равен языку обучения, и цель из редакции приказа на этом языке знает его
+    сама (раздел 1). Хранятся рядом с целью ради списка уроков учителя.
+    """
+
+    __tablename__ = "lesson_kit"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
+    # Без каскада нарочно: по цели уже собран документ, и повторный импорт
+    # программы не должен выдернуть её из-под комплекта (раздел 3).
+    objective_id: Mapped[int] = mapped_column(ForeignKey("learning_objective.id"), index=True)
+    topic: Mapped[str] = mapped_column(Text)
+    grade: Mapped[int] = mapped_column(Integer)
+    lang: Mapped[str] = mapped_column(Text)
+    # Необязательное из заказа: сколько детей и на чём сделать акцент.
+    class_size: Mapped[int | None] = mapped_column(Integer)
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Сводка по материалам, а не отдельное состояние: пишется только
+    # пересчётом после каждого закрытого задания (`kit_status` в домене).
+    status: Mapped[str] = mapped_column(Text, default="generating", server_default="generating")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
+        CheckConstraint(_in("status", KIT_STATUSES), name="status"),
+        CheckConstraint("class_size BETWEEN 1 AND 60", name="class_size"),
+        # Свои уроки учитель видит списком, свежие сверху
+        Index("ix_lesson_kit_user_id_id", "user_id", "id"),
+    )
+
+
+class LessonMaterial(Base):
+    """Один материал комплекта: ҚМЖ, презентация, задания и так далее.
+
+    `content` — документ целиком в текущем виде: ответ модели по схеме
+    вида вместе с блоками, которые подставил сервер (цель обучения).
+    Блоки (`lesson_material_block`) — его зеркало по полям верхнего уровня
+    для правки по одному; правка обязана писать оба места одной транзакцией.
+    """
+
+    __tablename__ = "lesson_material"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kit_id: Mapped[int] = mapped_column(ForeignKey("lesson_kit.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="queued", server_default="queued")
+    content: Mapped[dict | None] = mapped_column(JSONB)
+    # Готовый файл — .docx или .pptx; появится с выгрузкой (сессии L4 и L5).
+    file_path: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(_in("kind", MATERIAL_KINDS), name="kind"),
+        CheckConstraint(_in("status", MATERIAL_STATUSES), name="status"),
+        # Один материал каждого вида на комплект: перегенерация переписывает
+        # его же, а не заводит второй
+        UniqueConstraint("kit_id", "kind"),
+    )
+
+
+class LessonMaterialBlock(Base):
+    """Блок материала — поле верхнего уровня его схемы: «середина урока»,
+    «критерии оценивания». Единица правки: переписывается один блок,
+    соседние остаются как были (раздел 4.1, правило 3)."""
+
+    __tablename__ = "lesson_material_block"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    material_id: Mapped[int] = mapped_column(
+        ForeignKey("lesson_material.id", ondelete="CASCADE")
+    )
+    # Имя поля схемы: `stage_middle`, `learning_objectives`.
+    kind: Mapped[str] = mapped_column(Text)
+    order_index: Mapped[int] = mapped_column(Integer)
+    # Любой JSON: блок бывает строкой, списком и объектом.
+    content: Mapped[Any] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("material_id", "kind"),)
+
+
+class LessonMaterialVersion(Base):
+    """История блока: каждое его состояние целиком, включая первое.
+
+    Первая версия пишется при генерации, поэтому откат «к тому, что
+    сгенерировалось» — обычный откат, а не особый случай.
+    """
+
+    __tablename__ = "lesson_material_version"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Своего индекса по одному block_id нет: составной ниже покрывает и его
+    block_id: Mapped[int] = mapped_column(
+        ForeignKey("lesson_material_block.id", ondelete="CASCADE")
+    )
+    content: Mapped[Any] = mapped_column(JSONB)
+    source: Mapped[str] = mapped_column(Text)
+    # Кто попросил: владелец комплекта. Модель — не «кто», она в `source`.
+    user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
+    # Просьба учителя своими словами — «сделай середину подвижнее»;
+    # у первой генерации и ручной правки её нет.
+    instruction: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(_in("source", VERSION_SOURCES), name="source"),
+        Index("ix_lesson_material_version_block_id_id", "block_id", "id"),
+    )
+
+
+class LessonAiJob(Base):
+    """Задание на генерацию одного материала — очередь без Celery и Redis,
+    своей таблицей (раздел 7).
+
+    Задание на каждый материал отдельно: один сбойный вид не рушит комплект.
+    Все метки времени ставит база (`now()`), и сравниваются они с её же
+    часами: часы контейнера Postgres и хоста в проекте уже расходились.
+    """
+
+    __tablename__ = "lesson_ai_job"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kit_id: Mapped[int] = mapped_column(ForeignKey("lesson_kit.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="queued", server_default="queued")
+    # Сколько раз задание брали в работу — вместе с текущим разом.
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Машинный код последнего отказа (`ai_failed`, `model_output_invalid`…).
+    # Только код: в тексте исключения бывают тема урока и пожелания учителя.
+    error: Mapped[str | None] = mapped_column(Text)
+    # Не раньше этого момента: пауза между попытками.
+    run_after: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Аренда взятого задания. Процесс умер посреди генерации — по истечении
+    # аренды задание подберёт любой воркер как следующую попытку.
+    lease_until: Mapped[datetime | None] = mapped_column()
+    # Израсходованное всеми попытками, и неудачными тоже: кривой ответ модели
+    # стоит тех же денег. Учёт по учителю — сессия L7 (`lesson_ai_usage`).
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Какой моделью сделано: настройка меняется, а материал остаётся.
+    model: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column()
+    finished_at: Mapped[datetime | None] = mapped_column()
+
+    __table_args__ = (
+        CheckConstraint(_in("kind", MATERIAL_KINDS), name="kind"),
+        CheckConstraint(_in("status", JOB_STATUSES), name="status"),
+        Index("ix_lesson_ai_job_kit_id", "kit_id"),
+        # Что брать следующим: только живые задания, и их немного —
+        # закрытые копятся, но в индекс не попадают
+        Index(
+            "ix_lesson_ai_job_pending",
+            "run_after",
+            "id",
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        # Одно живое задание на материал: двойной клик «перегенерировать»
+        # не должен запускать две генерации одного и того же
+        Index(
+            "uq_lesson_ai_job_active",
+            "kit_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
     )

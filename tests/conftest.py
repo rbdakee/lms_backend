@@ -15,8 +15,15 @@ os.environ["AUTH_BOOTSTRAP_CODE"] = ""
 # ассистента отвечали бы `assistant_off` — это отдельная проверка, и она
 # гасит ключ сама.
 os.environ["OPENAI_API_KEY"] = "test-key-not-a-real-one"
+# «Жоспар» в тестах включён, но без фоновых воркеров: TestClient поднимает
+# lifespan приложения, и воркер, запущенный в нём, брал бы задания раньше
+# теста — и шёл бы с ними в настоящий OpenAI. Задания тесты берут руками
+# (`JobRunner.run_next`), подставив свой генератор или подставной ИИ.
+os.environ["LESSON_AI_ENABLED"] = "true"
+os.environ["LESSON_AI_WORKERS"] = "0"
 
 import itertools
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -28,6 +35,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session as OrmSession
 
+from app.adapters.ai.openai_chat import AiUnavailableError
 from app.adapters.db.base import get_engine
 from app.adapters.db.models import (
     Base,
@@ -265,6 +273,27 @@ class FakeAi:
             # Реплик не разложили — значит тесту важен сам факт вызова
             return AiReply(text="Готово", tokens_in=7, tokens_out=11)
         return self.replies.pop(0)
+
+    def returns_json(self, data, tokens_in: int = 900, tokens_out: int = 1400) -> "FakeAi":
+        """Ответ генерации «Жоспара» по схеме. `data` — словарь (уйдёт JSON)
+        или строка как есть: кривой ответ модели тоже надо уметь подсунуть."""
+        text_ = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
+        self.replies.append(AiReply(text=text_, tokens_in=tokens_in, tokens_out=tokens_out))
+        return self
+
+    def fails(self) -> "FakeAi":
+        """Провайдер не ответил: сеть, таймаут, отказ по лимиту."""
+        self.replies.append(AiUnavailableError("Модель не ответила"))
+        return self
+
+    def complete_json(self, *, system, messages, name, schema) -> AiReply:
+        self.calls.append(
+            {"system": system, "messages": list(messages), "name": name, "schema": schema}
+        )
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
     @property
     def system(self) -> str:
