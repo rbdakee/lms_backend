@@ -12,7 +12,7 @@
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     BigInteger,
@@ -826,4 +826,171 @@ class AssistantPdGrant(Base):
     __table_args__ = (
         UniqueConstraint("thread_id", "subject_user_id"),
         CheckConstraint("level IN ('read', 'write')", name="level"),
+    )
+
+
+# Справочник школьной учебной программы (TEACHER_AI_BRIEF, раздел 3). Пять
+# таблиц: предмет, программа, разделы, цели обучения и подозрения автопроверки.
+#
+# Площадки здесь нет ни у одной таблицы, и это не забывчивость: справочник —
+# не наш контент, а государственная программа. Приказ Министра просвещения
+# один на всю страну, и обеим площадкам он один и тот же (раздел 8).
+
+
+class CurriculumSubject(Base):
+    """Предмет справочника.
+
+    `title` — служебное русское название для админки: учителю предмет виден
+    названием программы своей языковой редакции, а не этой строкой.
+    """
+
+    __tablename__ = "curriculum_subject"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Слаг латиницей ('math'): он уходит в пути и в промпт, русское имя — нет.
+    code: Mapped[str] = mapped_column(Text, unique=True)
+    title: Mapped[str] = mapped_column(Text)
+    order_index: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class CurriculumProgram(Base):
+    """Программа: предмет, языковая редакция приказа и сам приказ.
+
+    Русская и казахская редакции — две строки, а не перевод одной: в приказе
+    это два официальных корпуса, и брать надо оба (раздел 3).
+
+    Смена программы заводит новую строку, старая остаётся: по ней уже
+    сгенерированы документы, и задним числом они не должны начать ссылаться
+    на несуществующую цель.
+    """
+
+    __tablename__ = "curriculum_program"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("curriculum_subject.id"))
+    lang: Mapped[str] = mapped_column(Text)
+    grade_from: Mapped[int] = mapped_column(Integer)
+    grade_to: Mapped[int] = mapped_column(Integer)
+    # Номер приказа строкой: '399' — обозначение, а не количество.
+    order_number: Mapped[str] = mapped_column(Text)
+    order_date: Mapped[date] = mapped_column(Date)
+    # Сырая строка из шапки документа рядом с разобранной датой: формат
+    # официальных документов плавает, и по ней на сверке видно, что именно
+    # разобрал импорт.
+    order_date_text: Mapped[str] = mapped_column(Text)
+    # Откуда взято: uuid документа в adilet и адрес страницы. Без них
+    # повторный импорт не доказать, а вычитку не повторить.
+    source_document_id: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(Text)
+    revision_date: Mapped[date | None] = mapped_column(Date)
+    title: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="loaded", server_default="loaded")
+    imported_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    published_at: Mapped[datetime | None] = mapped_column()
+
+    __table_args__ = (
+        CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
+        # Загружен и опубликован — два состояния справочника: генерация видит
+        # только опубликованный (раздел 3.1).
+        CheckConstraint("status IN ('loaded', 'published')", name="status"),
+        # Одна действующая программа на предмет и язык: повторный импорт того же
+        # приказа не должен молча удвоить справочник.
+        UniqueConstraint("subject_id", "lang", "order_number"),
+    )
+
+
+class CurriculumSection(Base):
+    """Раздел и подраздел программы в одной таблице: уровня всего два,
+    и вторая таблица удвоила бы и модель, и импорт. Раздел — строка
+    с пустым `parent_id`, подраздел ссылается на свой раздел.
+    """
+
+    __tablename__ = "curriculum_section"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    program_id: Mapped[int] = mapped_column(
+        ForeignKey("curriculum_program.id", ondelete="CASCADE"), index=True
+    )
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("curriculum_section.id", ondelete="CASCADE")
+    )
+    # '1' у раздела, '1.1' у подраздела — как в приказе.
+    code: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    order_index: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    __table_args__ = (UniqueConstraint("program_id", "code"),)
+
+
+class LearningObjective(Base):
+    """Цель обучения: её выбирает учитель, по её коду завуч сверяет план.
+
+    `code` — строка, а не число: `1.1.2.3` числом не бывает, а ведущие нули
+    значащие (раздел 3).
+    """
+
+    __tablename__ = "learning_objective"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    program_id: Mapped[int] = mapped_column(
+        ForeignKey("curriculum_program.id", ondelete="CASCADE"), index=True
+    )
+    # Ссылка на подраздел, а не на раздел: в приказе цели разложены
+    # по подразделам, раздел достаётся по parent_id подраздела.
+    section_id: Mapped[int] = mapped_column(ForeignKey("curriculum_section.id"), index=True)
+    code: Mapped[str] = mapped_column(Text)
+    grade: Mapped[int] = mapped_column(Integer)
+    # Последний номер кода отдельной колонкой: разрывы в нумерации внутри
+    # подраздела ищет автопроверка, и разбирать строку на каждую сверку дорого.
+    index: Mapped[int] = mapped_column(Integer)
+    # Пометка из документа вроде '**'. Она стоит у цели в приказе и должна
+    # доехать до документа учителя, а не потеряться при разборе.
+    marker: Mapped[str] = mapped_column(Text, default="", server_default="")
+    text: Mapped[str] = mapped_column(Text)
+    # Одна цель изучается в нескольких четвертях — отсюда массив, а не число.
+    quarters: Mapped[list[int]] = mapped_column(
+        ARRAY(Integer), default=list, server_default="{}"
+    )
+    # В тексте вместо математического знака остался [img]: картинку из приказа
+    # разобрать не удалось. Такая цель показывается человеку на сверке первой.
+    has_image: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Текст правили руками на сверке; NULL — формулировка как в приказе.
+    # Метка не для истории: повторный импорт сносит программу целиком, и по
+    # числу помеченных строк сервер говорит, сколько ручной работы пропадёт.
+    edited_at: Mapped[datetime | None] = mapped_column()
+
+    __table_args__ = (
+        CheckConstraint("grade BETWEEN 1 AND 12", name="grade"),
+        UniqueConstraint("program_id", "code"),
+    )
+
+
+class CurriculumIssue(Base):
+    """Подозрение, найденное автопроверкой импорта: машина ловит то, что видно
+    без знания программы, а смысл вычитывает владелец лично (раздел 3.1).
+
+    Именно подозрение, а не отказ: разрыв в нумерации бывает законным — цель
+    могли исключить приказом об изменениях. Решение за человеком, поэтому
+    строка гасится `resolved_at`, а не удаляется: иначе повторный импорт
+    показал бы то же самое во второй раз.
+    """
+
+    __tablename__ = "curriculum_issue"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    program_id: Mapped[int] = mapped_column(
+        ForeignKey("curriculum_program.id", ondelete="CASCADE"), index=True
+    )
+    # Машинный код проверки: экран сверки группирует список по нему.
+    kind: Mapped[str] = mapped_column(Text)
+    severity: Mapped[str] = mapped_column(Text)
+    # Код целью, а не ссылкой: подозрение бывает ровно о той цели, которой
+    # в этой редакции нет — её потеряли при разборе, и ссылаться не на что.
+    objective_code: Mapped[str | None] = mapped_column(Text)
+    message: Mapped[str] = mapped_column(Text)
+    resolved_at: Mapped[datetime | None] = mapped_column()
+    resolved_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
+
+    __table_args__ = (
+        CheckConstraint("severity IN ('error', 'warning')", name="severity"),
     )

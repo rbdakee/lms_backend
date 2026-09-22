@@ -35,8 +35,13 @@ from app.adapters.db.models import (
     Certificate,
     Course,
     CoursePlatform,
+    CurriculumIssue,
+    CurriculumProgram,
+    CurriculumSection,
+    CurriculumSubject,
     Enrollment,
     Lead,
+    LearningObjective,
     Lesson,
     LessonFile,
     LessonProgress,
@@ -3702,3 +3707,121 @@ class SettingRepo:
         for field in fields:
             value = value.op("-", return_type=JSONB)(literal(field, Text))
         self.db.execute(update(Setting).where(Setting.key == key).values(value=value))
+
+
+class CurriculumRepo:
+    """Справочник школьной учебной программы: предметы, программы, разделы, цели.
+
+    Наполняется импортом из приказа Министра просвещения (TEACHER_AI_BRIEF, раздел 3),
+    руками здесь не заводят ничего. Площадки у справочника нет: государственная
+    программа одна на обе.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def subject_by_code(self, code: str) -> CurriculumSubject | None:
+        return self.db.scalar(select(CurriculumSubject).where(CurriculumSubject.code == code))
+
+    def create_subject(self, code: str, title: str) -> CurriculumSubject:
+        # Предмет встаёт в конец списка: порядок правится руками из админки,
+        # а придумывать новому предмету место посередине не из чего
+        last = self.db.scalar(select(func.max(CurriculumSubject.order_index))) or 0
+        subject = CurriculumSubject(code=code, title=title, order_index=last + 1)
+        self.db.add(subject)
+        self.db.flush()
+        return subject
+
+    def program(self, subject_id: int, lang: str, order_number: str) -> CurriculumProgram | None:
+        return self.db.scalar(
+            select(CurriculumProgram).where(
+                CurriculumProgram.subject_id == subject_id,
+                CurriculumProgram.lang == lang,
+                CurriculumProgram.order_number == order_number,
+            )
+        )
+
+    def add_program(self, **fields) -> CurriculumProgram:
+        program = CurriculumProgram(**fields)
+        self.db.add(program)
+        self.db.flush()
+        return program
+
+    def drop_program(self, program: CurriculumProgram) -> None:
+        """Снести программу целиком перед повторным импортом.
+
+        Разделы, цели и подозрения уходят каскадом. Опубликованную программу сюда
+        не пускает сценарий: на её цели уже могут ссылаться планы уроков.
+        """
+        self.db.delete(program)
+        self.db.flush()
+
+    def add_section(self, **fields) -> CurriculumSection:
+        section = CurriculumSection(**fields)
+        self.db.add(section)
+        self.db.flush()
+        return section
+
+    def add_objectives(self, rows: list[dict]) -> None:
+        # Целей на программу сотни, и каждая своим flush'ем стоила бы сотен обращений
+        self.db.bulk_insert_mappings(LearningObjective, rows)
+
+    def add_issues(self, rows: list[dict]) -> None:
+        self.db.bulk_insert_mappings(CurriculumIssue, rows)
+
+    def issues(self, program_id: int) -> list[CurriculumIssue]:
+        """Подозрения по программе: сначала ошибки, внутри — по коду цели."""
+        return list(
+            self.db.scalars(
+                select(CurriculumIssue)
+                .where(CurriculumIssue.program_id == program_id)
+                .order_by(
+                    CurriculumIssue.severity,
+                    CurriculumIssue.objective_code,
+                    CurriculumIssue.id,
+                )
+            )
+        )
+
+    def unresolved_errors(self, program_id: int) -> int:
+        """Сколько ошибок ещё не разобрано — по этому числу решается публикация."""
+        return (
+            self.db.scalar(
+                select(func.count())
+                .select_from(CurriculumIssue)
+                .where(
+                    CurriculumIssue.program_id == program_id,
+                    CurriculumIssue.severity == "error",
+                    CurriculumIssue.resolved_at.is_(None),
+                )
+            )
+            or 0
+        )
+
+    def objectives_count(self, program_id: int) -> int:
+        return (
+            self.db.scalar(
+                select(func.count())
+                .select_from(LearningObjective)
+                .where(LearningObjective.program_id == program_id)
+            )
+            or 0
+        )
+
+    def edited_objectives(self, program_id: int) -> int:
+        """Сколько целей правили руками — цена повторного импорта.
+
+        Программа при переимпорте сносится целиком, вместе с этими строками,
+        поэтому число называется человеку до, а не после.
+        """
+        return (
+            self.db.scalar(
+                select(func.count())
+                .select_from(LearningObjective)
+                .where(
+                    LearningObjective.program_id == program_id,
+                    LearningObjective.edited_at.isnot(None),
+                )
+            )
+            or 0
+        )
