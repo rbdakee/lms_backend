@@ -645,3 +645,42 @@ class ProgramNotPublishedError(AppError):
         message: str = "Программа ещё не опубликована — готовить материалы по ней нельзя",
     ):
         super().__init__(message)
+
+
+class MaterialNotReadyError(AppError):
+    """Материал ещё собирается или упал: скачивать и править нечего.
+
+    Правка блока посреди генерации материала была бы перетёрта её
+    результатом — поэтому отказ, а не ожидание.
+    """
+
+    status = 409
+    code = "material_not_ready"
+
+    def __init__(self, message: str = "Материал ещё не готов"):
+        super().__init__(message)
+
+
+class BlockLockedError(AppError):
+    """Блок кладёт сервер из справочника — раздел программы и цель обучения
+    с кодом. Их не переписывают ни модель, ни учитель: завуч сверяет план
+    именно с этой строкой приказа (TEACHER_AI_BRIEF, раздел 4.1)."""
+
+    status = 409
+    code = "block_locked"
+
+    def __init__(self, message: str = "Этот блок берётся из учебной программы и не правится"):
+        super().__init__(message)
+
+
+class BlockChangedError(AppError):
+    """Пока модель переписывала блок, его успели поправить — вторым окном
+    или откатом. Запоздалый ответ модели свежую правку не перетирает."""
+
+    status = 409
+    code = "block_changed"
+
+    def __init__(
+        self, message: str = "Блок изменился, пока шла перегенерация — обновите и повторите"
+    ):
+        super().__init__(message)

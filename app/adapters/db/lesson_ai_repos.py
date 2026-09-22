@@ -261,3 +261,113 @@ def objective_sections(db: DbSession, objective: LearningObjective) -> tuple[str
     # Цель прямо в разделе, без подраздела: тогда её раздел — он сам
     return (section or subsection or ""), (subsection if section else "")
 
+
+class LessonMaterialRepo:
+    """Готовый материал глазами учителя: файл, блоки и их история.
+
+    Правка блока пишет три места одной транзакцией — блок, ключ в
+    `material.content` и версию: инвариант `content[block.kind] == block.content`
+    держится здесь, а не у вызывающего.
+    """
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def material(self, material_id: int) -> tuple[LessonMaterial, LessonKit] | None:
+        row = self.db.execute(
+            select(LessonMaterial, LessonKit)
+            .join(LessonKit, LessonKit.id == LessonMaterial.kit_id)
+            .where(LessonMaterial.id == material_id)
+        ).first()
+        return tuple(row) if row is not None else None
+
+    def blocks(self, material_id: int) -> list[LessonMaterialBlock]:
+        return list(
+            self.db.scalars(
+                select(LessonMaterialBlock)
+                .where(LessonMaterialBlock.material_id == material_id)
+                .order_by(LessonMaterialBlock.order_index)
+            )
+        )
+
+    def block(self, material_id: int, kind: str) -> LessonMaterialBlock | None:
+        return self.db.scalar(
+            select(LessonMaterialBlock).where(
+                LessonMaterialBlock.material_id == material_id, LessonMaterialBlock.kind == kind
+            )
+        )
+
+    def lock_material(self, material_id: int) -> LessonMaterial:
+        """Материал под замок перед любой записью в его блоки.
+
+        Замок на материал, а не на блок: `content` у материала один на все
+        блоки, и две правки разных блоков иначе перетёрли бы его друг другу.
+        Заодно все правки одного материала встают в очередь в одном
+        порядке замков — взаимной блокировки не бывает.
+        """
+        # populate_existing: материал уже прочитан этой сессией до замка,
+        # и без него проверка статуса шла бы по снимку, а не по строке под замком
+        return self.db.scalar(
+            select(LessonMaterial)
+            .where(LessonMaterial.id == material_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+    def last_version_id(self, block_id: int) -> int | None:
+        """Номер последней версии — жетон правки: блок переписали, пока
+        модель думала, — номер ушёл вперёд, и запоздалый ответ не пишется."""
+        return self.db.scalar(
+            select(func.max(LessonMaterialVersion.id)).where(
+                LessonMaterialVersion.block_id == block_id
+            )
+        )
+
+    def versions(self, block_id: int) -> list[LessonMaterialVersion]:
+        """История блока, свежие сверху."""
+        return list(
+            self.db.scalars(
+                select(LessonMaterialVersion)
+                .where(LessonMaterialVersion.block_id == block_id)
+                .order_by(LessonMaterialVersion.id.desc())
+            )
+        )
+
+    def version(self, block_id: int, version_id: int) -> LessonMaterialVersion | None:
+        return self.db.scalar(
+            select(LessonMaterialVersion).where(
+                LessonMaterialVersion.id == version_id,
+                LessonMaterialVersion.block_id == block_id,
+            )
+        )
+
+    def write_block(
+        self,
+        material: LessonMaterial,
+        block: LessonMaterialBlock,
+        value,
+        *,
+        source: str,
+        user_id: int,
+        instruction: str | None = None,
+    ) -> None:
+        """Новое содержимое блока — в блок, в документ и в историю.
+
+        Материал — взятый `lock_material`. Документ переписывается новым
+        словарём, а не правкой ключа на месте: изменение внутри JSONB
+        SQLAlchemy не замечает и в базу не пишет.
+        """
+        material.content = {**(material.content or {}), block.kind: value}
+        material.updated_at = func.now()
+        block.content = value
+        block.updated_at = func.now()
+        self.db.add(
+            LessonMaterialVersion(
+                block_id=block.id,
+                content=value,
+                source=source,
+                user_id=user_id,
+                instruction=instruction,
+            )
+        )
+        self.db.flush()

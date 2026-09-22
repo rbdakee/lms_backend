@@ -20,6 +20,10 @@ MATERIAL_KINDS = (
     "answer_key",
 )
 
+# В каком формате материал скачивается файлом. `.pptx` у презентации и
+# `.docx` у остальных пяти появятся с сессией L5 — вместе с их видами.
+FILE_FORMATS = {"lesson_plan": "docx"}
+
 KIT_STATUSES = ("generating", "ready", "partial", "failed")
 MATERIAL_STATUSES = ("queued", "generating", "ready", "failed")
 JOB_STATUSES = ("queued", "running", "done", "failed")
@@ -48,6 +52,12 @@ class JobError(Exception):
         self.retryable = retryable
         self.tokens_in = tokens_in
         self.tokens_out = tokens_out
+
+
+class BlockOutputInvalidError(Exception):
+    """Модель переписала один блок не по форме или вписала в него код цели —
+    и так на всех попытках. Учителю это то же, что «модель не ответила»:
+    помогает ещё одна попытка."""
 
 
 # Что видит учитель у упавшего материала. Код — для ветвления на фронте,

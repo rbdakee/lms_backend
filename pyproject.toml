@@ -16,6 +16,7 @@ dependencies = [
     "segno>=1.6",
     "boto3>=1.35",
     "openai>=1.51",
+    "python-docx>=1.2",
 ]
 
 [dependency-groups]

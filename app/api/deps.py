@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.ai.openai_chat import OpenAiChat
 from app.adapters.db.base import get_db
-from app.adapters.db.lesson_ai_repos import LessonKitRepo
+from app.adapters.db.lesson_ai_repos import LessonKitRepo, LessonMaterialRepo
 from app.adapters.db.models import Session, User
 from app.adapters.db.preview import (
     PreviewEnrollmentRepo,
@@ -64,6 +64,7 @@ from app.application.curriculum_import import CurriculumImportService
 from app.application.files import FilesService
 from app.application.leads import LeadsService
 from app.application.lesson_kits import LessonKitsService
+from app.application.lesson_materials import LessonMaterialsService
 from app.application.lessons import LessonsService
 from app.application.lessons_admin import LessonsAdminService
 from app.application.notifications import NotificationsService
@@ -94,6 +95,7 @@ from app.domain.errors import (
     UnauthorizedError,
 )
 from app.domain.platform import DEFAULT_PLATFORM
+from app.lesson_ai.blocks import BlockRewriter
 
 # Имя куки сессии зависит от приложения: у кабинета учителя и у админки
 # они разные, и в одном браузере два входа живут одновременно — админом
@@ -755,6 +757,33 @@ def require_lesson_ai() -> None:
 
 def get_lesson_kits_service(db: Annotated[DbSession, Depends(get_db)]) -> LessonKitsService:
     return LessonKitsService(LessonKitRepo(db))
+
+
+_lesson_block_ai: AiPort | None = None
+_block_rewriter: BlockRewriter | None = None
+
+
+def get_lesson_block_ai() -> AiPort:
+    """Клиент перегенерации блока: модель «Жоспара», но свой потолок ожидания —
+    запрос держит учитель у экрана, а не воркер очереди."""
+    global _lesson_block_ai
+    if _lesson_block_ai is None:
+        cfg = get_settings()
+        _lesson_block_ai = OpenAiChat(
+            cfg, model=cfg.lesson_ai_model, timeout_sec=cfg.lesson_ai_block_timeout_sec
+        )
+    return _lesson_block_ai
+
+
+def get_lesson_materials_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    ai: Annotated[AiPort, Depends(get_lesson_block_ai)],
+) -> LessonMaterialsService:
+    # Схемы блоков собираются при создании — один раз на клиента, а не на запрос
+    global _block_rewriter
+    if _block_rewriter is None or _block_rewriter.ai is not ai:
+        _block_rewriter = BlockRewriter(ai)
+    return LessonMaterialsService(LessonMaterialRepo(db), _block_rewriter, db=db, commit=db.commit)
 
 
 def get_settings_service(db: Annotated[DbSession, Depends(get_db)]) -> SettingsService:

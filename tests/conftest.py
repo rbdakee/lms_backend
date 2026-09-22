@@ -61,6 +61,7 @@ from app.adapters.db.models import (
 from app.api.deps import (
     get_ai,
     get_assistant_limiter,
+    get_lesson_block_ai,
     get_playback_limiter,
     get_sms,
     get_storage,
@@ -307,10 +308,14 @@ class FakeAi:
 
 @pytest.fixture
 def ai():
+    # Один подставной ИИ на оба клиента: ассистента и перегенерации блока
+    # «Жоспара» — у второго своя модель и свой таймаут, но тест видит один поток вызовов
     fake = FakeAi()
     app.dependency_overrides[get_ai] = lambda: fake
+    app.dependency_overrides[get_lesson_block_ai] = lambda: fake
     yield fake
     app.dependency_overrides.pop(get_ai, None)
+    app.dependency_overrides.pop(get_lesson_block_ai, None)
 
 
 @pytest.fixture(autouse=True)

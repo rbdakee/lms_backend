@@ -81,3 +81,57 @@ class LessonKitOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     materials: list[LessonMaterialOut]
+
+
+# -- Блоки материала и их история (сессия L4) --------------------------------
+
+
+class LessonBlockOut(BaseModel):
+    """Блок материала — поле верхнего уровня его содержимого.
+
+    `editable: false` — блок сервера (раздел программы, цель обучения
+    с кодом): ни перегенерации, ни правки, ни отката у него нет.
+    `content` — той же формы, что ключ `kind` в `material.content`.
+    """
+
+    kind: str
+    order_index: int
+    editable: bool
+    content: Any
+    updated_at: datetime
+
+
+class LessonBlocksOut(BaseModel):
+    material_id: int
+    kind: MaterialKind
+    items: list[LessonBlockOut]
+
+
+class LessonBlockRegenerateIn(BaseModel):
+    """Просьба учителя своими словами — «сделай подвижнее». Пусто — просто
+    переписать блок заново."""
+
+    instruction: str = Field(default="", max_length=500)
+
+
+class LessonBlockEditIn(BaseModel):
+    """Ручная правка: блок целиком, той же формы, что в `content` материала.
+    Проверяется той же схемой, что ответ модели."""
+
+    content: Any
+
+
+class LessonBlockVersionOut(BaseModel):
+    id: int
+    source: Literal["generated", "regenerated", "edited", "restored"]
+    instruction: str | None
+    content: Any
+    created_at: datetime
+    current: bool
+
+
+class LessonBlockVersionsOut(BaseModel):
+    """История блока, свежие сверху; первая строка — текущее состояние."""
+
+    block: str
+    items: list[LessonBlockVersionOut]
