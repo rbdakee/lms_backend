@@ -7,12 +7,13 @@
 Два репозитория по двум сторонам одной таблицы заданий: учитель заказывает
 комплект и смотрит на него (`LessonKitRepo`), воркер берёт задания и закрывает
 их (`LessonAiJobRepo`). Третий — чат сбора заказа и поиск цели по справочнику
-(`LessonChatRepo`, сессия L6).
+(`LessonChatRepo`, сессия L6). С L7 — доступ к продукту (`LessonAccessRepo`)
+и учёт расхода (`LessonUsageRepo`).
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 
-from sqlalchemy import Integer, and_, case, delete, func, or_, select, update
+from sqlalchemy import Integer, and_, case, delete, func, or_, select, true, update
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import aliased
 
@@ -21,15 +22,19 @@ from app.adapters.db.models import (
     CurriculumSection,
     CurriculumSubject,
     LearningObjective,
+    LessonAiAccess,
     LessonAiChat,
     LessonAiChatMessage,
     LessonAiJob,
+    LessonAiUsage,
     LessonKit,
     LessonMaterial,
     LessonMaterialBlock,
     LessonMaterialVersion,
+    User,
 )
-from app.domain.lesson_ai import MATERIAL_KINDS, WAITS_FOR, kit_status
+from app.adapters.db.repos import name_or_phone_filter
+from app.domain.lesson_ai import MATERIAL_KINDS, WAITS_FOR, kit_status, usage_cost
 
 
 class LessonKitRepo:
@@ -179,9 +184,21 @@ class LessonAiJobRepo:
         self._close(job)
 
     def add_usage(self, job: LessonAiJob, *, tokens_in: int, tokens_out: int, model: str) -> None:
+        """Расход попытки — на задание и строкой учёта по учителю (L7).
+        Учитель — владелец комплекта: генерацию заказал он."""
         job.tokens_in += tokens_in
         job.tokens_out += tokens_out
         job.model = model
+        user_id = self.db.scalar(select(LessonKit.user_id).where(LessonKit.id == job.kit_id))
+        LessonUsageRepo(self.db).add(
+            user_id,
+            "material",
+            model=model,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            kit_id=job.kit_id,
+            kind=job.kind,
+        )
 
     def _close(self, job: LessonAiJob) -> None:
         """Задание закрыто — комплект пересчитывается.
@@ -622,3 +639,148 @@ class LessonChatRepo:
             .limit(1)
         ).first()
         return tuple(row) if row is not None else None
+
+
+class LessonAccessRepo:
+    """Доступ к «Жоспару» — строка на учителя (`lesson_ai_access`)."""
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def by_user(self, user_id: int) -> LessonAiAccess | None:
+        return self.db.scalar(select(LessonAiAccess).where(LessonAiAccess.user_id == user_id))
+
+    def lock_by_user(self, user_id: int) -> LessonAiAccess | None:
+        """Под замком: два админа, выдающие доступ одному учителю одновременно,
+        иначе оба не нашли бы строки и второй упал бы на уникальности."""
+        return self.db.scalar(
+            select(LessonAiAccess).where(LessonAiAccess.user_id == user_id).with_for_update()
+        )
+
+    def create(self, **fields) -> LessonAiAccess:
+        access = LessonAiAccess(**fields)
+        self.db.add(access)
+        self.db.flush()
+        return access
+
+    def page(
+        self,
+        *,
+        status: str | None,
+        q: str | None,
+        today: date,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[tuple], int]:
+        """Страница списка доступов, свежие выдачи сверху, с расходом каждого
+        учителя за всё время — одним запросом.
+
+        Строка — `(доступ, учитель, комплектов, токенов на вход, на выход,
+        стоимость)`. Расход считается подзапросами на строку страницы, а не
+        группировкой всей таблицы учёта: она растёт с каждым вызовом модели,
+        а на странице двадцать человек. Кто выдал — тем же запросом: админов
+        несколько, и `db.get` при сборке ответа находит его уже загруженным.
+
+        Админы в списке остаются: строка доступа у админа — такая же выдача
+        (решение L7, запись 2), и спрятанная она выглядела бы как пропавшая.
+        """
+        conds = []
+        if status == "revoked":
+            conds.append(LessonAiAccess.revoked_at.is_not(None))
+        elif status == "active":
+            conds += [
+                LessonAiAccess.revoked_at.is_(None),
+                or_(LessonAiAccess.expires_on.is_(None), LessonAiAccess.expires_on >= today),
+            ]
+        elif status == "expired":
+            conds += [LessonAiAccess.revoked_at.is_(None), LessonAiAccess.expires_on < today]
+        if q is not None and q.strip():
+            conds.append(name_or_phone_filter(q))
+
+        total = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(LessonAiAccess)
+                .join(User, User.id == LessonAiAccess.user_id)
+                .where(*conds)
+            )
+            or 0
+        )
+        kits = (
+            select(func.count())
+            .where(LessonKit.user_id == LessonAiAccess.user_id)
+            .correlate(LessonAiAccess)
+            .scalar_subquery()
+        )
+        # SUM по пустому набору — NULL: токены превращаются в 0, а стоимость
+        # остаётся NULL — «неизвестно», если ни у одной строки её нет
+        usage = (
+            select(
+                func.coalesce(func.sum(LessonAiUsage.tokens_in), 0).label("tokens_in"),
+                func.coalesce(func.sum(LessonAiUsage.tokens_out), 0).label("tokens_out"),
+                func.sum(LessonAiUsage.cost_usd).label("cost_usd"),
+            )
+            .where(LessonAiUsage.user_id == LessonAiAccess.user_id)
+            .lateral()
+        )
+        granter = aliased(User)
+        rows = self.db.execute(
+            select(
+                LessonAiAccess,
+                User,
+                granter,
+                kits,
+                usage.c.tokens_in,
+                usage.c.tokens_out,
+                usage.c.cost_usd,
+            )
+            .join(User, User.id == LessonAiAccess.user_id)
+            .outerjoin(granter, granter.id == LessonAiAccess.granted_by)
+            .join(usage, true())
+            .where(*conds)
+            .order_by(LessonAiAccess.granted_at.desc(), LessonAiAccess.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return [
+            (access, teacher, kits_count, tokens_in, tokens_out, cost)
+            for access, teacher, _, kits_count, tokens_in, tokens_out, cost in rows
+        ], total
+
+
+class LessonUsageRepo:
+    """Учёт расхода по учителю. Стоимость считается здесь, в момент записи,
+    и дальше не пересчитывается (`usage_cost`)."""
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def add(
+        self,
+        user_id: int,
+        source: str,
+        *,
+        model: str | None,
+        tokens_in: int,
+        tokens_out: int,
+        kit_id: int | None = None,
+        chat_id: int | None = None,
+        kind: str | None = None,
+    ) -> None:
+        # Провайдер не ответил вовсе — платить не за что, строка была бы шумом
+        if not model or not (tokens_in or tokens_out):
+            return
+        self.db.add(
+            LessonAiUsage(
+                user_id=user_id,
+                source=source,
+                kit_id=kit_id,
+                chat_id=chat_id,
+                kind=kind,
+                model=model,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cost_usd=usage_cost(model, tokens_in, tokens_out),
+            )
+        )
+        self.db.flush()

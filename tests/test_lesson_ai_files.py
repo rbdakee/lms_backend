@@ -41,6 +41,10 @@ from tests.test_lesson_ai_kazakh import (
 )
 from tests.test_lesson_ai_kits import CODE, OBJECTIVE_TEXT, TOPIC, Scene, run_next
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 SAMPLES = Path(__file__).parent / "samples" / "lesson_ai"

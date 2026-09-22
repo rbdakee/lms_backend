@@ -37,6 +37,10 @@ from tests.test_admin_curriculum import (
     make_subject,
 )
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 OTHER_PHONE = "+7 (707) 555-01-02"
 
 CODE = "2.1.2.6"
@@ -80,8 +84,9 @@ HALLUCINATED = [
     "memory_write",
 ]
 
-# Таблицы, которые ход чата меняет законно: его заказ и его лента
-CHAT_TABLES = {"lesson_ai_chat", "lesson_ai_chat_message"}
+# Таблицы, которые ход чата меняет законно: его заказ, его лента и с L7 —
+# строка учёта расхода за ход
+CHAT_TABLES = {"lesson_ai_chat", "lesson_ai_chat_message", "lesson_ai_usage"}
 
 
 class Scene:

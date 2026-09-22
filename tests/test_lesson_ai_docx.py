@@ -35,6 +35,10 @@ from tests.test_lesson_ai_kits import (
     run_next,
 )
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 OTHER_PHONE = "+7 (707) 555-01-02"
 NOT_FOUND = {"error": {"code": "not_found", "message": "Материал не найден"}}

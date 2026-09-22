@@ -43,6 +43,10 @@ from tests.test_admin_curriculum import (
 )
 from tests.test_curriculum_import import make_parsed
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 OTHER_PHONE = "+7 (707) 555-01-02"
 
 CODE = "2.1.2.6"
@@ -572,7 +576,7 @@ def test_message_names_the_language_of_instruction(client, sms, ai, lang, langua
 
 
 def test_message_carries_the_lesson_and_optional_lines_only_when_set(client, sms, ai, scene):
-    """Модель пишет план по сообщению: класс, тема, раздел и цель в нём есть
+    """Модель пишет план по сообщению: класс, раздел и цель в нём есть
     всегда. Необязательное — только если задано: пустую строку «Пожелания
     учителя:» модель читает как пожелание."""
     login(client, sms)
@@ -591,8 +595,10 @@ def test_message_carries_the_lesson_and_optional_lines_only_when_set(client, sms
         assert "Раздел программы: Числа и величины" in lines
         assert "Подраздел: Операции над числами" in lines
         assert f"Цель обучения по программе: {OBJECTIVE_TEXT}" in lines
-        assert f"Тема урока: {TOPIC}" in lines
-    assert not [line for line in bare_lines if line.startswith(("Детей", "Пожелания"))]
+    # Комплект без пожеланий идёт через банк (L7): его генерация обезличена,
+    # и темы учителя модель не видит — тема есть только у личного
+    assert f"Тема урока: {TOPIC}" in full_lines
+    assert not [line for line in bare_lines if line.startswith(("Тема", "Детей", "Пожелания"))]
     assert "Детей в классе: 24" in full_lines
     assert f"Пожелания учителя: {NOTES}" in full_lines
     # Оба комплекта собраны — порядок очереди совпал с порядком заказа

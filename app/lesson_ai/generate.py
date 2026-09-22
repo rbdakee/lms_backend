@@ -66,7 +66,10 @@ class SchemaGenerator:
         self.schema = strict_schema(spec.draft)
 
     def prepare(self, db: DbSession, kit: LessonKit) -> KindPrepared:
-        prepared = prepare(db, kit, with_plan=self.spec.with_plan)
+        # Генерация всего материала — обезличенная, если комплект идёт через
+        # банк; перегенерация блока зовёт `prepare` сама и остаётся личной
+        prepared = prepare(db, kit, with_plan=self.spec.with_plan, bank=True)
+        slot = replace(prepared.bank, kind=self.spec.kind) if prepared.bank else None
         mechanics: tuple[str, ...] = ()
         brief = prepared.brief
         if self.spec.references is not None:
@@ -76,6 +79,7 @@ class SchemaGenerator:
             brief=brief,
             section=prepared.section,
             objectives=prepared.objectives,
+            bank=slot,
             mechanics=mechanics,
         )
 
@@ -94,7 +98,12 @@ class SchemaGenerator:
         server = {"section": prepared.section, "learning_objectives": prepared.objectives}
         content = {name: server[name] for name in self.spec.server_blocks}
         content.update(draft)
-        return Generated(content=content, mechanics=getattr(prepared, "mechanics", ()), **tokens)
+        return Generated(
+            content=content,
+            mechanics=getattr(prepared, "mechanics", ()),
+            bank=prepared.bank,
+            **tokens,
+        )
 
     def _checked(self, text: str, tokens: dict) -> dict:
         try:

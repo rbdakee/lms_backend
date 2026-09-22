@@ -26,6 +26,10 @@ from app.lesson_ai.games.mechanic import (
 )
 from app.lesson_ai.games.select import FRAME, pick, references
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 APP = Path(__file__).resolve().parent.parent / "app"
 OBJECTIVE_CODE = re.compile(r"\d+\.\d+\.\d+\.\d+")
 LEVELS = ("calm", "active", "full_game")

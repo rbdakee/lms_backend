@@ -6,23 +6,47 @@
 
 Комплект виден только своему учителю: чужой — 404, а не 403, чтобы по
 номерам нельзя было перебрать, чьи комплекты существуют.
+
+Суточный лимит на учителя (L7) считается здесь, в комплектах: сюда приходит
+и прямой заказ, и «Готовить» в чате, — один счётчик на оба пути.
+
+Здесь же — выдача из банка готовых материалов (L7, раздел 7): у комплекта
+без пожеланий материал, который уже есть в банке, заводится сразу готовым,
+без задания в очереди и без вызова модели.
 """
 
 from app.adapters.db.lesson_ai_repos import LessonKitRepo
-from app.adapters.db.models import LessonKit, User
-from app.domain.errors import FieldError, NotFoundError, ProgramNotPublishedError
+from app.adapters.db.lesson_bank_repo import LessonBankRepo
+from app.adapters.db.models import LessonKit, LessonMaterialBank, User
+from app.application.ratelimit import SlidingWindowLimiter
+from app.domain.errors import (
+    FieldError,
+    NotFoundError,
+    ProgramNotPublishedError,
+    RateLimitedError,
+)
 from app.domain.lesson_ai import (
     ANSWER_SOURCES,
+    BANK_KINDS,
     DEFAULT_DIFFICULTY,
     DEFAULT_ENGAGEMENT,
     JOB_ERROR_MESSAGES,
     MATERIAL_KINDS,
+    WAITS_FOR,
+    bankable,
+    kit_status,
 )
 
 
 class LessonKitsService:
-    def __init__(self, kits: LessonKitRepo):
+    def __init__(self, kits: LessonKitRepo, *, limiter: SlidingWindowLimiter):
         self.kits = kits
+        # Обязательный аргумент нарочно: сервис без лимита — это очередь,
+        # которую один учитель занимает на всех (раздел 7)
+        self.limiter = limiter
+        # Банк — в той же транзакции, что и заказ: выданный материал
+        # и комплект появляются вместе или не появляются вовсе
+        self.bank = LessonBankRepo(kits.db)
 
     # -- POST /lesson_ai/kits ----------------------------------------------
 
@@ -57,6 +81,15 @@ class LessonKitsService:
         # не вычитана владельцем (раздел 3.1)
         if program.status != "published":
             raise ProgramNotPublishedError()
+        # Лимит — после всех проверок заказа: отбитый заказ не съедает
+        # комплект из суточных
+        wait = self.limiter.hit(str(user.id))
+        if wait:
+            raise RateLimitedError(
+                f"За сутки можно заказать не больше {self.limiter.limit} комплектов"
+                " — следующий станет доступен позже",
+                retry_after_sec=wait,
+            )
         kit = self.kits.create_kit(
             user_id=user.id,
             objective_id=objective.id,
@@ -71,10 +104,55 @@ class LessonKitsService:
             difficulty_level=difficulty_level,
         )
         # Порядок видов — из брифа, а не из запроса: план урока идёт первым,
-        # остальные материалы получат его на вход (раздел 4.2)
-        for kind in sorted(set(kinds), key=MATERIAL_KINDS.index):
-            self.kits.add_material(kit.id, kind)
+        # остальные материалы получат его на вход (раздел 4.2). Он же нужен
+        # банку: соседей плана можно выдать, только решив, откуда сам план
+        ordered = sorted(set(kinds), key=MATERIAL_KINDS.index)
+        banked = bankable(kit.notes)
+        plan: LessonMaterialBank | None = None
+        for kind in ordered:
+            variant = self._variant(kit, kind, ordered, plan) if banked else None
+            if variant is None:
+                self.kits.add_material(kit.id, kind)
+                continue
+            self.bank.issue(kit.id, variant, user_id=user.id)
+            if kind == "lesson_plan":
+                plan = variant
+        # Статус пересчитывает закрытие задания, а у комплекта, собранного
+        # из банка целиком, заданий нет — без пересчёта он остался бы
+        # «собирается» навсегда
+        kit.status = kit_status(material.status for material in self.kits.materials(kit.id))
         return self._out(kit)
+
+    def _variant(
+        self,
+        kit: LessonKit,
+        kind: str,
+        ordered: list[str],
+        plan: LessonMaterialBank | None,
+    ) -> LessonMaterialBank | None:
+        """Вариант банка для вида или None — генерировать.
+
+        Соседи плана выдаются только цепочкой (записи 6–7 журнала L7):
+        к плану из банка — построенные по этому же плану; план заказан,
+        но генерируется заново — соседи тоже генерируются, по нему;
+        план не заказан — варианты, которые делали без плана.
+        """
+        if kind not in BANK_KINDS:
+            return None
+        plan_bank_id = None
+        if "lesson_plan" in WAITS_FOR.get(kind, ()) and "lesson_plan" in ordered:
+            if plan is None:
+                return None
+            plan_bank_id = plan.id
+        return self.bank.unseen(
+            kit.user_id,
+            objective_id=kit.objective_id,
+            kind=kind,
+            lang=kit.lang,
+            engagement_level=kit.engagement_level,
+            difficulty_level=kit.difficulty_level,
+            plan_bank_id=plan_bank_id,
+        )
 
     # -- GET /lesson_ai/kits/{id} ------------------------------------------
 

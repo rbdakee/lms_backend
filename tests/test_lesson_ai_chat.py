@@ -44,6 +44,10 @@ from tests.test_admin_curriculum import (
 from tests.test_assistant_stream import StreamingAi
 from tests.test_lesson_ai_kits import CODE, OBJECTIVE_TEXT, TOPIC, set_program_status
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 OTHER_PHONE = "+7 (707) 555-01-02"
 
 # Та же цель 2.1.2.6 в казахской редакции приказа: официальный текст, а не перевод

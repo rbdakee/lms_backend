@@ -104,7 +104,7 @@ class BlockRewriter:
             if value is not None:
                 return Rewritten(value=value, tokens_in=tokens_in, tokens_out=tokens_out)
             log.warning("%s.%s: блок не по форме, попытка %s", kind, block, attempt)
-        raise BlockOutputInvalidError()
+        raise BlockOutputInvalidError(tokens_in=tokens_in, tokens_out=tokens_out)
 
     def _checked(self, kind: str, block: str, text: str):
         try:

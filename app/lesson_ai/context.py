@@ -12,6 +12,11 @@
 идёт первым, остальные виды получают его на вход и обязаны ему соответствовать
 (TEACHER_AI_BRIEF, раздел 4.2). План уходит модели без блоков сервера — в них
 цель обучения с кодом.
+
+С L7 генерация бывает обезличенной (`bank=True`, комплект без пожеланий):
+её результат ложится в банк готовых материалов и выдаётся другим учителям
+(раздел 7). Такая модель не видит ни темы, ни числа детей — обезличенность
+держится тем, что личного в брифе нет, а не чисткой готового текста.
 """
 
 import json
@@ -20,11 +25,14 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.db.lesson_ai_repos import LessonKitRepo, objective_sections
+from app.adapters.db.lesson_bank_repo import LessonBankRepo, document
 from app.adapters.db.models import LessonKit
+from app.application.lesson_ai_queue import BankSlot
 from app.domain.lesson_ai import (
     DEFAULT_DIFFICULTY,
     DEFAULT_ENGAGEMENT,
     JobError,
+    bankable,
     strip_objective_codes,
 )
 from app.lesson_ai.schemas.lesson_plan import SERVER_BLOCKS as PLAN_SERVER_BLOCKS
@@ -81,20 +89,33 @@ class Prepared:
     # Блоки сервера: раздел программы и цели обучения с кодом — дословно
     section: dict
     objectives: list[dict]
+    # Куда в банке ляжет результат. None — генерация личная, в банк не идёт
+    bank: BankSlot | None = None
 
 
-def prepare(db: DbSession, kit: LessonKit, *, with_plan: bool = False) -> Prepared:
+def prepare(
+    db: DbSession, kit: LessonKit, *, with_plan: bool = False, bank: bool = False
+) -> Prepared:
     """Собрать урок из комплекта и справочника.
 
     Публикация проверяется здесь ещё раз, а не только при заказе: между
     заказом и генерацией программу могли снять с публикации, и тогда
     генерация по ней закрыта так же, как для нового заказа (раздел 3.1).
     Повтор тут не поможет — отказ окончательный.
+
+    `bank=True` — генерация всего материала очередью: у комплекта без
+    пожеланий она обезличенная и ложится в банк. Перегенерация блока
+    и ключи с ответами зовут без него — они личные и в банк не идут.
     """
     objective, program, subject = LessonKitRepo(db).objective_card(kit.objective_id)
     if program.status != "published":
         raise JobError("program_not_published", retryable=False)
     section, subsection = objective_sections(db, objective)
+    impersonal = bank and bankable(kit.notes)
+    if impersonal:
+        slot, plan = _bank_slot(db, kit, objective.id, with_plan=with_plan)
+    else:
+        slot, plan = None, (_plan(db, kit.id) if with_plan else None)
     brief = LessonBrief(
         lang=kit.lang,
         grade=kit.grade,
@@ -104,28 +125,73 @@ def prepare(db: DbSession, kit: LessonKit, *, with_plan: bool = False) -> Prepar
         # Коды вырезаются из всего, что пишет человек или приказ: учитель мог
         # вписать код в тему, а в тексте цели он мог остаться от склейки ячеек
         objective=strip_objective_codes(objective.text),
-        topic=strip_objective_codes(kit.topic),
-        class_size=kit.class_size,
+        # Тема и число детей — личное учителя: в банковую генерацию не идут,
+        # их учитель правит поверх выданного (раздел 7)
+        topic="" if impersonal else strip_objective_codes(kit.topic),
+        class_size=None if impersonal else kit.class_size,
         notes=strip_objective_codes(kit.notes),
         engagement_level=kit.engagement_level,
         difficulty_level=kit.difficulty_level,
-        plan=_plan(db, kit.id) if with_plan else None,
+        plan=plan,
         subject_code=subject.code,
     )
     return Prepared(
         brief=brief,
         section={"title": section, "subsection": subsection},
         objectives=[{"code": objective.code, "text": objective.text, "marker": objective.marker}],
+        bank=slot,
     )
 
 
+def _bank_slot(
+    db: DbSession, kit: LessonKit, objective_id: int, *, with_plan: bool
+) -> tuple[BankSlot | None, dict | None]:
+    """Слот банка и план урока для обезличенной генерации.
+
+    План соседи берут из строки банка, а не из материала учителя: учитель
+    мог уже поправить свой план, и через соседа личное утекло бы в банк.
+    План учителя готов, но не из банка (сделан до банка или вариант удалён) —
+    построенный по нему материал в банк не кладётся: ключа плана у него нет.
+    Плана в комплекте нет или он не готов — это законный вариант «без плана».
+
+    Вид в слоте пустой: общий сбор урока не знает, какой вид его заказал, —
+    вписывает генератор вида.
+    """
+    plan_bank_id = None
+    plan = None
+    if with_plan:
+        bank = LessonBankRepo(db)
+        material = bank.kit_plan(kit.id)
+        if material is not None and material.status == "ready":
+            variant = bank.variant(material.bank_id) if material.bank_id else None
+            if variant is None:
+                return None, _plan(db, kit.id)
+            plan_bank_id = variant.id
+            plan = _model_blocks(document(variant).items())
+    slot = BankSlot(
+        objective_id=objective_id,
+        kind="",
+        lang=kit.lang,
+        engagement_level=kit.engagement_level,
+        difficulty_level=kit.difficulty_level,
+        plan_bank_id=plan_bank_id,
+    )
+    return slot, plan
+
+
 def _plan(db: DbSession, kit_id: int) -> dict | None:
-    """План урока для соседних видов: блоки модели, без цели обучения
-    с кодом, и коды вырезаны отовсюду — учитель мог вписать их в план руками."""
+    """План урока для соседних видов из материала учителя — текущий,
+    с его правками."""
     found = LessonKitRepo(db).ready_blocks(kit_id, ("lesson_plan",))
     if not found:
         return None
     _kind, blocks = found[0]
+    return _model_blocks(blocks)
+
+
+def _model_blocks(blocks) -> dict:
+    """Блоки модели без цели обучения с кодом, и коды вырезаны отовсюду —
+    учитель мог вписать их в план руками."""
     return {
         name: strip_codes_deep(value) for name, value in blocks if name not in PLAN_SERVER_BLOCKS
     }
@@ -157,10 +223,10 @@ def describe(brief: LessonBrief, *, levels: bool = True) -> str:
     ]
     if brief.subsection:
         lines.append(f"Подраздел: {brief.subsection}")
-    lines += [
-        f"Цель обучения по программе: {brief.objective}",
-        f"Тема урока: {brief.topic}",
-    ]
+    lines.append(f"Цель обучения по программе: {brief.objective}")
+    # Темы нет у обезличенной генерации для банка: материал пишется по цели
+    if brief.topic:
+        lines.append(f"Тема урока: {brief.topic}")
     if brief.class_size:
         lines.append(f"Детей в классе: {brief.class_size}")
     if brief.notes:

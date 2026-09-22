@@ -24,6 +24,7 @@ from app.adapters.db.lesson_ai_repos import LessonAiJobRepo, LessonKitRepo
 from app.adapters.db.models import LessonAiJob, LessonMaterial, User
 from app.application.lesson_ai_queue import Generated, JobRunner
 from app.application.lesson_kits import LessonKitsService
+from app.application.ratelimit import SlidingWindowLimiter
 from app.domain.lesson_ai import (
     MAX_ATTEMPTS,
     RETRY_DELAYS_SEC,
@@ -96,7 +97,7 @@ def order_kit(user_id: int, objective_id: int) -> int:
     """Комплект из одного ҚМЖ — тем же сервисом, что и ручка заказа:
     материал и задание на него заводятся вместе, как в бою."""
     with OrmSession(get_engine()) as db:
-        out = LessonKitsService(LessonKitRepo(db)).create(
+        out = LessonKitsService(LessonKitRepo(db), limiter=SlidingWindowLimiter(100, 86400)).create(
             db.get(User, user_id),
             objective_id=objective_id,
             topic="Счёт до десяти",

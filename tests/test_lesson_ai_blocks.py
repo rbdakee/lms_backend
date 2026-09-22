@@ -44,6 +44,10 @@ from tests.test_lesson_ai_kits import (
     set_program_status,
 )
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 # Порядок формы ҚМЖ — он же `order_index`. Выписан здесь, а не взят из схемы:
 # иначе тест сверял бы схему саму с собой
 BLOCK_ORDER = [

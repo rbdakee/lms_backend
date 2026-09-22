@@ -63,12 +63,14 @@ from app.api.deps import (
     get_assistant_limiter,
     get_lesson_block_ai,
     get_lesson_chat_limiter,
+    get_lesson_kits_limiter,
     get_playback_limiter,
     get_sms,
     get_storage,
     get_telegram,
     get_thread_limiter,
     get_verify_limiter,
+    require_lesson_ai_access,
 )
 from app.application.ports import AiReply, AiToolCall, NotificationCard
 from app.application.ratelimit import SlidingWindowLimiter
@@ -339,6 +341,29 @@ def lesson_chat_limiter_clock():
     app.dependency_overrides[get_lesson_chat_limiter] = lambda: limiter
     yield clock
     app.dependency_overrides.pop(get_lesson_chat_limiter, None)
+
+
+@pytest.fixture(autouse=True)
+def lesson_kits_limiter_clock():
+    """Суточный лимит комплектов «Жоспара» (L7) — тоже в памяти процесса."""
+    clock = FakeClock()
+    limiter = SlidingWindowLimiter(get_settings().lesson_ai_kits_per_day, 86400, clock)
+    app.dependency_overrides[get_lesson_kits_limiter] = lambda: limiter
+    yield clock
+    app.dependency_overrides.pop(get_lesson_kits_limiter, None)
+
+
+@pytest.fixture
+def lesson_ai_open():
+    """Доступ к «Жоспару» открыт любому вошедшему — для тестов самого продукта.
+
+    Не автоматом: по умолчанию проверка доступа настоящая, и новый тест,
+    забывший про неё, получает честный 403, а не молча проходящую проверку.
+    Сама проверка доступа тестируется без этой фикстуры.
+    """
+    app.dependency_overrides[require_lesson_ai_access] = lambda: None
+    yield
+    app.dependency_overrides.pop(require_lesson_ai_access, None)
 
 
 @pytest.fixture

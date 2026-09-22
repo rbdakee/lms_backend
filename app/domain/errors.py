@@ -629,6 +629,25 @@ class LessonAiOffError(AppError):
         super().__init__(message)
 
 
+class LessonAiNoAccessError(AppError):
+    """У учителя нет действующего доступа к «Жоспару» — не выдан, снят или
+    истёк. Доступ отдельный от курсов и выдаётся админом руками после оплаты
+    вне платформы (TEACHER_AI_BRIEF, «Что решено», п. 4).
+
+    Отдельный код, а не общий `forbidden`: экран по нему показывает «как
+    получить доступ», а не «у вас нет прав».
+    """
+
+    status = 403
+    code = "lesson_ai_no_access"
+
+    def __init__(
+        self,
+        message: str = "Доступа к помощнику нет — его выдаёт администратор после оплаты",
+    ):
+        super().__init__(message)
+
+
 class ProgramNotPublishedError(AppError):
     """Программа, к которой относится цель, не опубликована.
 

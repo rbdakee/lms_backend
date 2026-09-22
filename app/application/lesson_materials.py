@@ -12,7 +12,6 @@
 Материал виден только своему учителю: чужой — 404, как у комплекта.
 """
 
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -21,7 +20,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.ai.openai_chat import AiUnavailableError
-from app.adapters.db.lesson_ai_repos import LessonMaterialRepo
+from app.adapters.db.lesson_ai_repos import LessonMaterialRepo, LessonUsageRepo
 from app.adapters.db.models import LessonKit, LessonMaterial, LessonMaterialBlock, User
 from app.domain.errors import (
     AiFailedError,
@@ -39,8 +38,6 @@ from app.domain.lesson_ai import (
     JobError,
     assemble_answer_key,
 )
-
-log = logging.getLogger(__name__)
 
 # Шапка ключей с ответами — блоки сервера из справочника, впереди ответов
 KEY_HEAD = ("section", "learning_objectives")
@@ -83,11 +80,14 @@ class LessonMaterialsService:
         *,
         db: DbSession,
         commit: Callable[[], None],
+        model: str,
     ):
         self.materials = materials
         self.rewriter = rewriter
         self.db = db
         self.commit = commit
+        # Для учёта расхода — имя из настройки, как у чата
+        self.model = model
 
     # -- GET /lesson_ai/materials/{id}/file ---------------------------------
 
@@ -145,17 +145,13 @@ class LessonMaterialsService:
             result = self.rewriter.rewrite(kind, block_kind, brief, document, instruction)
         except AiUnavailableError:
             raise AiFailedError() from None
-        except BlockOutputInvalidError:
+        except BlockOutputInvalidError as exc:
+            # Кривые ответы оплачены так же, как ровный
+            self._spent(user, kit, kind, exc.tokens_in, exc.tokens_out)
             raise AiFailedError("Модель вернула блок не по форме — попробуйте ещё раз") from None
-        # Учёт расхода по учителю — сессия L7 (`lesson_ai_usage`); до неё
-        # расход виден только в логе, без темы урока и текста блока
-        log.info(
-            "%s.%s перегенерирован: токены %s + %s",
-            kind,
-            block_kind,
-            result.tokens_in,
-            result.tokens_out,
-        )
+        # Расход — в учёт сразу и своей транзакцией: модель уже ответила,
+        # и заплачено, даже если блок ниже не запишется (его успели поправить)
+        self._spent(user, kit, kind, result.tokens_in, result.tokens_out)
 
         material = self.materials.lock_material(material_id)
         block = self.materials.block(material_id, block_kind)
@@ -173,6 +169,22 @@ class LessonMaterialsService:
         )
         self._sync_answer_key(material, user)
         return self._block_out(material, block)
+
+    def _spent(
+        self, user: User, kit: LessonKit, kind: str, tokens_in: int, tokens_out: int
+    ) -> None:
+        """Строка учёта — и сразу коммит: отказ дальше откатил бы транзакцию
+        запроса вместе с ней, а деньги уже потрачены."""
+        LessonUsageRepo(self.db).add(
+            user.id,
+            "block",
+            model=self.model,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            kit_id=kit.id,
+            kind=kind,
+        )
+        self.commit()
 
     # -- PUT /lesson_ai/materials/{id}/blocks/{block} -----------------------
 

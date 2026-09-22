@@ -36,6 +36,10 @@ from tests.test_lesson_ai_kits import (
     sent_message,
 )
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 KZ_OBJECTIVE = "екітаңбалы сандарды ондықтан аттамай ауызша қосу және азайтуды орындау"

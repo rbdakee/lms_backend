@@ -7,6 +7,8 @@
 
 import re
 from collections.abc import Iterable, Iterator
+from datetime import date, datetime
+from decimal import Decimal
 
 # Семь видов материала, состав утверждён владельцем 20.09.2026 (раздел 4).
 # `kind` — одно имя во всей цепочке: колонка, поле JSON, тип на фронте.
@@ -146,7 +148,12 @@ class JobError(Exception):
 class BlockOutputInvalidError(Exception):
     """Модель переписала один блок не по форме или вписала в него код цели —
     и так на всех попытках. Учителю это то же, что «модель не ответила»:
-    помогает ещё одна попытка."""
+    помогает ещё одна попытка. Токены — всех попыток: кривые ответы оплачены."""
+
+    def __init__(self, *, tokens_in: int = 0, tokens_out: int = 0):
+        super().__init__("block_output_invalid")
+        self.tokens_in = tokens_in
+        self.tokens_out = tokens_out
 
 
 # Что видит учитель у упавшего материала. Код — для ветвления на фронте,
@@ -273,3 +280,64 @@ def _task_groups(value) -> Iterator[dict]:
 
 def _is_task(value) -> bool:
     return isinstance(value, dict) and "text" in value and "answer" in value
+
+
+# -- Доступ, расход и банк (сессия L7) ----------------------------------------
+
+
+def access_active(*, expires_on: date | None, revoked_at: datetime | None, today: date) -> bool:
+    """Действует ли доступ к «Жоспару» сегодня.
+
+    Доступ отдельный от курсов (раздел 4 «Что решено»): сюда не смотрит ни одна
+    проверка курса, и наоборот. Срок — по этот день включительно, `today` —
+    дата по Алматы: доступ «до 31 декабря» не должен кончаться в 19:00
+    31 декабря по UTC. Пустой срок — бессрочно.
+    """
+    if revoked_at is not None:
+        return False
+    return expires_on is None or expires_on >= today
+
+
+# Откуда расход: генерация материала очередью, перегенерация блока по просьбе
+# учителя и ход чата сбора заказа. Три разные кнопки на экране — три строки
+# в разбивке, иначе не понять, за что платим.
+USAGE_SOURCES = ("material", "block", "chat")
+
+# Цена модели за миллион токенов, долларов: вход и выход. Стоимость строки
+# расхода считается в момент записи и дальше не пересчитывается — счёт за
+# прошлый месяц не должен меняться оттого, что провайдер поменял прайс.
+# Скидка за вход из кэша промпта не учитывается: стоимость выходит оценкой
+# сверху. Модели нет в списке — стоимость пустая, токены пишутся всё равно.
+MODEL_PRICES_USD_PER_M = {
+    "gpt-4.1": (Decimal("2.00"), Decimal("8.00")),
+    "gpt-4.1-mini": (Decimal("0.40"), Decimal("1.60")),
+    "gpt-4.1-nano": (Decimal("0.10"), Decimal("0.40")),
+    "gpt-4o": (Decimal("2.50"), Decimal("10.00")),
+    "gpt-4o-mini": (Decimal("0.15"), Decimal("0.60")),
+}
+
+
+def usage_cost(model: str | None, tokens_in: int, tokens_out: int) -> Decimal | None:
+    price = MODEL_PRICES_USD_PER_M.get(model or "")
+    if price is None:
+        return None
+    price_in, price_out = price
+    return (price_in * tokens_in + price_out * tokens_out) / 1_000_000
+
+
+# Что кладётся в банк готовых материалов (раздел 7): всё, что пишет модель.
+# Ключи с ответами собирает сервер из заданий этого же комплекта — они
+# бесплатны и обязаны совпадать с теми задачами, что достались учителю.
+BANK_KINDS = tuple(kind for kind in MATERIAL_KINDS if kind != "answer_key")
+
+
+def bankable(notes: str | None) -> bool:
+    """Идёт ли комплект через банк.
+
+    Пожелания учителя — единственное поле заказа, куда он пишет о своём классе
+    своими словами: там бывают и школа, и имена. Комплект с пожеланиями
+    генерируется лично под них и в банк не ходит ни за готовым, ни с новым.
+    Тему и число детей обезличенная генерация не видит вовсе — их учитель
+    правит поверх выданного (раздел 7).
+    """
+    return not (notes or "").strip()

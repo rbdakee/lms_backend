@@ -43,6 +43,10 @@ from tests.test_lesson_ai_kits import (
 )
 from tests.test_lesson_ai_queue import claim_and_commit, execute, fetch
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 SAMPLES = Path(__file__).parent / "samples" / "lesson_ai"
 
 # Ответ модели на каждый вид: план — черновик из L3, остальные — образцы L5
@@ -474,7 +478,11 @@ def test_code_written_into_the_plan_by_hand_does_not_reach_the_model(client, sms
     """Учитель вписал код цели в план руками до того, как собрались соседи:
     в плане он остаётся, а модель соседнего вида его не видит — ей код
     не дают ни в одном виде (раздел 4.1, правило 2)."""
-    kit_id = kit_of(client, sms, scene, ["lesson_plan", "tasks", "homework"])
+    # С пожеланиями — комплект личный: соседи банкового получают план из банка,
+    # а не правку учителя (L7), и правке тогда некуда дойти
+    kit_id = kit_of(
+        client, sms, scene, ["lesson_plan", "tasks", "homework"], notes="Путают разряды"
+    )
     fake = KindAi()
     assert run_next(fake)
     plan_id = materials(client, kit_id)["lesson_plan"]["id"]

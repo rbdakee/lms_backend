@@ -12,20 +12,38 @@
 2. прочитать из базы всё, что нужно генератору (`prepare`), и закрыть чтение;
 3. вызвать модель — десятки секунд, соединение с базой в это время не занято;
 4. записать результат или отказ, если задание всё ещё наше.
+
+С L7 результат может лечь ещё и в банк готовых материалов (раздел 7):
+генератор отдаёт слот банка, а очередь кладёт вариант той же транзакцией,
+что закрывает задание, — опоздавшая попытка не пишет ни материал, ни банк.
 """
 
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.db.lesson_ai_repos import LessonAiJobRepo
+from app.adapters.db.lesson_bank_repo import LessonBankRepo
 from app.adapters.db.models import LessonKit
 from app.domain.lesson_ai import MAX_ATTEMPTS, JobError, retry_delay
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BankSlot:
+    """Куда в банке ляжет материал, сгенерированный обезличенно: ключ
+    банка и вариант плана, по которому он построен (пусто — без плана)."""
+
+    objective_id: int
+    kind: str
+    lang: str
+    engagement_level: str
+    difficulty_level: str
+    plan_bank_id: int | None
 
 
 @dataclass(frozen=True)
@@ -37,6 +55,9 @@ class Generated:
     tokens_out: int = 0
     # Механики каталога игр, отданные модели как строительные блоки
     mechanics: tuple[str, ...] = ()
+    # Слот банка — только у материала, который модель писала, не видя
+    # ничего личного. None — материал личный, в банк не ложится
+    bank: BankSlot | None = None
 
 
 class MaterialGenerator(Protocol):
@@ -119,6 +140,15 @@ class JobRunner:
                 job, tokens_in=result.tokens_in, tokens_out=result.tokens_out, model=generator.model
             )
             repo.done(job, result.content, user_id=user_id, mechanics=result.mechanics)
+            if result.bank is not None:
+                bank = LessonBankRepo(db)
+                bank_id = bank.add(
+                    content=result.content,
+                    mechanics=result.mechanics,
+                    model=generator.model,
+                    **asdict(result.bank),
+                )
+                bank.link(kit_id, kind, bank_id)
             db.commit()
 
     def _fail(self, job_id: int, attempt: int, exc: JobError, *, model: str | None = None) -> None:

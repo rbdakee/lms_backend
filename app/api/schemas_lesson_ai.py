@@ -6,7 +6,7 @@
 комплект к уроку»: фронт работает от них и не гадает.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -256,3 +256,91 @@ class LessonChatConfirmOut(BaseModel):
 
 class LessonObjectivesOut(BaseModel):
     items: list[LessonChatObjectiveOut]
+
+
+# -- Доступ к продукту (сессия L7) ---------------------------------------------
+
+
+class LessonAccessStatusOut(BaseModel):
+    """`GET /lesson_ai/access` — есть ли у учителя доступ. Срок — только
+    у действующего; `null` у действующего значит «бессрочно»."""
+
+    has_access: bool
+    expires_on: date | None
+
+
+class LessonAccessPersonOut(BaseModel):
+    id: int
+    name: str
+
+
+class LessonAccessOut(BaseModel):
+    """Доступ учителя глазами админа. `status`: `active` — действует,
+    `expired` — срок прошёл, `revoked` — снят админом."""
+
+    status: Literal["active", "expired", "revoked"]
+    expires_on: date | None
+    paid: bool
+    paid_note: str | None
+    granted_at: datetime
+    granted_by: LessonAccessPersonOut | None
+    revoked_at: datetime | None
+
+
+class LessonAccessCardOut(BaseModel):
+    """Доступ одного учителя; `access: null` — не выдавался ни разу."""
+
+    user_id: int
+    access: LessonAccessOut | None
+
+
+class LessonAccessGrantIn(BaseModel):
+    """Выдать, продлить или выдать заново после снятия.
+
+    `expires_on` — по этот день включительно, по казахстанскому времени;
+    `null` — без срока. `paid` — отметка «оплата получена», `note` — комментарий
+    к ней; без оплаты комментарий не сохраняется, как у доступа к курсу.
+    """
+
+    expires_on: date | None = None
+    paid: bool = False
+    note: str | None = Field(default=None, max_length=500)
+
+
+class LessonAccessTeacherOut(BaseModel):
+    """Человек в строке списка доступов — те же поля и имена, что в списке
+    учителей админки: экран рисует их тем же компонентом."""
+
+    id: int
+    last_name: str
+    first_name: str
+    middle_name: str
+    phone: str
+    school: str
+    region: str
+    city: str
+    subject: str
+    is_blocked: bool
+
+
+class LessonAccessUsageOut(BaseModel):
+    """Расход учителя за всё время. `cost_usd: null` — стоимость неизвестна:
+    модели нет в прайсе или расхода ещё не было; токены при этом честные."""
+
+    kits: int
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float | None
+
+
+class LessonAccessItemOut(BaseModel):
+    teacher: LessonAccessTeacherOut
+    access: LessonAccessOut
+    usage: LessonAccessUsageOut
+
+
+class LessonAccessPageOut(BaseModel):
+    items: list[LessonAccessItemOut]
+    total: int
+    page: int
+    per_page: int

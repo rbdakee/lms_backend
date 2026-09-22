@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.ai.openai_chat import OpenAiChat
 from app.adapters.db.base import get_db
-from app.adapters.db.lesson_ai_repos import LessonKitRepo, LessonMaterialRepo
+from app.adapters.db.lesson_ai_repos import LessonAccessRepo, LessonKitRepo, LessonMaterialRepo
 from app.adapters.db.models import Session, User
 from app.adapters.db.preview import (
     PreviewEnrollmentRepo,
@@ -63,6 +63,7 @@ from app.application.curriculum_admin import CurriculumAdminService
 from app.application.curriculum_import import CurriculumImportService
 from app.application.files import FilesService
 from app.application.leads import LeadsService
+from app.application.lesson_ai_access import LessonAccessService
 from app.application.lesson_ai_chat import LessonChatService
 from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService
@@ -756,8 +757,36 @@ def require_lesson_ai() -> None:
         raise LessonAiOffError()
 
 
-def get_lesson_kits_service(db: Annotated[DbSession, Depends(get_db)]) -> LessonKitsService:
-    return LessonKitsService(LessonKitRepo(db))
+def get_lesson_access_service(
+    db: Annotated[DbSession, Depends(get_db)],
+) -> LessonAccessService:
+    return LessonAccessService(LessonAccessRepo(db))
+
+
+def require_lesson_ai_access(
+    user: Annotated[User, Depends(get_current_user)],
+    svc: Annotated[LessonAccessService, Depends(get_lesson_access_service)],
+) -> None:
+    """Действующий доступ к «Жоспару» — на каждой ручке продукта, зависимостью
+    роутера: ручка, которую забыли закрыть, открылась бы сама. Чат закрыт
+    тем же — каждая его реплика стоит денег."""
+    svc.check(user)
+
+
+# Суточный лимит комплектов на учителя (раздел 7). Счётчик один на всё
+# приложение: заказ напрямую и «Готовить» в чате — один и тот же комплект
+_lesson_kits_limiter = SlidingWindowLimiter(get_settings().lesson_ai_kits_per_day, 86400)
+
+
+def get_lesson_kits_limiter() -> SlidingWindowLimiter:
+    return _lesson_kits_limiter
+
+
+def get_lesson_kits_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    limiter: Annotated[SlidingWindowLimiter, Depends(get_lesson_kits_limiter)],
+) -> LessonKitsService:
+    return LessonKitsService(LessonKitRepo(db), limiter=limiter)
 
 
 _lesson_block_ai: AiPort | None = None
@@ -790,15 +819,17 @@ def get_lesson_chat_service(
     db: Annotated[DbSession, Depends(get_db)],
     ai: Annotated[AiPort, Depends(get_lesson_block_ai)],
     limiter: Annotated[SlidingWindowLimiter, Depends(get_lesson_chat_limiter)],
+    kits: Annotated[LessonKitsService, Depends(get_lesson_kits_service)],
 ) -> LessonChatService:
     cfg = get_settings()
     return LessonChatService(
         db,
         ai,
-        kits=LessonKitsService(LessonKitRepo(db)),
+        kits=kits,
         limiter=limiter,
         max_tool_calls=cfg.lesson_ai_chat_max_tool_calls,
         history_messages=cfg.lesson_ai_chat_history_messages,
+        model=cfg.lesson_ai_model,
     )
 
 
@@ -810,7 +841,13 @@ def get_lesson_materials_service(
     global _block_rewriter
     if _block_rewriter is None or _block_rewriter.ai is not ai:
         _block_rewriter = BlockRewriter(ai)
-    return LessonMaterialsService(LessonMaterialRepo(db), _block_rewriter, db=db, commit=db.commit)
+    return LessonMaterialsService(
+        LessonMaterialRepo(db),
+        _block_rewriter,
+        db=db,
+        commit=db.commit,
+        model=get_settings().lesson_ai_model,
+    )
 
 
 def get_settings_service(db: Annotated[DbSession, Depends(get_db)]) -> SettingsService:

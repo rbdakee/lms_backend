@@ -40,6 +40,10 @@ from app.lesson_ai.order_tools import OrderTools
 from app.main import app as fastapi_app
 from tests.conftest import ADMIN_PHONE, PHONE, age_codes, login, login_admin, make_admin
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 BACKEND = Path(__file__).resolve().parent.parent
 LESSON_AI_DIR = BACKEND / "app" / "lesson_ai"
 AI_LOOP = BACKEND / "app" / "application" / "ai_loop.py"

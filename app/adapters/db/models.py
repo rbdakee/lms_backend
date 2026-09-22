@@ -25,6 +25,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    Numeric,
     Text,
     UniqueConstraint,
     func,
@@ -35,6 +36,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.domain.iin import IIN_PLACEHOLDER
 from app.domain.lesson_ai import (
+    BANK_KINDS,
     CHAT_STATUSES,
     DEFAULT_DIFFICULTY,
     DEFAULT_ENGAGEMENT,
@@ -44,6 +46,7 @@ from app.domain.lesson_ai import (
     KIT_STATUSES,
     MATERIAL_KINDS,
     MATERIAL_STATUSES,
+    USAGE_SOURCES,
     VERSION_SOURCES,
 )
 from app.domain.platform import PLATFORMS
@@ -1093,6 +1096,13 @@ class LessonMaterial(Base):
     mechanics: Mapped[list[str]] = mapped_column(
         ARRAY(Text), default=list, server_default="{}"
     )
+    # Вариант банка, который достался учителю: выдан готовым или сгенерирован
+    # этим материалом и положен в банк (сессия L7). По нему банк не выдаёт
+    # учителю второй раз то же самое — у одной цели бывает несколько уроков.
+    # Пусто — материал личный: по пожеланиям учителя или собран сервером.
+    bank_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lesson_material_bank.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
@@ -1284,4 +1294,122 @@ class LessonAiChatMessage(Base):
     __table_args__ = (
         CheckConstraint("role IN ('user', 'assistant', 'tool')", name="role"),
         Index("ix_lesson_ai_chat_message_chat_id_id", "chat_id", "id"),
+    )
+
+
+class LessonAiAccess(Base):
+    """Доступ к «Жоспару» — отдельный от доступа к курсам (TEACHER_AI_BRIEF,
+    «Что решено», п. 4): купивший курс помощника не получает, пользующийся
+    помощником курс не получает. Выдаёт админ руками, оплата — вне платформы.
+
+    Строка одна на учителя: повторная выдача после снятия или продление
+    переписывают её, а не заводят вторую (как у `enrollment`).
+    """
+
+    __tablename__ = "lesson_ai_access"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user.id"), unique=True)
+    # Кто выдал: админов несколько, actor обязателен (backend/CLAUDE.md).
+    granted_by: Mapped[int] = mapped_column(ForeignKey("user.id"))
+    granted_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # По этот день включительно, по Алматы. Пусто — бессрочно. Поле ждёт
+    # решения владельца о сроке: скажет «бессрочно» — уходит миграцией.
+    expires_on: Mapped[date | None] = mapped_column(Date)
+    # Отметка «оплата получена», как у доступа к курсу: не NULL (хотя бы "") —
+    # оплата была. Суммы нет: платёж проходит вне платформы.
+    paid_note: Mapped[str | None] = mapped_column(Text)
+    revoked_at: Mapped[datetime | None] = mapped_column()
+    revoked_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
+
+
+class LessonAiUsage(Base):
+    """Расход «Жоспара» по учителю: строка на каждое обращение к модели,
+    за которое заплатили, — и за неудачное тоже, кривой ответ стоит тех же денег.
+
+    Потолка расхода нет (решение владельца 19.09.2026): таблица — учёт, а не
+    вентиль. Суточный лимит на учителя считается в комплектах и живёт в памяти
+    процесса (раздел 7).
+    """
+
+    __tablename__ = "lesson_ai_usage"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
+    source: Mapped[str] = mapped_column(Text)
+    # К чему относится расход — для разбивки «во что обошёлся урок». Комплект
+    # и чат удалять нечем, но ссылка не должна держать их строки навсегда.
+    kit_id: Mapped[int | None] = mapped_column(ForeignKey("lesson_kit.id", ondelete="SET NULL"))
+    chat_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lesson_ai_chat.id", ondelete="SET NULL")
+    )
+    # Вид материала — у генерации и перегенерации блока; у чата пусто.
+    kind: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(Text)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Долларов по прайсу модели на момент записи; пусто — модели нет в прайсе
+    # (`MODEL_PRICES_USD_PER_M`).
+    cost_usd: Mapped[Any | None] = mapped_column(Numeric(12, 6))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(_in("source", USAGE_SOURCES), name="source"),
+        Index("ix_lesson_ai_usage_user_id_created_at", "user_id", "created_at"),
+        Index("ix_lesson_ai_usage_created_at", "created_at"),
+    )
+
+
+class LessonMaterialBank(Base):
+    """Банк готовых материалов (TEACHER_AI_BRIEF, раздел 7): сгенерировали один
+    раз — выдаём из базы, учитель правит под свой класс.
+
+    Ключ — цель + вид + язык + оба уровня; у видов, которые строятся по плану
+    урока, ещё и вариант плана (`plan_bank_id`): презентация, не совпавшая
+    с ходом урока, хуже отсутствующей, поэтому банк выдаёт план и его соседей
+    только одной цепочкой. Пусто — материал делали без плана.
+
+    Материал здесь **обезличенный**: его писала модель, которая не видела
+    ни темы учителя, ни числа детей, ни пожеланий, а ФИО и школа в содержимое
+    не входят вовсе — шапку документа сервер собирает при скачивании. Ссылки
+    на комплект, учителя или исходный материал у строки нет нарочно.
+
+    Вариантов на ключ может быть несколько: у одной цели бывает несколько уроков,
+    и учителю не выдаётся второй раз то, что у него уже есть.
+    """
+
+    __tablename__ = "lesson_material_bank"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Без каскада, как у комплекта: повторный импорт программы не должен
+    # выдёргивать цель из-под готовых материалов
+    objective_id: Mapped[int] = mapped_column(ForeignKey("learning_objective.id"))
+    kind: Mapped[str] = mapped_column(Text)
+    lang: Mapped[str] = mapped_column(Text)
+    engagement_level: Mapped[str] = mapped_column(Text)
+    difficulty_level: Mapped[str] = mapped_column(Text)
+    plan_bank_id: Mapped[int | None] = mapped_column(ForeignKey("lesson_material_bank.id"))
+    # Документ целиком — блоки модели и блоки сервера, как `lesson_material.content`.
+    content: Mapped[dict] = mapped_column(JSONB)
+    # Порядок блоков: JSONB раскладывает ключи по-своему (короткие первыми),
+    # а выданный материал обязан получить блоки в порядке формы
+    block_order: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    mechanics: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list, server_default="{}")
+    model: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(_in("kind", BANK_KINDS), name="kind"),
+        CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
+        CheckConstraint(_in("engagement_level", ENGAGEMENT_LEVELS), name="engagement_level"),
+        CheckConstraint(_in("difficulty_level", DIFFICULTY_LEVELS), name="difficulty_level"),
+        Index(
+            "ix_lesson_material_bank_key",
+            "objective_id",
+            "kind",
+            "lang",
+            "engagement_level",
+            "difficulty_level",
+            "id",
+        ),
     )

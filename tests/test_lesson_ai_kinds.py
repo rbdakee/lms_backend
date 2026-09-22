@@ -50,6 +50,10 @@ from tests.test_lesson_ai_schema import (
     schema_nodes,
 )
 
+# Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
+# а сама проверка доступа — в `test_lesson_ai_access.py`
+pytestmark = pytest.mark.usefixtures("lesson_ai_open")
+
 SPEC = {spec.kind: spec for spec in SPECS}
 KINDS = [spec.kind for spec in SPECS]
 SAMPLES_DIR = Path(__file__).parent / "samples" / "lesson_ai"

@@ -18,6 +18,7 @@ from app.api.routers import (
     admin_certificates,
     admin_courses,
     admin_curriculum,
+    admin_lesson_ai,
     admin_lessons,
     admin_quizzes,
     admin_reviews,
@@ -135,6 +136,8 @@ def create_app() -> FastAPI:
     app.include_router(admin_admins.router)
     app.include_router(admin_assistant.router)
     app.include_router(admin_curriculum.router)
+    app.include_router(admin_lesson_ai.router)
+    app.include_router(lesson_ai.access_router)
     app.include_router(lesson_ai.router)
     app.include_router(settings.admin_router)
     app.include_router(telegram.admin_router)

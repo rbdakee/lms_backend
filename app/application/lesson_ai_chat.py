@@ -32,7 +32,7 @@ from collections.abc import Iterator
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.ai.openai_chat import AiUnavailableError
-from app.adapters.db.lesson_ai_repos import LessonChatRepo, ObjectiveRow
+from app.adapters.db.lesson_ai_repos import LessonChatRepo, LessonUsageRepo, ObjectiveRow
 from app.adapters.db.models import LessonAiChat, LessonAiChatMessage, User, now_utc
 from app.application.ai_loop import AiStreamBrokenError, LoopResult, ToolLoop
 from app.application.lesson_kits import LessonKitsService
@@ -87,9 +87,13 @@ class LessonChatService:
         limiter: SlidingWindowLimiter,
         max_tool_calls: int,
         history_messages: int,
+        model: str,
     ):
         self.db = db
         self.ai = ai
+        # Имя модели из настройки, а не из ответа провайдера: тот отвечает
+        # датированным снимком (`gpt-4.1-2025-04-14`), которого нет в прайсе
+        self.model = model
         self.repo = LessonChatRepo(db)
         self.kits = kits
         self.limiter = limiter
@@ -176,6 +180,9 @@ class LessonChatService:
                     yield {"event": "delta", "data": {"text": event.delta}}
         except (AiUnavailableError, AiStreamBrokenError):
             self.db.rollback()
+            # Хода не было, но разбор реплики до обрыва уже ответил — за него
+            # заплачено, и в учёт он идёт отдельной строкой после отката
+            self._spent(user.id, chat_id, extract_in, extract_out)
             yield {
                 "event": "error",
                 "data": {"error": {"code": "ai_failed", "message": AiFailedError().message}},
@@ -200,12 +207,25 @@ class LessonChatService:
             tokens_in=result.tokens_in + extract_in,
             tokens_out=result.tokens_out + extract_out,
         )
+        self._spent(
+            user.id, chat.id, result.tokens_in + extract_in, result.tokens_out + extract_out
+        )
         chat.updated_at = now_utc()
         self.db.flush()
         yield {
             "event": "done",
             "data": {"chat": self._out(chat), "stopped_at_cap": result.stopped_at_cap},
         }
+
+    def _spent(self, user_id: int, chat_id: int, tokens_in: int, tokens_out: int) -> None:
+        LessonUsageRepo(self.db).add(
+            user_id,
+            "chat",
+            model=self.model,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            chat_id=chat_id,
+        )
 
     def _extract(self, chat: LessonAiChat, text: str) -> tuple[int, int]:
         """Разбор реплики учителя в поля заказа — и запись того, что прошло

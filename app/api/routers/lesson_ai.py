@@ -2,9 +2,12 @@
 сериализация — логика в `app/application/lesson_kits.py`.
 
 Кука — учительская, площадки: продукт один на обе, и учитель в нём один
-и тот же человек (TEACHER_AI_BRIEF, раздел 8). Проверки доступа к продукту
-здесь пока нет — она приходит с `lesson_ai_access` в сессии L7, а до тех пор
-продукт закрыт выключателем `LESSON_AI_ENABLED`.
+и тот же человек (TEACHER_AI_BRIEF, раздел 8).
+
+Каждая ручка продукта — за действующим доступом (`lesson_ai_access`, L7):
+зависимость стоит на роутере, и ручка, которую забыли закрыть, закрыта сама.
+Вне его — одна `GET /lesson_ai/access`: по ней экран узнаёт, пускать ли
+учителя внутрь, и отказом она отвечать не может.
 """
 
 import json
@@ -23,6 +26,7 @@ from app.adapters.db.models import User
 from app.adapters.docx.common import DocHeader
 from app.api import deps
 from app.api.schemas_lesson_ai import (
+    LessonAccessStatusOut,
     LessonBlockEditIn,
     LessonBlockOut,
     LessonBlockRegenerateIn,
@@ -38,6 +42,7 @@ from app.api.schemas_lesson_ai import (
     LessonKitOut,
     LessonObjectivesOut,
 )
+from app.application.lesson_ai_access import LessonAccessService
 from app.application.lesson_ai_chat import LessonChatService
 from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService, MaterialFile
@@ -45,7 +50,19 @@ from app.application.ports import AiPort
 from app.application.ratelimit import SlidingWindowLimiter
 from app.config import get_settings
 
-router = APIRouter(prefix="/lesson_ai", dependencies=[Depends(deps.require_lesson_ai)])
+router = APIRouter(
+    prefix="/lesson_ai",
+    dependencies=[Depends(deps.require_lesson_ai), Depends(deps.require_lesson_ai_access)],
+)
+access_router = APIRouter(prefix="/lesson_ai", dependencies=[Depends(deps.require_lesson_ai)])
+
+
+@access_router.get("/access")
+def access(
+    user: Annotated[User, Depends(deps.get_current_user)],
+    svc: Annotated[LessonAccessService, Depends(deps.get_lesson_access_service)],
+) -> LessonAccessStatusOut:
+    return LessonAccessStatusOut(**svc.status(user))
 
 
 @router.post("/kits", status_code=201)
@@ -218,10 +235,11 @@ def _turn(
         svc = LessonChatService(
             db,
             ai,
-            kits=LessonKitsService(LessonKitRepo(db)),
+            kits=LessonKitsService(LessonKitRepo(db), limiter=deps.get_lesson_kits_limiter()),
             limiter=limiter,
             max_tool_calls=cfg.lesson_ai_chat_max_tool_calls,
             history_messages=cfg.lesson_ai_chat_history_messages,
+            model=cfg.lesson_ai_model,
         )
         user = db.get(User, user_id)
         if user is None:
