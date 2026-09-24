@@ -16,10 +16,10 @@ from typing import Annotated, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session as DbSession
 
-from app.adapters import lesson_files
+from app.adapters import lesson_files, lesson_preview
 from app.adapters.db.base import get_engine
 from app.adapters.db.lesson_ai_repos import LessonKitRepo
 from app.adapters.db.models import User
@@ -121,6 +121,31 @@ def material_file(material_id: int, user: CurrentUser, svc: Materials) -> Respon
         lesson_files.render(file.kind, file.content, header),
         media_type=lesson_files.MEDIA_TYPES[file.format],
         headers={"content-disposition": _disposition(file)},
+    )
+
+
+@router.get(
+    "/materials/{material_id}/preview",
+    response_class=HTMLResponse,
+    responses={200: {"content": {"text/html": {}}, "description": "Страница просмотра"}},
+)
+def material_preview(material_id: int, user: CurrentUser, svc: Materials) -> HTMLResponse:
+    """Тот же файл, что отдаёт `/file`, развёрнутый в HTML: учитель смотрит
+    материал на сайте, не открывая Word. Собирается на каждый запрос, как
+    и файл, — правка блока видна сразу, хранить нечего. Отказы те же."""
+    file = svc.file(user, material_id)
+    header = DocHeader(
+        lang=file.lang, teacher_name=file.teacher_name, grade=file.grade, topic=file.topic
+    )
+    data = lesson_files.render(file.kind, file.content, header)
+    return HTMLResponse(
+        lesson_preview.render(file.format, data, file.lang),
+        headers={
+            # Скриптов в странице нет и не будет; открытая напрямую, а не во
+            # фрейме экрана, она всё равно не выполнит ничего, кроме стилей
+            "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
+            "cache-control": "no-store",
+        },
     )
 
 
