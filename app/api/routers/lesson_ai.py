@@ -25,6 +25,7 @@ from app.adapters.db.lesson_ai_repos import LessonKitRepo
 from app.adapters.db.models import User
 from app.adapters.docx.common import DocHeader
 from app.api import deps
+from app.api.pagination import PageParams, page_out
 from app.api.schemas_lesson_ai import (
     LessonAccessStatusOut,
     LessonBlockEditIn,
@@ -37,6 +38,7 @@ from app.api.schemas_lesson_ai import (
     LessonChatOrderPatchIn,
     LessonChatOut,
     LessonChatSayIn,
+    LessonChatsPageOut,
     LessonChatTurnOut,
     LessonKitIn,
     LessonKitOut,
@@ -202,6 +204,14 @@ Chats = Annotated[LessonChatService, Depends(deps.get_lesson_chat_service)]
 @router.post("/chats", status_code=201)
 def create_chat(user: CurrentUser, svc: Chats) -> LessonChatOut:
     return LessonChatOut(**svc.create(user))
+
+
+@router.get("/chats")
+def chats(
+    user: CurrentUser, params: Annotated[PageParams, Depends()], svc: Chats
+) -> LessonChatsPageOut:
+    data = svc.chats(user, offset=params.offset, limit=params.per_page)
+    return LessonChatsPageOut(**page_out(data["items"], data["total"], params))
 
 
 @router.get("/chats/{chat_id}")

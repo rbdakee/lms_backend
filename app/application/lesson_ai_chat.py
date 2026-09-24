@@ -75,6 +75,8 @@ EXTRACT_DIALOG = 6
 # Сколько найденных целей разбор видит списком «показано учителю»: подтверждают
 # недавно показанное, а не то, что мелькнуло в начале длинного чата
 SHOWN_MAX = 20
+# Первая реплика в истории чатов — строкой-подписью, а не текстом целиком
+FIRST_MESSAGE_MAX = 120
 
 
 class LessonChatService:
@@ -107,6 +109,40 @@ class LessonChatService:
 
     def chat(self, user: User, chat_id: int) -> dict:
         return self._out(self._own(user, chat_id))
+
+    def chats(self, user: User, *, offset: int, limit: int) -> dict:
+        """История разговоров учителя — только свои, свежие по активности сверху.
+
+        Страница собирается тремя запросами при любом её размере (чаты, первые
+        реплики, цели), а не `_out` на каждый чат: тот тянет ленту целиком.
+        """
+        chats, total = self.repo.user_chats(user.id, offset=offset, limit=limit)
+        firsts = self.repo.first_user_messages([chat.id for chat in chats])
+        objectives = self.repo.objectives_by_ids(
+            list({chat.objective_id for chat in chats if chat.objective_id})
+        )
+        items = []
+        for chat in chats:
+            row = objectives.get(chat.objective_id) if chat.objective_id else None
+            # То же правило, что в `_order_out`: цель не в редакции языка класса
+            # в заказ не засчитывается — и в истории предмета и класса у неё нет
+            if row is not None and chat.lang and row[1].lang != chat.lang:
+                row = None
+            first = firsts.get(chat.id)
+            items.append(
+                {
+                    "id": chat.id,
+                    "status": chat.status,
+                    "kit_id": chat.kit_id,
+                    "topic": chat.topic,
+                    "subject_code": row[2].code if row is not None else None,
+                    "grade": row[0].grade if row is not None else None,
+                    "first_message": first[:FIRST_MESSAGE_MAX] if first else None,
+                    "created_at": chat.created_at,
+                    "updated_at": chat.updated_at,
+                }
+            )
+        return {"items": items, "total": total}
 
     # -- ход ----------------------------------------------------------------
 

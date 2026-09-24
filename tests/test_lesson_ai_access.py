@@ -112,6 +112,7 @@ def test_route_list_is_not_empty():
     assert len(product_routes()) >= 14
     assert "/lesson_ai/kits" in paths
     assert "/lesson_ai/chats/1/messages" in paths
+    assert "/lesson_ai/chats" in paths
     assert "/lesson_ai/objectives" in paths
 
 

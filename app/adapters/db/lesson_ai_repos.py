@@ -520,6 +520,39 @@ class LessonChatRepo:
         self.db.add(row)
         return row
 
+    def user_chats(
+        self, user_id: int, *, offset: int, limit: int
+    ) -> tuple[list[LessonAiChat], int]:
+        """Чаты учителя для истории — свежие по последней активности сверху:
+        `updated_at` двигают ход, правка заказа и подтверждение."""
+        where = LessonAiChat.user_id == user_id
+        total = self.db.execute(
+            select(func.count()).select_from(LessonAiChat).where(where)
+        ).scalar_one()
+        rows = self.db.execute(
+            select(LessonAiChat)
+            .where(where)
+            .order_by(LessonAiChat.updated_at.desc(), LessonAiChat.id.desc())
+            .offset(offset)
+            .limit(limit)
+        ).scalars()
+        return list(rows), total
+
+    def first_user_messages(self, chat_ids: list[int]) -> dict[int, str]:
+        """Первая реплика учителя в каждом чате — одним запросом на страницу."""
+        if not chat_ids:
+            return {}
+        rows = self.db.execute(
+            select(LessonAiChatMessage.chat_id, LessonAiChatMessage.content)
+            .where(
+                LessonAiChatMessage.chat_id.in_(chat_ids),
+                LessonAiChatMessage.role == "user",
+            )
+            .order_by(LessonAiChatMessage.chat_id, LessonAiChatMessage.id)
+            .distinct(LessonAiChatMessage.chat_id)
+        ).all()
+        return {chat_id: content for chat_id, content in rows}
+
     # -- справочник -------------------------------------------------------
 
     def _objectives(self):
@@ -595,6 +628,16 @@ class LessonChatRepo:
             self._objectives().where(LearningObjective.id == objective_id)
         ).first()
         return tuple(row) if row is not None else None
+
+    def objectives_by_ids(self, objective_ids: list[int]) -> dict[int, ObjectiveRow]:
+        """Цели страницы чатов одним запросом — с тем же фильтром публикации,
+        что у `objective`: снятая цель в истории не числится, как и в заказе."""
+        if not objective_ids:
+            return {}
+        rows = self.db.execute(
+            self._objectives().where(LearningObjective.id.in_(objective_ids))
+        ).all()
+        return {row[0].id: tuple(row) for row in rows}
 
     def objective_lang(self, objective_id: int) -> tuple[str, str] | None:
         """Код цели и язык её редакции — **без фильтра публикации**: заказ

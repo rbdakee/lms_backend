@@ -7236,6 +7236,58 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
 и `"objective"` в `missing`: генерация по ней закрыта, и учитель увидит недостачу,
 а не отказ после «Готовить».
 
+## GET /lesson_ai/chats
+
+История разговоров учителя — только свои чаты, свежие по последней активности сверху
+(`updated_at desc`, потом `id desc`). `updated_at` двигают ход чата, правка заказа
+(`PATCH …/order`) и подтверждение: старый чат, в который учитель вернулся, поднимается
+наверх. Параметры — `page`, `per_page` (до 100), вид постраничных списков общий.
+
+```json
+// 200
+{
+  "items": [
+    {
+      "id": 7,
+      "status": "confirmed",
+      "kit_id": 12,
+      "topic": "Сложение двузначных чисел",
+      "subject_code": "math",
+      "grade": 2,
+      "first_message": "завтра 2 класс, складываем двузначные без перехода через десяток",
+      "created_at": "2026-09-23T01:10:04.117520Z",
+      "updated_at": "2026-09-23T01:14:40.502113Z"
+    },
+    {
+      "id": 5,
+      "status": "collecting",
+      "kit_id": null,
+      "topic": null,
+      "subject_code": null,
+      "grade": null,
+      "first_message": null,
+      "created_at": "2026-09-22T09:02:11.300000Z",
+      "updated_at": "2026-09-22T09:02:11.300000Z"
+    }
+  ],
+  "total": 2, "page": 1, "per_page": 20
+}
+
+// 200 — чатов нет
+{ "items": [], "total": 0, "page": 1, "per_page": 20 }
+
+// 422 — per_page больше 100 или page меньше 1
+{ "error": { "code": "validation_error", "message": "Проверьте заполнение полей",
+  "details": { "fields": [ { "field": "per_page", "message": "Input should be less than or equal to 100" } ] } } }
+```
+
+| Поле | Что это |
+|---|---|
+| `status`, `kit_id` | как у чата: `confirmed` — заказ ушёл в комплект `kit_id`, открывать экран комплекта |
+| `topic` | тема из заказа; не названа — `null` |
+| `subject_code`, `grade` | из цели заказа, по тем же правилам, что `order`: нет цели, программа снята с публикации или цель не в редакции языка класса — `null` |
+| `first_message` | первая реплика учителя, не длиннее 120 символов; реплик нет (чат пустой или собран кнопками) — `null` |
+
 ## GET /lesson_ai/chats/{id}
 
 Тот же ответ, что у создания, — чат целиком: заказ и лента. Для перезагрузки страницы

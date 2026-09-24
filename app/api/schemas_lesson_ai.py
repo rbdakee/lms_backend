@@ -214,6 +214,29 @@ class LessonChatOut(BaseModel):
     updated_at: datetime
 
 
+class LessonChatListItemOut(BaseModel):
+    """Строка истории разговоров. Предмет и класс — из цели заказа, как
+    в `LessonChatOrderOut`; `first_message` — первая реплика учителя,
+    не длиннее 120 символов, `null` — учитель ещё ничего не написал."""
+
+    id: int
+    status: Literal["collecting", "confirmed"]
+    kit_id: int | None
+    topic: str | None
+    subject_code: str | None
+    grade: int | None
+    first_message: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class LessonChatsPageOut(BaseModel):
+    items: list[LessonChatListItemOut]
+    total: int
+    page: int
+    per_page: int
+
+
 class LessonChatSayIn(BaseModel):
     text: str
 

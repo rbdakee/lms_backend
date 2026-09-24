@@ -20,7 +20,7 @@
 import json
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session as OrmSession
 
 from app.adapters.ai.openai_chat import AiUnavailableError
@@ -295,6 +295,7 @@ def test_new_chat_is_an_empty_order(client, sms, ai):
 def test_chats_require_login(client, scene):
     for method, path, body in [
         ("post", "/lesson_ai/chats", None),
+        ("get", "/lesson_ai/chats", None),
         ("get", "/lesson_ai/chats/1", None),
         ("post", "/lesson_ai/chats/1/messages", {"text": "привет"}),
         ("patch", "/lesson_ai/chats/1/order", {"topic": TOPIC}),
@@ -1346,3 +1347,142 @@ def test_order_tools_are_exactly_two():
     assert properties["kinds"]["items"]["enum"] == list(MATERIAL_KINDS)
     assert set(prompt.EXTRACT_SCHEMA["required"]) == set(properties)
 
+
+
+# -- 15. история чатов --------------------------------------------------------------------
+
+
+def chat_list(client, **params) -> dict:
+    resp = client.get("/lesson_ai/chats", params=params)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_chat_list_is_empty_without_chats(client, sms):
+    login(client, sms)
+
+    assert chat_list(client) == {"items": [], "total": 0, "page": 1, "per_page": 20}
+
+
+def test_chat_list_shows_only_own_chats(client, client2, sms, scene):
+    login(client, sms)
+    own = new_chat(client)
+    login(client2, sms, phone=OTHER_PHONE)
+    new_chat(client2)
+    new_chat(client2)
+
+    body = chat_list(client)
+
+    assert [row["id"] for row in body["items"]] == [own["id"]]
+    assert body["total"] == 1
+
+
+def test_chat_list_row_fields(client, sms, ai, scene):
+    """Строка истории: тема, предмет и класс из цели заказа, первая реплика
+    учителя обрезанной подписью; подтверждённый чат — со ссылкой на комплект."""
+    login(client, sms)
+    empty = new_chat(client)
+    talked = new_chat(client)
+    long_text = "урок во 2 классе, " + "складываем двузначные " * 10
+    say(client, ai, talked["id"], long_text)
+    say(client, ai, talked["id"], "вторая реплика")
+    confirmed = ready_chat(client, scene)
+    kit = confirm(client, confirmed["id"]).json()["kit"]
+
+    rows = {row["id"]: row for row in chat_list(client)["items"]}
+
+    assert rows[empty["id"]] == {
+        "id": empty["id"],
+        "status": "collecting",
+        "kit_id": None,
+        "topic": None,
+        "subject_code": None,
+        "grade": None,
+        "first_message": None,
+        "created_at": empty["created_at"],
+        "updated_at": empty["updated_at"],
+    }
+    assert rows[talked["id"]]["first_message"] == long_text.strip()[:120]
+    assert len(rows[talked["id"]]["first_message"]) == 120
+    done_row = rows[confirmed["id"]]
+    assert (done_row["status"], done_row["kit_id"]) == ("confirmed", kit["id"])
+    assert (done_row["topic"], done_row["subject_code"], done_row["grade"]) == (
+        TOPIC, "math", scene.objective.grade
+    )
+    # Кнопками, без реплик, — подписи нет
+    assert done_row["first_message"] is None
+
+
+def test_chat_list_drops_the_objective_like_the_order(client, sms, scene):
+    """Программу сняли с публикации — предмета и класса нет и в истории,
+    как в карточке заказа; тема остаётся."""
+    login(client, sms)
+    chat = ready_chat(client, scene)
+
+    set_program_status(scene.ru.id, "loaded")
+
+    row = chat_list(client)["items"][0]
+    assert (row["id"], row["topic"], row["subject_code"], row["grade"]) == (
+        chat["id"], TOPIC, None, None
+    )
+
+
+def test_chat_list_is_ordered_by_last_activity(client, sms, ai, scene):
+    """Реплика или правка заказа поднимает старый чат наверх: история
+    сортируется по активности, а не по дате создания."""
+    login(client, sms)
+    oldest = new_chat(client)["id"]
+    middle = new_chat(client)["id"]
+    newest = new_chat(client)["id"]
+    assert [row["id"] for row in chat_list(client)["items"]] == [newest, middle, oldest]
+
+    say(client, ai, oldest, "урок во 2 классе")
+    assert [row["id"] for row in chat_list(client)["items"]] == [oldest, newest, middle]
+
+    assert patch(client, middle, topic=TOPIC).status_code == 200
+    assert [row["id"] for row in chat_list(client)["items"]] == [middle, oldest, newest]
+
+
+def test_chat_list_pages(client, sms):
+    login(client, sms)
+    ids = [new_chat(client)["id"] for _ in range(5)][::-1]
+
+    first = chat_list(client, page=1, per_page=2)
+    last = chat_list(client, page=3, per_page=2)
+    past = chat_list(client, page=4, per_page=2)
+
+    assert ([row["id"] for row in first["items"]], first["total"]) == (ids[:2], 5)
+    assert (first["page"], first["per_page"]) == (1, 2)
+    assert [row["id"] for row in last["items"]] == ids[4:]
+    assert (past["items"], past["total"]) == ([], 5)
+    assert client.get("/lesson_ai/chats?per_page=101").status_code == 422
+    assert client.get("/lesson_ai/chats?page=0").status_code == 422
+
+
+def test_chat_list_query_count_does_not_grow(client, sms, ai, scene):
+    """Страница — ограниченное число запросов, а не по нескольку на чат."""
+
+    def queries() -> int:
+        counted = []
+        engine = get_engine()
+
+        def count(*args):
+            counted.append(1)
+
+        event.listen(engine, "before_cursor_execute", count)
+        try:
+            chat_list(client, per_page=100)
+        finally:
+            event.remove(engine, "before_cursor_execute", count)
+        return len(counted)
+
+    login(client, sms)
+    for _ in range(2):
+        chat = ready_chat(client, scene)
+        say(client, ai, chat["id"], "урок во 2 классе")
+    few = queries()
+    for _ in range(6):
+        chat = ready_chat(client, scene)
+        say(client, ai, chat["id"], "урок во 2 классе")
+    many = queries()
+    assert many == few, f"{few} запросов на 2 чата, {many} на 8"
