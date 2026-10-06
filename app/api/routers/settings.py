@@ -5,8 +5,14 @@ from fastapi.responses import StreamingResponse
 
 from app.adapters.db.models import User
 from app.api import deps
-from app.api.schemas import AdminSettingsOut, AdminSettingsPatchIn, PublicSettingsOut
+from app.api.schemas import (
+    AdminSettingsOut,
+    AdminSettingsPatchIn,
+    PublicSettingsOut,
+    PublicStatsOut,
+)
 from app.application.settings import SettingsService
+from app.application.stats import PublicStatsService
 
 router = APIRouter()
 admin_router = APIRouter(prefix="/admin")
@@ -38,6 +44,15 @@ def public_settings(
     # Без входа: название, логотип и контакты показывает лендинг — свои
     # у каждой площадки
     return PublicSettingsOut(**svc.public(platform))
+
+
+@router.get("/stats")
+def public_stats(
+    platform: Annotated[str, Depends(deps.platform_of)],
+    svc: Annotated[PublicStatsService, Depends(deps.get_public_stats_service)],
+) -> PublicStatsOut:
+    # Без входа, как и бренд: цифры стоят на лендинге своей площадки
+    return PublicStatsOut(**svc.public(platform))
 
 
 @router.get("/branding/{slot}")

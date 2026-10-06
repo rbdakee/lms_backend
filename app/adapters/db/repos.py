@@ -471,6 +471,41 @@ class CourseRepo(CourseVisibility):
             or 0
         )
 
+    def catalog_groups_count(self, platform: str) -> int:
+        """Курсы так, как их видит посетитель каталога: русская и казахская
+        версии одной группы — одна карточка с чипами RU/KZ, а не две.
+
+        Справочное число дашборда (`published_count`) считает версии порознь —
+        там это два курса в списке админа. Здесь число стоит на лендинге рядом
+        с кнопкой каталога и обязано совпадать с числом карточек в нём.
+        """
+        return (
+            self.db.scalar(
+                select(func.count(Course.group_id.distinct())).where(
+                    self.published_course(platform)
+                )
+            )
+            or 0
+        )
+
+    def learners_count(self, platform: str) -> int:
+        """Люди с действующим доступом хоть к одному курсу площадки.
+
+        Человек с тремя курсами — один учитель, а не три. Отозванный доступ
+        не считается: «уже учатся» про тех, у кого обучение открыто. Админ
+        не входит ни в один показатель (`not_admin`), и этот не исключение.
+        """
+        return (
+            self.db.scalar(
+                select(func.count(Enrollment.user_id.distinct())).where(
+                    Enrollment.platform == platform,
+                    Enrollment.revoked_at.is_(None),
+                    not_admin(Enrollment.user_id),
+                )
+            )
+            or 0
+        )
+
     def group_versions(self, group_id: int, platform: str) -> list[Course]:
         """Языковые версии группы, выложенные на площадке — чипы RU/KZ.
 

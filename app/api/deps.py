@@ -69,6 +69,7 @@ from app.application.ratelimit import SlidingWindowLimiter
 from app.application.reports import ReportsService
 from app.application.reviews_admin import ReviewsAdminService
 from app.application.settings import TELEGRAM_KEY, SettingsService
+from app.application.stats import PublicStatsService
 from app.application.submissions_admin import SubmissionsAdminService
 from app.application.tasks import TasksService
 from app.application.tasks_admin import TasksAdminService
@@ -663,6 +664,14 @@ def get_settings_service(db: Annotated[DbSession, Depends(get_db)]) -> SettingsS
     # Хранилище больше не нужно: бренд лежит константами и файлами в коде,
     # а из таблицы настроек читается одна привязка бота
     return SettingsService(settings=SettingRepo(db), cfg=get_settings())
+
+
+def get_public_stats_service(
+    db: Annotated[DbSession, Depends(get_db)],
+) -> PublicStatsService:
+    # Настоящие репозитории, не подменённые предпросмотром: черновик, который
+    # админ смотрит, в каталоге не стоит и в цифрах лендинга его нет
+    return PublicStatsService(courses=CourseRepo(db), certificates=CertificateRepo(db))
 
 
 def get_certificate_pdf_service(
