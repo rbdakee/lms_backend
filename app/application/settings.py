@@ -3,8 +3,12 @@
 
 Бренд — название, организация, контакты и картинки — настройкой быть перестал:
 он свой у каждой площадки и лежит константами в `app/domain/brands.py`
-(PLATFORMS_BRIEF, решение 4). Из таблицы `setting` здесь читается и пишется
-только строка `telegram`.
+(PLATFORMS_BRIEF, решение 4). Из таблицы `setting` здесь читаются и пишутся
+две строки: `telegram` и `tutorial_video`.
+
+Обучающий ролик на главной — не бренд, хоть и свой у каждой площадки: его
+перезаписывают при смене интерфейса, и ждать ради новой ссылки выкатки
+незачем (решение владельца 08.10.2026). Поэтому он в базе, а не в константах.
 
 Картинки бренда лежат файлами в `app/assets/brands/<площадка>/` — рядом
 со шрифтом сертификата и по той же причине: это часть выкатываемого кода,
@@ -22,11 +26,14 @@ from pathlib import Path
 from app.adapters.db.repos import SettingRepo
 from app.config import Settings
 from app.domain.brands import BRANDS, LOGO_SLOT, brand
-from app.domain.errors import NotFoundError
+from app.domain.content import normalize_youtube
+from app.domain.errors import FieldError, NotFoundError
 from app.domain.platform import PLATFORMS
 from app.domain.submission import mime_of
 
 TELEGRAM_KEY = "telegram"
+# Значение строки — {код площадки: ссылка YouTube}
+TUTORIAL_KEY = "tutorial_video"
 
 NO_IMAGE = "Картинка не найдена"
 
@@ -97,6 +104,7 @@ class SettingsService:
         больше неоткуда — из базы бренд ушёл.
         """
         telegram = self.telegram()
+        tutorial = self.settings.get(TUTORIAL_KEY)
         return {
             # Порядок — как в PLATFORMS, всегда: экран не должен зависеть
             # от того, в каком порядке сложился ответ
@@ -105,6 +113,7 @@ class SettingsService:
                     "platform": code,
                     "platform_name": brand(code).platform_name,
                     "org_name": brand(code).org_name,
+                    "tutorial_video_url": tutorial.get(code),
                 }
                 for code in PLATFORMS
             ],
@@ -123,8 +132,8 @@ class SettingsService:
     # -- PATCH /admin/settings ----------------------------------------------
 
     def patch(self, data: dict) -> dict:
-        """Меняет только присланное. Осталась одна вкладка — Telegram: бренд
-        и контакты правятся выкаткой, а не экраном.
+        """Меняет только присланное: флаги Telegram и ссылки на обучающий
+        ролик. Бренд и контакты правятся выкаткой, а не экраном.
 
         Строка настроек пишется слиянием, а не целиком: рядом с флагами лежит
         `chat_id`, и «прочитать, изменить, записать» отменяло бы отвязку —
@@ -141,13 +150,19 @@ class SettingsService:
             # незнакомому человеку, и отозвать их уже нельзя
             self.settings.merge(TELEGRAM_KEY, telegram)
 
+        tutorial = _tutorial_links(data.get("platforms") or [])
+        if tutorial:
+            # Слиянием, как и бот: две вкладки с разными площадками
+            # не затирают ссылки друг друга
+            self.settings.merge(TUTORIAL_KEY, tutorial)
+
         return self.admin_get()
 
     # -- GET /settings ------------------------------------------------------
 
     def public(self, platform: str) -> dict:
-        """Лендинг и страница курса: название, логотип и контакты площадки,
-        с которой пришёл запрос.
+        """Лендинг и страница курса: название, логотип, контакты и обучающий
+        ролик площадки, с которой пришёл запрос.
 
         Сверх этого сюда не попадает ничего — ни привязка бота, ни картинки
         сертификата: входа здесь нет, и лишнее поле утекает наружу вместе
@@ -159,6 +174,7 @@ class SettingsService:
             "org_name": site.org_name,
             "logo_url": self._logo_url(platform),
             "contacts": asdict(site.contacts),
+            "tutorial_video_url": self.settings.get(TUTORIAL_KEY).get(platform),
         }
 
     # -- GET /branding/{slot} -----------------------------------------------
@@ -192,6 +208,31 @@ def _read(path: Path) -> Iterator[bytes]:
     with path.open("rb") as file:
         while chunk := file.read(CHUNK_SIZE):
             yield chunk
+
+
+def _tutorial_links(rows: list[dict]) -> dict:
+    """Присланные ссылки по площадкам, приведённые к одному написанию.
+
+    Пустая строка — «ролика нет», и пишется она как null: публичный ответ
+    отличает «блока нет» от «ссылка битая» только так. Неизвестная площадка
+    и не-YouTube отбиваются целиком, до записи: половина сохранённой формы
+    хуже, чем отказ.
+    """
+    links = {}
+    for row in rows:
+        url = row.get("tutorial_video_url")
+        if url is None:
+            continue
+        if row["platform"] not in PLATFORMS:
+            raise FieldError("platform", "Такой площадки нет")
+        if not url.strip():
+            links[row["platform"]] = None
+            continue
+        normalized = normalize_youtube(url.strip())
+        if normalized is None:
+            raise FieldError("tutorial_video_url", "Не похоже на ссылку YouTube — проверьте адрес")
+        links[row["platform"]] = normalized
+    return links
 
 
 def _sent(data: dict, fields: tuple[str, ...]) -> dict:

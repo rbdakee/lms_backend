@@ -2248,6 +2248,8 @@ class AdminSettingsPlatformOut(BaseModel):
     platform: str
     platform_name: str
     org_name: str
+    # Обучающий ролик на главной; null — ссылку не вставляли, блока нет
+    tutorial_video_url: str | None
 
 
 class AdminSettingsOut(BaseModel):
@@ -2272,12 +2274,22 @@ class AdminSettingsTelegramIn(BaseModel):
     notify_certificates: bool | None = None
 
 
+class AdminSettingsPlatformIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    platform: str
+    # Пустая строка — убрать ролик, null — не трогать
+    tutorial_video_url: str | None = Field(None, max_length=500)
+
+
 class AdminSettingsPatchIn(BaseModel):
     model_config = {"extra": "forbid"}
 
-    # Осталась одна вкладка: бренд и контакты правятся выкаткой, а не экраном,
-    # и присланное поле бренда отбивает `extra: forbid`
+    # Бренд и контакты правятся выкаткой, а не экраном, и присланное поле
+    # бренда отбивает `extra: forbid`. Из настроек площадки экран правит
+    # только ссылку на обучающий ролик
     telegram: AdminSettingsTelegramIn | None = None
+    platforms: list[AdminSettingsPlatformIn] | None = None
 
 
 class PublicSettingsOut(BaseModel):
@@ -2291,6 +2303,8 @@ class PublicSettingsOut(BaseModel):
     # Адрес GET /branding/logo; null — файла логотипа у площадки нет
     logo_url: str | None
     contacts: SettingsContactsOut
+    # Обучающий ролик для блока на главной; null — блока нет
+    tutorial_video_url: str | None
 
 
 class TelegramBindCodeOut(BaseModel):

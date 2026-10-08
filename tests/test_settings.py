@@ -85,9 +85,7 @@ def test_admin_settings_require_admin(client, sms):
     def statuses() -> list[int]:
         return [
             client.get("/admin/settings").status_code,
-            client.patch(
-                "/admin/settings", json={"telegram": {"notify_leads": False}}
-            ).status_code,
+            client.patch("/admin/settings", json={"telegram": {"notify_leads": False}}).status_code,
         ]
 
     assert statuses() == [401, 401]
@@ -111,11 +109,13 @@ def test_admin_settings_are_the_platform_directory_and_the_bot(client, sms):
                 "platform": "p1",
                 "platform_name": brands.BRANDS["p1"].platform_name,
                 "org_name": brands.BRANDS["p1"].org_name,
+                "tutorial_video_url": None,
             },
             {
                 "platform": "p2",
                 "platform_name": brands.BRANDS["p2"].platform_name,
                 "org_name": brands.BRANDS["p2"].org_name,
+                "tutorial_video_url": None,
             },
         ],
         "telegram": {
@@ -138,10 +138,110 @@ def test_admin_settings_have_no_brand_left(client, sms):
 
     body = client.get("/admin/settings").json()
     assert set(body) == {"platforms", "telegram"}
-    assert set(body["platforms"][0]) == {"platform", "platform_name", "org_name"}
+    assert set(body["platforms"][0]) == {
+        "platform",
+        "platform_name",
+        "org_name",
+        "tutorial_video_url",
+    }
 
 
 # -- PATCH /admin/settings ------------------------------------------------
+
+
+def test_tutorial_video_is_set_per_platform_and_shown_on_its_own_landing(client, sms):
+    """Ролик снят на конкретной площадке, и на соседней с чужим брендом
+    его быть не должно: ссылка своя у каждой, а без ссылки блока нет."""
+    login_admin(client, sms)
+
+    body = client.patch(
+        "/admin/settings",
+        json={
+            "platforms": [{"platform": "p1", "tutorial_video_url": "https://youtu.be/dQw4w9WgXcQ"}]
+        },
+    ).json()
+
+    # Ссылка приводится к одному написанию, как у видеоурока
+    assert [row["tutorial_video_url"] for row in body["platforms"]] == [
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        None,
+    ]
+    assert (
+        client.get("/settings", headers=P1).json()["tutorial_video_url"]
+        == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
+    assert client.get("/settings", headers=P2).json()["tutorial_video_url"] is None
+
+
+def test_tutorial_video_of_one_platform_does_not_touch_the_other(client, sms):
+    """Две площадки правят по очереди: вторая ссылка не стирает первую,
+    null не трогает, пустая строка убирает."""
+    login_admin(client, sms)
+
+    def patch(platform, url):
+        return client.patch(
+            "/admin/settings",
+            json={"platforms": [{"platform": platform, "tutorial_video_url": url}]},
+        )
+
+    patch("p1", "https://www.youtube.com/watch?v=aaaaaaaaaaa")
+    patch("p2", "https://www.youtube.com/watch?v=bbbbbbbbbbb")
+    patch("p1", None)
+    rows = client.get("/admin/settings").json()["platforms"]
+    assert [row["tutorial_video_url"] for row in rows] == [
+        "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+    ]
+
+    patch("p1", "  ")
+    rows = client.get("/admin/settings").json()["platforms"]
+    assert [row["tutorial_video_url"] for row in rows] == [
+        None,
+        "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+    ]
+
+
+@pytest.mark.parametrize(
+    "row, field",
+    [
+        (
+            {"platform": "p1", "tutorial_video_url": "https://vimeo.com/123456"},
+            "tutorial_video_url",
+        ),
+        ({"platform": "p9", "tutorial_video_url": "https://youtu.be/dQw4w9WgXcQ"}, "platform"),
+    ],
+)
+def test_tutorial_video_refuses_bad_input_without_saving(client, sms, row, field):
+    login_admin(client, sms)
+
+    resp = client.patch(
+        "/admin/settings",
+        json={
+            "platforms": [
+                {"platform": "p2", "tutorial_video_url": "https://youtu.be/bbbbbbbbbbb"},
+                row,
+            ]
+        },
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["error"]["details"]["fields"][0]["field"] == field
+    # Годная ссылка соседней строки тоже не сохранилась
+    assert client.get("/admin/settings").json()["platforms"][1]["tutorial_video_url"] is None
+
+
+def test_tutorial_video_does_not_need_login_to_be_seen_but_needs_admin_to_be_set(client, sms):
+    login(client, sms)
+
+    resp = client.patch(
+        "/admin/settings",
+        json={
+            "platforms": [{"platform": "p1", "tutorial_video_url": "https://youtu.be/dQw4w9WgXcQ"}]
+        },
+    )
+
+    assert resp.status_code == 403
+    assert client.get("/settings", headers=P1).json()["tutorial_video_url"] is None
 
 
 @pytest.mark.parametrize(
@@ -191,9 +291,7 @@ def test_notify_certificates_is_saved_on_its_own(client, sms):
     соседних."""
     login_admin(client, sms)
 
-    body = client.patch(
-        "/admin/settings", json={"telegram": {"notify_certificates": False}}
-    ).json()
+    body = client.patch("/admin/settings", json={"telegram": {"notify_certificates": False}}).json()
 
     assert body["telegram"]["notify_certificates"] is False
     assert body["telegram"]["notify_leads"] is True
@@ -264,7 +362,13 @@ def test_public_settings_have_nothing_extra(client):
     resp = client.get("/settings", headers=P1)
 
     assert resp.status_code == 200
-    assert set(resp.json()) == {"platform_name", "org_name", "logo_url", "contacts"}
+    assert set(resp.json()) == {
+        "platform_name",
+        "org_name",
+        "logo_url",
+        "contacts",
+        "tutorial_video_url",
+    }
     assert set(resp.json()["contacts"]) == {"name", "phone", "whatsapp", "hours"}
 
 
