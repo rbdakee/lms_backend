@@ -9,9 +9,10 @@
 | MCP-сервер | тот же список, завёрнутый в протокол (раздел 15) |
 
 Пометка опасности `read|write|confirm` — данные, а не механизм: реестр
-исполняет любое действие сразу. Что делать с `confirm` (в MCP — пометка
-destructive у инструмента), решает тот, кто реестр вызывает. Чата
-с предложениями и кнопкой «Выполнить» больше нет: он убран из кода,
+исполняет любое действие сразу. Что делать с `confirm`, решает тот, кто
+реестр вызывает: MCP-сервер (`app/mcp_server/`) выставляет её аннотацией
+`destructiveHint`, и спрашивает человека уже клиент (`MCP_BRIEF`, решение 4).
+Чата с предложениями и кнопкой «Выполнить» больше нет: он убран из кода,
 полная версия лежит в ветке `assistant`.
 
 Сами инструменты живут в `tools/*.py` и сюда не складываются: их пишут
@@ -23,21 +24,26 @@ destructive у инструмента), решает тот, кто реестр
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session as DbSession
 
-from app.adapters.db.models import AssistantPdGrant, User
+from app.adapters.db.models import User
 from app.domain.platform import PLATFORMS
 
 # Три пометки опасности (ASSISTANT_BRIEF, раздел 6).
 DANGER_LEVELS = ("read", "write", "confirm")
 
-# Строка, которая дописывается к описанию `confirm`-инструмента: вызывающий
-# должен знать, что действие трудно или невозможно отменить.
-CONFIRM_NOTE = " ОПАСНОЕ ДЕЙСТВИЕ: трудно или невозможно отменить."
+# Строка, которая дописывается к описанию `confirm`-инструмента. Подтверждения
+# на нашей стороне нет: действие выполняется сразу, и спросить человека должен
+# клиент (`MCP_BRIEF`, решение 4) — об этом сказано прямо, чтобы модель не
+# рассчитывала на «потом подтвердят».
+CONFIRM_NOTE = (
+    " ОПАСНОЕ ДЕЙСТВИЕ, трудно или невозможно отменить. Выполняется сразу,"
+    " без подтверждения на сервере: сначала спроси человека."
+)
 
 # То же для `write`: изменение произойдёт молча, и модель обязана об этом
 # сказать вслух, а не отчитаться постфактум.
@@ -142,24 +148,21 @@ class ToolSpec:
     # не «удалить модуль», а «удалится модуль „Оценивание“ и 4 урока в нём».
     preview: Callable[..., str] | None = None
 
-    def openai_schema(self) -> dict:
-        description = self.description
+    def full_description(self) -> str:
+        """Описание вместе с пометкой опасности — то, что читает модель."""
         if self.danger == "confirm":
-            description += CONFIRM_NOTE
-        elif self.danger == "write":
-            description += WRITE_NOTE
+            return self.description + CONFIRM_NOTE
+        if self.danger == "write":
+            return self.description + WRITE_NOTE
+        return self.description
+
+    def input_schema(self) -> dict:
+        """JSON Schema аргументов — как её ждёт `tools/list` в MCP."""
         return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": description,
-                "parameters": {
-                    "type": "object",
-                    "properties": {name: arg.schema() for name, arg in self.args.items()},
-                    "required": [name for name, arg in self.args.items() if arg.required],
-                    "additionalProperties": False,
-                },
-            },
+            "type": "object",
+            "properties": {name: arg.schema() for name, arg in self.args.items()},
+            "required": [name for name, arg in self.args.items() if arg.required],
+            "additionalProperties": False,
         }
 
 
@@ -242,12 +245,6 @@ def all_tools() -> dict[str, ToolSpec]:
     return dict(_TOOLS)
 
 
-def openai_tools() -> list[dict]:
-    """Список для поля `tools` запроса — в порядке имён, чтобы он не менялся
-    от прогона к прогону и кэш промпта провайдера работал."""
-    return [_TOOLS[name].openai_schema() for name in sorted(_TOOLS)]
-
-
 def check_registry() -> list[str]:
     """Что в реестре не так. Зовётся тестом, а не стартом сервиса: забытый
     `@preview` — ошибка кода, и ронять из-за неё живой API незачем."""
@@ -265,62 +262,32 @@ def check_registry() -> list[str]:
 class ToolCtx:
     """Что инструмент знает о том, кто и откуда его позвал.
 
-    Приходит не из куки (раздел 15): собирается из админа и сессии базы,
-    поэтому тот же реестр ляжет под MCP без переписывания. Права проверены
-    выше — `get_current_admin`, там же, где у обычных админских ручек;
-    своей копии проверок у реестра нет.
+    Собирается из админа и сессии базы, а не из куки: так реестр лёг под MCP
+    без переписывания. Права проверены выше (`app/mcp_server/`, на каждом
+    вызове); своей копии проверок у реестра нет.
     """
 
     db: DbSession
     admin: User
     now: datetime
-    # Допуски вызывающего: subject_user_id → 'read' | 'write'.
-    grants: dict[int, str] = field(default_factory=dict)
+    # Допуск подключения к персональным данным (`MCP_BRIEF`, решение 5). Один
+    # флаг на всё подключение, а не допуск «на человека», как было у чата:
+    # админ ставит его галочкой при согласии или создании токена.
+    pd_allowed: bool = False
 
-    def grant_level(self, user_id: int) -> str | None:
-        return self.grants.get(user_id)
-
-    def require_pd(self, user_id: int, level: str = "read") -> str:
-        """Допуск к данным одного человека или отказ, который увидит модель.
+    def require_pd(self, user_id: int) -> None:
+        """Допуск к данным человека или отказ, который увидит модель.
 
         Отказ говорит по существу, а не «мне не разрешено»: админ должен
-        понять, что нужна кнопка, и на кого именно (раздел 3).
+        понять, что делать, — это галочка на экране «Подключения ИИ».
         """
-        have = self.grants.get(user_id)
-        if have is None:
+        if not self.pd_allowed:
             raise ToolError(
-                "pd_grant_required",
-                f"Нужен допуск к данным этого человека (учитель #{user_id})."
-                " Администратор выдаёт его отдельным допуском.",
+                "pd_not_allowed",
+                f"Подключение не допущено к персональным данным (учитель #{user_id})."
+                " Админ включает допуск на экране «Подключения ИИ» в админке.",
                 subject_user_id=user_id,
-                need_level=level,
             )
-        if level == "write" and have != "write":
-            raise ToolError(
-                "pd_grant_level",
-                f"Допуск к данным учителя #{user_id} выдан только на чтение —"
-                " для правки нужен допуск с правкой.",
-                subject_user_id=user_id,
-                need_level="write",
-                have_level=have,
-            )
-        return have
-
-
-def load_grants(db: DbSession, thread_id: int, now: datetime) -> dict[int, str]:
-    """Действующие допуски чата. Просроченные и отозванные не возвращаются
-    вовсе — так «допуск кончился» и «допуска не было» для инструмента
-    выглядят одинаково, и второй ветки в каждом инструменте не нужно."""
-    rows = (
-        db.query(AssistantPdGrant)
-        .filter(
-            AssistantPdGrant.thread_id == thread_id,
-            AssistantPdGrant.revoked_at.is_(None),
-            AssistantPdGrant.expires_at > now,
-        )
-        .all()
-    )
-    return {row.subject_user_id: row.level for row in rows}
 
 
 # -- проверка аргументов -------------------------------------------------

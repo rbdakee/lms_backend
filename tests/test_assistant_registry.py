@@ -31,23 +31,20 @@ def test_descriptions_are_written_for_the_model():
 
 
 def test_confirm_tools_say_they_are_dangerous_to_the_model():
-    schemas = {item["function"]["name"]: item["function"] for item in registry.openai_tools()}
     for name, spec in registry.all_tools().items():
         if spec.danger == "confirm":
-            assert "ОПАСНОЕ ДЕЙСТВИЕ" in schemas[name]["description"], name
+            assert "ОПАСНОЕ ДЕЙСТВИЕ" in spec.full_description(), name
+            assert "спроси человека" in spec.full_description(), name
 
 
 def test_platform_argument_lists_both_platforms():
     """Площадка приходит аргументом, а не из `Origin`: админка одна на обе."""
-    schemas = {item["function"]["name"]: item["function"] for item in registry.openai_tools()}
-    platform = schemas["courses_list"]["parameters"]["properties"]["platform"]
+    platform = registry.get("courses_list").input_schema()["properties"]["platform"]
     assert platform["enum"] == list(PLATFORMS)
 
 
 def test_schema_has_required_and_forbids_extra():
-    schema = next(
-        item for item in registry.openai_tools() if item["function"]["name"] == "course_card"
-    )["function"]["parameters"]
+    schema = registry.get("course_card").input_schema()
     assert schema["required"] == ["course_id"]
     assert schema["additionalProperties"] is False
 
@@ -146,21 +143,18 @@ def test_refused_tool_raises_with_a_code(client, sms, tool_ctx):
 # -- допуски -------------------------------------------------------------
 
 
-def test_require_pd_without_grant_refuses():
-    called = ToolCtx(db=None, admin=None, now=now_utc(), grants={})
+def test_require_pd_without_flag_refuses():
+    called = ToolCtx(db=None, admin=None, now=now_utc())
     with pytest.raises(ToolError) as exc:
         called.require_pd(418)
-    assert exc.value.code == "pd_grant_required"
+    assert exc.value.code == "pd_not_allowed"
     assert exc.value.details["subject_user_id"] == 418
 
 
-def test_read_grant_does_not_open_write():
-    """Допуск открывает дверь, но правка чужих данных требует своего уровня."""
-    called = ToolCtx(db=None, admin=None, now=now_utc(), grants={418: "read"})
-    assert called.require_pd(418) == "read"
-    with pytest.raises(ToolError) as exc:
-        called.require_pd(418, "write")
-    assert exc.value.code == "pd_grant_level"
+def test_require_pd_with_flag_passes():
+    """Допуск — флаг подключения, а не допуск «на человека»."""
+    called = ToolCtx(db=None, admin=None, now=now_utc(), pd_allowed=True)
+    assert called.require_pd(418) is None
 
 
 # -- регистрация ---------------------------------------------------------

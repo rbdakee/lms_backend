@@ -72,7 +72,7 @@ def test_teacher_card_without_a_grant_refuses(client, sms, tool_ctx):
     with pytest.raises(ToolError) as exc:
         registry.call("teacher_card", {"user_id": person.id}, tool_ctx(admin))
 
-    assert exc.value.code == "pd_grant_required"
+    assert exc.value.code == "pd_not_allowed"
     assert exc.value.details["subject_user_id"] == person.id
     # В отказе персданных нет: он уходит модели и остаётся в ленте
     assert SURNAME not in exc.value.message
@@ -84,7 +84,7 @@ def test_read_grant_opens_the_card_and_iin_is_the_last_field(client, sms, tool_c
     person = a_teacher()
 
     card = registry.call(
-        "teacher_card", {"user_id": person.id}, tool_ctx(admin, grants={person.id: "read"})
+        "teacher_card", {"user_id": person.id}, tool_ctx(admin, pd_allowed=True)
     )
 
     assert card["last_name"] == SURNAME
@@ -93,21 +93,6 @@ def test_read_grant_opens_the_card_and_iin_is_the_last_field(client, sms, tool_c
     # ИИН чувствительнее всего остального и потому идёт последним
     assert list(card)[-1] == "iin"
     assert card["iin"] == person.iin
-
-
-def test_read_grant_does_not_open_the_edit(client, sms, tool_ctx):
-    """Допуск открывает дверь, но правка чужих данных требует своего уровня."""
-    admin = login_admin(client, sms).json()["id"]
-    person = a_teacher()
-
-    with pytest.raises(ToolError) as exc:
-        registry.call(
-            "teacher_update",
-            {"user_id": person.id, "school": "Другая школа"},
-            tool_ctx(admin, grants={person.id: "read"}),
-        )
-
-    assert exc.value.code == "pd_grant_level"
 
 
 def test_only_one_tool_here_shows_a_person(client, sms):
@@ -212,7 +197,7 @@ def test_access_is_not_granted_without_a_platform(client, sms, tool_ctx):
         registry.call(
             "enrollment_grant",
             {"user_id": person.id, "course_id": course.id, "paid": True},
-            tool_ctx(admin, grants={person.id: "write"}),
+            tool_ctx(admin, pd_allowed=True),
         )
 
     assert exc.value.code == "missing_argument"
@@ -224,7 +209,7 @@ def test_grant_preview_names_the_course_and_the_platform(client, sms, tool_ctx):
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
     course = make_course(title="Оценивание", platforms={"p1": 45000, "p2": 60000})
-    ctx = tool_ctx(admin, grants={person.id: "write"})
+    ctx = tool_ctx(admin, pd_allowed=True)
 
     result = plan(
         "enrollment_grant",
@@ -245,9 +230,9 @@ def test_grant_preview_names_the_course_and_the_platform(client, sms, tool_ctx):
         assert db.query(Enrollment).count() == 0
 
 
-def test_access_needs_a_write_grant(client, sms, tool_ctx):
-    """Выдача доступа этому человеку открывается допуском с правкой
-    (ASSISTANT_BRIEF, раздел 5): на чтении она не проходит."""
+def test_access_needs_the_pd_flag(client, sms, tool_ctx):
+    """Выдача доступа этому человеку открывается допуском подключения
+    (`MCP_BRIEF`, решение 5): без флага она не проходит."""
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
     course = make_course()
@@ -256,10 +241,10 @@ def test_access_needs_a_write_grant(client, sms, tool_ctx):
         registry.call(
             "enrollment_grant",
             {"user_id": person.id, "course_id": course.id, "platform": "p1", "paid": True},
-            tool_ctx(admin, grants={person.id: "read"}),
+            tool_ctx(admin),
         )
 
-    assert exc.value.code == "pd_grant_level"
+    assert exc.value.code == "pd_not_allowed"
 
 
 def test_grant_opens_the_course_and_closes_the_lead(client, sms, tool_ctx):
@@ -270,7 +255,7 @@ def test_grant_opens_the_course_and_closes_the_lead(client, sms, tool_ctx):
     course = make_course(platforms={"p1": 45000, "p2": 60000})
     lead = make_lead(person.id, course.id, platform="p2")
 
-    ctx = tool_ctx(admin, grants={person.id: "write"})
+    ctx = tool_ctx(admin, pd_allowed=True)
     granted = registry.call(
         "enrollment_grant",
         {
@@ -371,7 +356,7 @@ def test_edit_needs_a_write_grant_and_keeps_values_out_of_the_preview(client, sm
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
 
-    ctx = tool_ctx(admin, grants={person.id: "write"})
+    ctx = tool_ctx(admin, pd_allowed=True)
     result = plan(
         "teacher_update",
         {"user_id": person.id, "school": "КГУ «Гимназия №1»", "subject": "Химия"},
@@ -401,7 +386,7 @@ def test_edit_without_fields_is_refused(client, sms, tool_ctx):
         registry.call(
             "teacher_update",
             {"user_id": person.id},
-            tool_ctx(admin, grants={person.id: "write"}),
+            tool_ctx(admin, pd_allowed=True),
         )
 
     assert exc.value.code == "no_fields"
