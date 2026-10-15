@@ -9,7 +9,7 @@ summary = """
 Нет хода — берёшь кость из «базара»."""
 scoring = "Побеждает первый выложивший все кости; остальные получают штраф — число оставшихся костей."
 
-subjects = ["any"]
+subjects = ["math"]
 content_shapes = ["pairs"]
 math_topics = ["arithmetic", "multiplication_table", "fractions", "measurement"]
 grade_min = 1

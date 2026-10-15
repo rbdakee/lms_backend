@@ -1,0 +1,88 @@
+id = "word_lotto"
+title = "Лото «слово — перевод»"
+family = "call_and_mark"
+status = "draft"
+
+summary = """
+У каждого игрока карточка с клетками слов; ведущий тянет карточку вызова и \
+читает слово на одном языке, игрок ищет клетку с парой к нему (перевод, \
+синоним, подпись) и закрывает фишкой. Побеждает первый закрытый ряд, затем \
+«полный дом»."""
+scoring = "Ряд — 1 балл, вся карточка — 3. Партия — 5–8 минут, за урок — две-три партии."
+
+subjects = ["kazakh_lang_l1", "kazakh_lang_l2", "russian_lang_l1", "russian_lang_l2", "english", "german", "french"]
+content_shapes = ["pairs", "short_answer"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm", "active"]
+level_shift = """
+Ряд против ряда: одна карточка на ряд, ответ ряд даёт хором, очки на доске. \
+Появляется шум и командный счёт — это уже active."""
+lesson_phases = ["middle"]
+duration_min = 5
+duration_max = 12
+grouping = ["individual", "teams"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 1
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "quiet"
+competition = "individual"
+teacher_role = "host"
+
+self_check = "teacher_check"
+invariants = [
+  "Каждое слово карточки вызова имеет пару ровно в одной клетке хотя бы одной карточки игрока.",
+  "Внутри одной карточки игрока слова не повторяются, и каждая пара совпадает с ключом.",
+  "Никакие две карточки игроков не совпадают целиком.",
+  "На карточке игрока нет слов, которых нет среди карточек вызова.",
+]
+model_generates = [
+  "Пары «слово — перевод» (на Т1 и Я1 — «слово — синоним или толкование») под тему урока.",
+  "Раскладку слов по карточкам игроков и карточки вызова.",
+  "Название игры и одну фразу сюжета.",
+]
+pitfalls = [
+  "Слово, которого нет среди вызовов, делает клетку незакрываемой — ребёнок ждёт до конца и скучает.",
+  "Одно слово с двумя переводами даёт спор: в наборе у пары один согласованный перевод.",
+  "Слова без произнесения вслух читаются наугад — ведущий произносит оба слова пары.",
+]
+in_class_differentiation = "Разным детям — карточки разной сложности при общем вызове: снаружи они одинаковые."
+combines_with = ["memory_pairs", "sound_bingo", "flashcards"]
+station_ready = true
+lang_sensitive = false
+
+props = ["counters"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "quiz_4_options"
+
+[lang_notes]
+ru = "Пары — в обе стороны: слово урока и его перевод; для Т2 перевод русский, для иностранных языков — язык обучения."
+kz = "Казахские слова — своими буквами, не транслитом; буквы ә, ғ, қ, ң, ө, ұ, ү, һ, і крупные и различимые в клетке."
+
+[difficulty_scaling]
+basic = "4–6 коротких тематических пар, карточка 3×3."
+standard = "8–10 пар «слово — перевод», для 3–4 классов карточка 4×4."
+advanced = "Пары «слово — толкование» или «синоним — слово»; обратное лото: ведущий называет перевод, игрок ищет слово."
+
+[[print_items]]
+name = "Карточки игроков"
+per = "per_student"
+count = "по числу детей, не меньше 6 разных"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Карточки вызова"
+per = "per_class"
+count = "20–30"
+layout = "card_grid"
+cut = "grid"
+double_sided = false

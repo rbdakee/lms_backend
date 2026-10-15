@@ -1,0 +1,85 @@
+id = "odd_one_out"
+title = "Найди лишнее"
+family = "odd_one_out"
+status = "draft"
+
+summary = """
+На карточке ряд из четырёх-пяти слов; одно не подходит к остальным по \
+категории, звуку или признаку. Ребёнок обводит лишнее и на полях одним \
+словом объясняет почему — объяснение и есть учебная работа, а не угадывание."""
+scoring = "Лишнее найдено верно — 1 очко; объяснено одним словом вслух или на полях — второе."
+
+subjects = ["literacy_ru", "native_language_kz", "kazakh_lang_l1", "kazakh_lang_l2", "russian_lang_l1", "russian_lang_l2", "literary_reading_ru", "literary_reading_kz", "world_around", "natural_science", "digital_literacy", "music"]
+content_shapes = ["classification"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["start", "middle", "end"]
+duration_min = 5
+duration_max = 10
+grouping = ["individual", "pairs"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 2
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "quiet"
+competition = "none"
+teacher_role = "observer"
+
+self_check = "answer_key"
+invariants = [
+  "Лишнее в каждом ряду ровно одно, и признак, по которому оно лишнее, назван в ключе одним словом.",
+  "Остальные слова ряда объединяет признак из цели урока, а не «все остальные».",
+  "Ряды идут от явного лишнего к косвенному: последний ряд — на различение близких признаков.",
+  "Слова рядов — на языке предмета: на языках изучаемого языка.",
+]
+model_generates = [
+  "5–8 рядов слов на языке предмета с лишним в каждом.",
+  "Ключ с признаком каждого ряда.",
+  "Название игры и одну фразу сюжета.",
+]
+pitfalls = [
+  "Два слова претендуют на «лишнее» — ряд собирается так, чтобы признак был единственным.",
+  "Признак «не подходит по смыслу» — не признак: в ключе названа категория или свойство.",
+  "Все ряды на один признак — к третьему ряду дети решают на автопилоте; признаки чередуются.",
+]
+in_class_differentiation = "Первые ряды — всем, последние — «на звёздочку»: за них двойное очко."
+combines_with = ["sort_into_baskets", "guess_by_description", "true_false_signals"]
+station_ready = false
+lang_sensitive = true
+
+props = ["pencils"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "none"
+replayability = "single_use"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "quiz_4_options"
+
+[lang_notes]
+ru = "Ряды — на языке предмета: на языках слова изучаемого языка, на остальных — языка обучения."
+kz = "Слова — казахские, не перевод; на advanced ряд на сингармонизм: три слова твёрдого ряда и одно мягкого."
+
+[difficulty_scaling]
+basic = "Три слова одной категории и одно чужое, категории явные."
+standard = "Четыре-пять слов, лишнее отличает близкий признак (домашнее — дикое, гласная — согласная)."
+advanced = "Два возможных лишних с разными признаками — объясни оба; финал — «составь ряд для соседа»."
+
+[[print_items]]
+name = "Лист с рядами слов"
+per = "per_student"
+count = "по числу детей"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Ключ с признаками рядов"
+per = "per_class"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false

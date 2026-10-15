@@ -9,7 +9,7 @@ summary = """
 «сложи фигуру площадью 8 клеток»."""
 scoring = "Соревнование мягкое: силуэт сложен — жетон, у кого больше силуэтов за время."
 
-subjects = ["any"]
+subjects = ["math", "labor", "art"]
 content_shapes = ["spatial", "measurement"]
 math_topics = ["shapes", "measurement"]
 grade_min = 1

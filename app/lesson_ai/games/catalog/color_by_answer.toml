@@ -9,7 +9,7 @@ summary = """
 ошибся — узор не сходится с образцом. Мотор игры — любопытство «что там нарисовано»."""
 scoring = "Очков нет: результат — открывшаяся картинка, сверка с образцом учителя."
 
-subjects = ["any"]
+subjects = ["math"]
 content_shapes = ["short_answer"]
 math_topics = ["arithmetic", "multiplication_table", "mental_math", "fractions"]
 grade_min = 1

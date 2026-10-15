@@ -10,7 +10,7 @@ summary = """
 «на фабрике» — решением примеров."""
 scoring = "Побеждает не самый богатый, а выполнивший свой план покупок без ошибок в чеке."
 
-subjects = ["any"]
+subjects = ["math"]
 content_shapes = ["money", "multi_step", "short_answer"]
 math_topics = ["money", "arithmetic", "mental_math", "word_problems"]
 grade_min = 2

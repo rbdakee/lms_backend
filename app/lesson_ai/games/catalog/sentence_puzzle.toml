@@ -1,0 +1,89 @@
+id = "sentence_puzzle"
+title = "Пазл-предложение"
+family = "sentence_build"
+status = "draft"
+
+summary = """
+Предложение разрезано на полоски-слова и перемешано; пара собирает его так, \
+чтобы сошлись смысл и грамматика, и вписывает на лист. Рядом — предложение-\
+ловушка: слова те же, порядок даёт другой смысл. Собранное читается вслух — \
+сбой слышно сразу."""
+scoring = "Очков нет: предложение собрано и прочитано вслух без сбоя — задание решено; пара со всеми собранными — жетон."
+
+subjects = ["literacy_ru", "native_language_kz", "kazakh_lang_l1", "kazakh_lang_l2", "russian_lang_l1", "russian_lang_l2", "literary_reading_ru", "literary_reading_kz", "english", "german", "french"]
+content_shapes = ["ordering"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["middle", "end"]
+duration_min = 5
+duration_max = 12
+grouping = ["pairs", "individual"]
+print_unit = "per_pair"
+group_size_min = 1
+group_size_max = 2
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "quiet"
+competition = "none"
+teacher_role = "observer"
+
+self_check = "answer_key"
+invariants = [
+  "Слова одного предложения дают ровно одну грамматически верную последовательность.",
+  "Предложение-ловушка собирается из тех же слов в другой порядок, и ошибка видна по смыслу, а не по угадыванию.",
+  "Собранные предложения есть в ключе и относятся к теме урока.",
+  "На advanced связка предложений складывается в короткий текст без повторов.",
+]
+model_generates = [
+  "3–5 предложений темы урока и их полоски-слова.",
+  "Предложение-ловушку с теми же словами в другом порядке.",
+  "Ключ с верными предложениями и название сюжета.",
+]
+pitfalls = [
+  "Предложение, верное и в другом порядке («Сегодня мы идём в музей» / «Мы сегодня идём в музей»), для игры не годится — порядок должен быть однозначным.",
+  "Слова, разрезанные по слогам вместо целых слов, путают: резать по словам, на advanced — по частям речи.",
+  "Пять предложений на пару за один заход — много; три собранных и одно на обмен с соседями.",
+]
+in_class_differentiation = "Одной паре — полоски с первой заглавной буквой и знаком конца, другой — без подсказок."
+combines_with = ["build_a_word", "event_order", "word_chain"]
+station_ready = true
+lang_sensitive = true
+
+props = ["scissors", "envelopes", "glue"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "single_use"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "none"
+
+[lang_notes]
+ru = "Предложения — на языке предмета: на иностранном — изучаемом языке, с его порядком слов."
+kz = """
+Порядок слов казахского предложения держит смысл: сказуемое в конце. \
+Вопросительная частица ма/ме/ба/бе выбирается по сингармонизму — её место \
+и вид в ключе проверяются отдельно."""
+
+[difficulty_scaling]
+basic = "Предложение из 3–4 слов, подсказка — заглавная буква и точка."
+standard = "Предложения из 5–7 слов и предложение-ловушка."
+advanced = "Собрать из полосок связный текст из трёх предложений и объяснить порядок («почему так»)."
+
+[[print_items]]
+name = "Полоски-слова предложений"
+per = "per_pair"
+count = "15–25"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Лист для вписывания и ключ"
+per = "per_pair"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

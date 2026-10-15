@@ -1,0 +1,86 @@
+id = "cause_effect_pairs"
+title = "Причина — следствие"
+family = "matching"
+status = "draft"
+
+summary = """
+Карточки двух видов лежат вперемешку: причины и следствия из темы урока. \
+Пара соединяет их и выкладывает на лист двумя столбцами; собранные пары \
+читаются вслух связкой «потому что». Одна-две карточки — ловушки: напрашивающаяся \
+пара неверна, верная скромнее."""
+scoring = "Верная пара — 1 очко; связка «потому что» произнесена вслух — очко засчитано."
+
+subjects = ["world_around", "natural_science", "literary_reading_ru", "literary_reading_kz"]
+content_shapes = ["pairs", "classification"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["middle", "end"]
+duration_min = 7
+duration_max = 15
+grouping = ["pairs"]
+print_unit = "per_pair"
+group_size_min = 2
+group_size_max = 2
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "quiet"
+competition = "none"
+teacher_role = "observer"
+
+self_check = "answer_key"
+invariants = [
+  "У каждой причины ровно одно следствие в наборе, и собранные пары дают один лист без остатка.",
+  "Число карточек чётное: причин столько же, сколько следствий.",
+  "Ловушечная карточка отличается одной деталью, и в ключе объяснено, почему напрашивающаяся пара неверна.",
+  "Ключ перечисляет все пары и только их.",
+]
+model_generates = [
+  "6–10 пар «причина — следствие» по тексту урока.",
+  "Одну-две ловушечные карточки для advanced.",
+  "Название набора и одну фразу сюжета.",
+]
+pitfalls = [
+  "Причина без своего следствия в наборе — карточка висит: пары собираются комплектом.",
+  "Связь «потом, а не потому что» — самая частая ошибка, и ровно на ней строятся ловушки.",
+  "Формулировки длиннее одной строки первоклассник не соберёт — причина и следствие короткими фразами.",
+]
+in_class_differentiation = "Одной паре — половина набора собрана как образец, другой — полный набор без образца."
+combines_with = ["memory_pairs", "event_order", "odd_one_out"]
+station_ready = true
+lang_sensitive = true
+
+props = ["envelopes", "glue"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "matching"
+
+[lang_notes]
+ru = "Формулировки — на языке обучения, по тексту урока."
+kz = "Связка «себебі — сондықтан» даётся готовой на листе; окончания падежей в карточках выписаны из текста урока, не сочиняются."
+
+[difficulty_scaling]
+basic = "4 явные пары из жизни и урока, формулировки в одну строку."
+standard = "6–8 пар из текста урока, карточки вперемешку."
+advanced = "Ловушки «потом — не значит потому что» и пара с двумя возможными причинами — докажи выбор текстом."
+
+[[print_items]]
+name = "Карточки причин и следствий"
+per = "per_pair"
+count = "12–20"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Лист двумя столбцами и ключ"
+per = "per_pair"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

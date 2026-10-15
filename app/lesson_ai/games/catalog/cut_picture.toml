@@ -9,7 +9,7 @@ summary = """
 верно — картинка или слово целиком; пары работают наперегонки, молча."""
 scoring = "Первая пара с верно собранной картинкой — жетон; остальные доканчивают и сверяются с образцом."
 
-subjects = ["any"]
+subjects = ["math"]
 content_shapes = ["short_answer", "ordering"]
 math_topics = ["counting", "arithmetic", "mental_math"]
 grade_min = 1

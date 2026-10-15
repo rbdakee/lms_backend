@@ -1,0 +1,95 @@
+id = "event_order"
+title = "Восстанови порядок событий"
+family = "ordering"
+status = "draft"
+
+summary = """
+Полоски с фрагментами текста или этапами процесса лежат вперемешку; пара \
+раскладывает их в верной последовательности на листе-ленте. Собранная лента \
+перечитывается вслух — порядок проверяется на слух, сбой слышно сразу."""
+scoring = "Очков нет: лента собрана и сверена с ключом — задание решено; пара, собравшая первой и пересказавшая ленту, — жетон."
+
+subjects = ["literacy_ru", "native_language_kz", "literary_reading_ru", "literary_reading_kz", "world_around", "natural_science"]
+content_shapes = ["ordering", "open_response"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm", "active"]
+level_shift = """
+Две команды собирают ленту наперегонки на доске: полоски на магнитах, \
+порядок разбирается вслух — это уже active."""
+lesson_phases = ["middle", "end"]
+duration_min = 7
+duration_max = 15
+grouping = ["pairs", "teams"]
+print_unit = "per_pair"
+group_size_min = 2
+group_size_max = 6
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "voiced"
+competition = "none"
+teacher_role = "observer"
+
+self_check = "answer_key"
+invariants = [
+  "Порядок полосок однозначен: перестановка любых двух соседних ломает смысл, и это видно по тексту.",
+  "Фрагменты не пересказывают друг друга: в каждом свой шаг без общих слов «затем», «потом» вместо содержания.",
+  "На обороте каждой полоски — номер места, и ключ даёт порядок полностью.",
+  "На advanced две полоски-ловушки не входят в ленту ни на одно место.",
+]
+model_generates = [
+  "Текст или процесс темы, разбитый на 6–8 шагов, и их верный порядок.",
+  "Две полоски-ловушки для advanced.",
+  "Название ленты («как появляется хлеб») и одну фразу сюжета.",
+]
+pitfalls = [
+  "Шаги, которые можно поменять местами без ошибки, делают порядок спорным — в каждом шаге своё событие.",
+  "Полоски с длинными предложениями первоклассник не прочтёт — шаг подписан двумя-тремя словами или читает учитель.",
+  "Порядок, известный из жизни, но не из урока, — игра мимо цели: шаги берутся из текста урока.",
+]
+in_class_differentiation = "Одна лента — два набора: у слабой пары на полосках номера-подсказки мест, у сильной их нет."
+combines_with = ["sentence_puzzle", "character_interview", "story_journey"]
+station_ready = true
+lang_sensitive = true
+
+props = ["envelopes", "glue", "magnets"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "single_use"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "none"
+
+[lang_notes]
+ru = "Фрагменты — из текста урока на языке обучения."
+kz = "Фрагменты сочиняются по-казахски, не переводятся: служебные слова и окончания держат смысл шага, порядок слов казахского предложения при разрезке не терять."
+
+[difficulty_scaling]
+basic = "4 шага с явными маркерами (утро, день, вечер), шаг — короткая фраза."
+standard = "6–8 шагов текста или процесса, маркеров нет."
+advanced = "Две полоски-ловушки и шаги, различающиеся деталью; финал — «перескажи ленту своими словами»."
+
+[[print_items]]
+name = "Полоски-шаги"
+per = "per_pair"
+count = "6–8"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Лента для раскладки"
+per = "per_pair"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Ключ с верным порядком"
+per = "per_pair"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false

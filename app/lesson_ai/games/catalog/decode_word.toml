@@ -9,7 +9,7 @@ summary = """
 или поздравление. Стимул — угадать слово до конца и записать догадку на полях."""
 scoring = "Очков нет: слово собрано — задание решено. Угадавший раньше и оказавшийся прав — жетон."
 
-subjects = ["any"]
+subjects = ["math"]
 content_shapes = ["short_answer"]
 math_topics = ["arithmetic", "multiplication_table", "mental_math"]
 grade_min = 1

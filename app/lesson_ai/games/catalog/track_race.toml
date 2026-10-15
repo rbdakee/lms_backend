@@ -11,7 +11,6 @@ scoring = "Первая у финиша — победила; верность �
 
 subjects = ["any"]
 content_shapes = ["short_answer", "multi_step"]
-math_topics = ["arithmetic", "mental_math", "word_problems"]
 grade_min = 1
 grade_max = 4
 engagement_levels = ["active"]
