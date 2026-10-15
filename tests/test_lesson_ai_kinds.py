@@ -217,8 +217,15 @@ def test_kind_specs_follow_generation_order():
         assert ("lesson_plan" in WAITS_FOR.get(kind, ())) is SPEC[kind].with_plan, kind
     assert SPEC["presentation"].levels is False
     assert all(SPEC[kind].levels for kind in KINDS if kind != "presentation")
+    # Строительные блоки каталога — у игры; методрекомендации НАО — у заданий,
+    # домашки и проверочной. Оба идут в сообщение пользователя, не в систему
     assert SPEC["game"].references is not None
-    assert all(SPEC[kind].references is None for kind in KINDS if kind != "game")
+    assert all(
+        SPEC[kind].references is not None
+        for kind in ("assessment", "tasks", "homework")
+    )
+    assert SPEC["lesson_plan"].references is None
+    assert SPEC["presentation"].references is None
 
 
 # --- Разбор ответа модели ---

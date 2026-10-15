@@ -78,8 +78,11 @@ SYSTEM = """\
 
 def user_message(brief: LessonBrief) -> str:
     lang = "казахском" if brief.lang == "kz" else "русском"
-    return (
-        f"{describe(brief)}\n\n"
+    parts = [describe(brief)]
+    if brief.references:
+        parts.append(brief.references)
+    parts.append(
         f"Составь проверочную работу для формативного оценивания к этому уроку."
         f" Весь текст — на {lang} языке."
     )
+    return "\n\n".join(parts)

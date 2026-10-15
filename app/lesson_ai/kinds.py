@@ -11,6 +11,7 @@ from app.application.ports import AiPort
 from app.lesson_ai.answer_key import AnswerKeyAssembler
 from app.lesson_ai.games.select import references
 from app.lesson_ai.generate import KindSpec, SchemaGenerator
+from app.lesson_ai.methods.select import references as method_references
 from app.lesson_ai.prompts import assessment as assessment_prompt
 from app.lesson_ai.prompts import game as game_prompt
 from app.lesson_ai.prompts import homework as homework_prompt
@@ -52,6 +53,8 @@ TASKS = KindSpec(
     system=tasks_prompt.SYSTEM,
     user_message=tasks_prompt.user_message,
     server_blocks=SERVER_BLOCKS,
+    # Методрекомендации НАО — в сообщение, а не в системный промпт
+    references=method_references("tasks"),
 )
 
 HOMEWORK = KindSpec(
@@ -60,6 +63,7 @@ HOMEWORK = KindSpec(
     system=homework_prompt.SYSTEM,
     user_message=homework_prompt.user_message,
     server_blocks=SERVER_BLOCKS,
+    references=method_references("homework"),
 )
 
 ASSESSMENT = KindSpec(
@@ -68,6 +72,7 @@ ASSESSMENT = KindSpec(
     system=assessment_prompt.SYSTEM,
     user_message=assessment_prompt.user_message,
     server_blocks=SERVER_BLOCKS,
+    references=method_references("assessment"),
 )
 
 GAME = KindSpec(

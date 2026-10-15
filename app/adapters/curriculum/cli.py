@@ -72,7 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         text = document.get("text_content") or ""
         try:
             parsed[lang] = parse_curriculum(
-                text, lang, document=document, source_name=path or f"adilet:{lang}"
+                text, lang, subject=args.subject,
+                document=document, source_name=path or f"adilet:{lang}",
             )
         except CurriculumParseError as error:
             print(f"Редакция {lang}: {error}", file=sys.stderr)

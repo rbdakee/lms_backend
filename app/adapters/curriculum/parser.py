@@ -1,5 +1,6 @@
 """Разбор типовой учебной программы: приказ Министра просвещения РК № 399
-от 16.09.2022, приложение 26 — «Математика» для 1-4 классов.
+от 16.09.2022. Предмет выбирается из реестра `SUBJECTS` — по нему же приложение
+находится среди ~130 приложений акта.
 
 Данные берёт не этот модуль: граница адаптера проходит по разбору, скачивание —
 забота вызывающего кода. Откуда брать:
@@ -10,10 +11,11 @@
 казахской — 663d1192-e6c3-4d03-bab9-4d8f3bbd0a24. В ответе весь текст акта лежит
 одной строкой HTML в `document.text_content` — она и приходит сюда.
 
-Модуль настроен на приложение 26 и только на него. Другой предмет — другая вёрстка
-таблиц: чужое приложение либо не найдётся (`CurriculumParseError`), либо насыплет
-предупреждений в `anomalies`. Молча неверного ответа не будет — неверная программа
-в базе дороже отказа её разобрать.
+У предметов разная вёрстка таблиц: одна или несколько таблиц целей, разделы
+строкой во всю ширину или колонкой, подписи «Подраздел» / «Направление» /
+«Ключевые навыки». Разбор покрывает эти семейства; что не узнал, складывает
+в `anomalies`. Молча неверного ответа не будет — неверная программа в базе
+дороже отказа её разобрать.
 
 Про базу и HTTP модуль не знает ничего: на входе строка, на выходе `dict`.
 Только стандартная библиотека — `html.parser` и `re`.
@@ -49,24 +51,20 @@ class CurriculumParseError(RuntimeError):
 # --------------------------------------------------------------------------
 # Документ существует в двух редакциях с разной разметкой заголовков, но с
 # одинаковой структурой таблиц. Всё языкозависимое собрано здесь, чтобы
-# добавление третьего предмета/языка не требовало правок в логике разбора.
+# добавление третьего языка не требовало правок в логике разбора.
 
 _RULES: dict[str, Rules] = {
     "ru": {
-        # заголовок приложения: по нему находим нужную программу среди ~96
-        "appendix_title": re.compile(
-            r'учебн\w*\s+предмет\w*\s*[«"“]?\s*Математика', re.I),
-        "grades_in_title": re.compile(r"\b1\s*-\s*4\s*класс", re.I),
         "appendix_label": re.compile(r"Приложение\s*(\d+(?:\s*-\s*\d+)?)", re.I),
         # «Глава 2.» и «Параграф 1.» — в одном <h3> их бывает несколько подряд
         "heading_split": re.compile(r"(?=(?:Глава|Параграф)\s+\d+\s*\.)"),
         "note_prefix": re.compile(r"^(Примечание|Сноска)\b", re.I),
         "order_date_text": re.compile(r"от\s+\d{1,2}\s+\S+\s+\d{4}\s+года\s*№\s*\S+"),
-        # «Раздел 1: Числа и величины»
-        "section_row": re.compile(r"^Раздел\s*(\d+)\s*[:.\-–]?\s*(.+)$", re.I | re.S),
         # шапка таблицы целей: «1 класс» ... «4 класс»
         "grade_header": re.compile(r"(\d)\s*-?\s*класс", re.I),
-        "subsection_header": re.compile(r"Подраздел", re.I),
+        # «Подраздел», но у физкультуры — «Направление», у языков — «Ключевые навыки»
+        "subsection_header": re.compile(
+            r"Подраздел|Направление|Ключевые\s+навык", re.I),
         # «1 четверть»
         "quarter_row": re.compile(r"^(\d)\s*-?\s*четверт", re.I),
         # «1) 1 класс:» перед таблицей долгосрочного плана
@@ -74,20 +72,98 @@ _RULES: dict[str, Rules] = {
         "ltp_goals_header": re.compile(r"Цели\s+обучения", re.I),
     },
     "kz": {
-        "appendix_title": re.compile(r'[«"“]?\s*Математика\s*[»"”]?\s*оқу\s+пәні', re.I),
-        "grades_in_title": re.compile(r"\b1\s*-\s*4\s*-?\s*сынып", re.I),
         "appendix_label": re.compile(r"(\d+(?:\s*-\s*\d+)?)\s*-\s*қосымша", re.I),
         "heading_split": re.compile(r"(?=\d+\s*-\s*(?:тарау|параграф)\s*\.)"),
         "note_prefix": re.compile(r"^Ескерту\b", re.I),
         "order_date_text": re.compile(r"\d{4}\s+жылғы\s+\d{1,2}\s+\S+\s*№\s*\S+"),
-        "section_row": re.compile(r"^(\d+)\s*-\s*бөлім\s*[:.\-–]?\s*(.+)$", re.I | re.S),
         "grade_header": re.compile(r"(\d)\s*-?\s*сынып", re.I),
-        "subsection_header": re.compile(r"Бөлімше", re.I),
+        "subsection_header": re.compile(
+            r"Бөлімше|Бағыт|Кілттік\s+дағды", re.I),
         "quarter_row": re.compile(r"^(\d)\s*-?\s*тоқсан", re.I),
         "ltp_grade": re.compile(r"(\d)\s*-?\s*сынып\s*:?\s*$", re.I),
         "ltp_goals_header": re.compile(r"Оқу\s+мақсаттар", re.I),
     },
 }
+
+# Строки во всю ширину, начинающие раздел программы. Форматов два:
+# «Раздел 1: Числа и величины» (математика) и «1) „Я и общество“»
+# (познание мира, естествознание). Общие на обе редакции.
+_SECTION_ROWS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
+    (
+        re.compile(r"^Раздел\s*(\d+)\s*[:.\-–]?\s*(.+)$", re.I | re.S),
+        re.compile(r"^(\d+)\s*-\s*бөлім\s*[:.\-–]?\s*(.+)$", re.I | re.S),
+    ),
+    (
+        re.compile(r'^(\d+)\s*\)\s*[«"“"]?\s*(.+)$', re.I | re.S),
+        re.compile(r'^(\d+)\s*\)\s*[«"“"]?\s*(.+)$', re.I | re.S),
+    ),
+)
+
+# --------------------------------------------------------------------------
+# Предметы
+# --------------------------------------------------------------------------
+# Название предмета в приложении приказа — по нему программа находится среди
+# ~130 приложений. Названия в редакциях разные не переводом, а по существу:
+# «Трудовое обучение» и «Еңбекке баулу» — один предмет.
+
+@dataclass(frozen=True)
+class SubjectSpec:
+    """Как найти приложение предмета и как назвать его в разборе."""
+
+    code: str
+    title: str
+    name_ru: str
+    name_kz: str
+    grades: tuple[int, ...]
+
+
+def _subject(code: str, title: str, name_ru: str, name_kz: str,
+             grades: tuple[int, ...]) -> SubjectSpec:
+    return SubjectSpec(code=code, title=title, name_ru=name_ru, name_kz=name_kz,
+                       grades=grades)
+
+
+_SUBJECTS: dict[str, SubjectSpec] = {
+    spec.code: spec
+    for spec in (
+        _subject("math", "Математика", "Математика", "Математика", (1, 2, 3, 4)),
+        _subject("music", "Музыка", "Музыка", "Музыка", (1, 2, 3, 4)),
+        _subject("labor", "Трудовое обучение", "Трудовое обучение",
+                 "Еңбекке баулу", (1, 2, 3, 4)),
+        _subject("art", "Изобразительное искусство", "Изобразительное искусство",
+                 "Бейнелеу өнері", (1, 2, 3, 4)),
+        # «Художественный труд» 3-4 сюда не входит: приложение 32 приказа № 399
+        # исключено приказом № 323 от 05.11.2024 (действует с 01.09.2025)
+        _subject("physical_culture", "Физическая культура", "Физическая культура",
+                 "Дене шынықтыру", (1, 2, 3, 4)),
+        _subject("world_around", "Познание мира", "Познание мира",
+                 "Дүниетану", (1, 2, 3, 4)),
+        _subject("natural_science", "Естествознание", "Естествознание",
+                 "Жаратылыстану", (1, 2, 3, 4)),
+        _subject("digital_literacy", "Цифровая грамотность",
+                 "Цифровая грамотность", "Цифрлық сауаттылық", (1, 2, 3, 4)),
+    )
+}
+
+SUBJECT_CODES: tuple[str, ...] = tuple(_SUBJECTS)
+
+
+def _appendix_patterns(
+    spec: SubjectSpec, lang: str
+) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """Заголовок приложения ищем по названию предмета и классам сразу:
+    «Музыка» встречается и в 1-4, и в 5-6 классах — номер приложения
+    при правках приказа меняется, название и классы остаются."""
+    lo, hi = spec.grades[0], spec.grades[-1]
+    if lang == "ru":
+        title = rf'учебн\w*\s+предмет\w*\s*[«"“]?\s*{re.escape(spec.name_ru)}'
+        grades = (rf"\b{lo}\s*-\s*{hi}\s*класс" if lo != hi else rf"\b{lo}\s*класс")
+    else:
+        title = rf'[«"“]?\s*{re.escape(spec.name_kz)}\s*[»"”]?\s*оқу\s+пәні'
+        # «1-4-сыныптарына» и «1-4-сыныбына» — обе формы одной шапки
+        grades = (rf"\b{lo}\s*-\s*{hi}\s*-?\s*сыны" if lo != hi
+                  else rf"\b{lo}\s*-?\s*сыны")
+    return re.compile(title, re.I), re.compile(grades, re.I)
 
 LANGUAGES: tuple[str, ...] = tuple(_RULES)
 
@@ -287,15 +363,18 @@ def _split_appendices(html_text: str) -> list[tuple[int, int]]:
             for i, s in enumerate(starts)]
 
 
-def _find_appendix(html_text: str, rules: Rules) -> list[tuple[int, int, str]]:
+def _find_appendix(
+    html_text: str, rules: Rules, spec: SubjectSpec, lang: str
+) -> list[tuple[int, int, str]]:
     """Фрагменты приложений, чья «шапка» совпала с искомой программой."""
+    title, grades = _appendix_patterns(spec, lang)
     hits = []
     for start, end in _split_appendices(html_text):
         frag = html_text[start:end]
         # заголовок ищем в первых килобайтах: дальше идёт тело программы,
         # где название предмета встречается десятки раз
         head = _strip_tags(frag[:2500])
-        if rules["appendix_title"].search(head) and rules["grades_in_title"].search(head):
+        if title.search(head) and grades.search(head):
             hits.append((start, end, frag))
     return hits
 
@@ -343,15 +422,21 @@ def _tidy_goal(s: str) -> str:
 
 
 def _parse_goals_table(
-    table: Table, rules: Rules, anomalies: list[str]
+    table: Table, rules: Rules, lang: str, anomalies: list[str]
 ) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]]]:
     """
     Таблица «Система целей обучения».
 
     Строки трёх видов:
-      * во всю ширину «Раздел N: …» — начинается новый раздел;
+      * во всю ширину «Раздел N: …» или «N) …» — начинается новый раздел;
       * шапка «Подраздел | 1 класс | … | 4 класс» — задаёт колонки;
-      * обычная — колонка 0 держит подраздел, остальные цели по классам.
+      * обычная — подписи слева, цели по колонкам классов.
+
+    Подписи бывают в одной колонке («1.1 Я и моя семья» — сразу подраздел)
+    или в двух (у ИЗО: «1. Основы художественной грамотности» — раздел,
+    «1.1 Графика» — подраздел). Разбираем каждую непустую подписную колонку:
+    `N.M …` — подраздел, `N. …` при двух подписных колонках — раздел,
+    при одной — подраздел, номер которого уточняется по кодам строки.
 
     Класс берём из самого кода, а не из колонки: в казахской редакции
     «2-сынып» занимает две колонки (colspan=2), и позиционный расчёт врёт —
@@ -363,16 +448,33 @@ def _parse_goals_table(
     cur_section: int | None = None
     seen_cells: set[int] = set()              # ячейку с rowspan разбираем один раз
 
+    def _section_match(txt: str) -> re.Match[str] | None:
+        for ru_pat, kz_pat in _SECTION_ROWS:
+            m = (ru_pat if lang == "ru" else kz_pat).match(txt)
+            if m:
+                return m
+        return None
+
+    def _register_sub(sec_no: int, sub_no: int, title: str) -> None:
+        sec = sections.setdefault(sec_no, {"title": "", "subsections": {}})
+        if title:
+            sec["subsections"][sub_no] = title
+
+    # мультзаголовок шапки бывает в две строки («Подраздел | Цели обучения»
+    # поверх «Подраздел | 1 класс | …») — обе гасим без аномалий
+    header_rows = 0
     for r in range(table.height):
         if table.spans_full_row(r):
             txt = table.row_text(r)
-            m = rules["section_row"].match(txt)
+            m = _section_match(txt)
             if m:
                 no = int(m.group(1))
                 cur_section = no
                 sections.setdefault(no, {"title": "", "subsections": {}})
                 sections[no]["title"] = _clean(m.group(2))
-            elif txt:
+            elif txt and not rules["subsection_header"].search(txt) and not txt.endswith(":"):
+                # строки вида «Обучающиеся должны знать:» — заголовки блоков,
+                # а не данные; с ними аномалия была бы на каждой программе
                 anomalies.append(
                     f"таблица целей, строка {r}: непонятная строка во всю ширину: "
                     f"{txt[:120]!r}")
@@ -388,23 +490,57 @@ def _parse_goals_table(
                 m = rules["grade_header"].search(cell.value)
                 if m:
                     col_grade[c] = int(m.group(1))
+            header_rows += 1
+            continue
+        if rules["subsection_header"].search(head) and header_rows == 0 and not col_grade:
+            # верхняя строка мультзаголовка — «Подраздел | Цели обучения»
+            header_rows += 1
             continue
 
-        # колонка 0 — подраздел; ячейка бывает пустой (<br>) при rowspan,
-        # тогда подраздел определится по коду цели
-        label = table.at(r, 0)
-        sub_label = label.value if label is not None else ""
-        msub = re.match(r"^(\d+)\s*\.\s*(\d+)\b\s*(.*)$", sub_label, re.S)
-        if msub:
-            sec_no, sub_no = int(msub.group(1)), int(msub.group(2))
-            title = _clean(msub.group(3))
-            sections.setdefault(sec_no, {"title": "", "subsections": {}})
-            if title:
-                sections[sec_no]["subsections"][sub_no] = title
+        # колонки классов — те, что шапка пронумеровала; остальные — подписи.
+        # Без шапки (продолжение таблицы) — подпись одна, колонка 0
+        if col_grade:
+            goal_cols = [c for c in range(table.width) if c in col_grade]
+            label_cols = [c for c in range(table.width) if c not in col_grade]
+        else:
+            goal_cols = [c for c in range(1, table.width)]
+            label_cols = [0]
 
-        for c in range(table.width):
-            if c == 0:
+        # подписи слева: подраздел «N.M …» или раздел «N. …»
+        row_sec_no = cur_section
+        sub_titles: list[tuple[int, str]] = []
+        for c in label_cols:
+            cell = table.at(r, c)
+            if cell is None or id(cell) in seen_cells:
                 continue
+            seen_cells.add(id(cell))
+            label = cell.value
+            if not label:
+                continue
+            # \b заменён на (?\d): в казахской редакции подпись пишут
+            # слитно — «1.1Өнер туындыларын қабылдау» — и словесной границы
+            # между номером и заголовком нет
+            msub = re.match(r"^(\d+)\s*\.\s*(\d+)(?!\d)\s*(.*)$", label, re.S)
+            if msub:
+                _register_sub(int(msub.group(1)), int(msub.group(2)),
+                              _clean(msub.group(3)))
+                continue
+            msec = re.match(r"^(\d+)\s*\.\s*([^\d].*)$", label, re.S)
+            if msec and len(label_cols) > 1:
+                no = int(msec.group(1))
+                row_sec_no = no
+                sections.setdefault(no, {"title": "", "subsections": {}})
+                sections[no]["title"] = _clean(msec.group(2))
+                continue
+            if msec:
+                # одна подписная колонка: «N. Заголовок» — подраздел,
+                # раздел узнается по кодам целей этой строки
+                sub_titles.append((int(msec.group(1)), _clean(msec.group(2))))
+                continue
+            # подпись без номера («Нотная грамота») — продолжение прежнего
+            # подраздела на следующей строке, а не ошибка разбора
+
+        for c in goal_cols:
             cell = table.at(r, c)
             if cell is None or id(cell) in seen_cells:
                 continue
@@ -417,10 +553,6 @@ def _parse_goals_table(
                     f"таблица целей, строка {r}, колонка {c}: кода не видно: "
                     f"{cell.value[:120]!r}")
                 continue
-            if len(found) > 1:
-                anomalies.append(
-                    f"таблица целей, строка {r}, колонка {c}: в одной ячейке {len(found)} кодов "
-                    f"({', '.join(g['code'] for g in found)})")
             for gl in found:
                 gl["images"] = list(cell.images)
                 gl["column_grade"] = col_grade.get(c)
@@ -429,11 +561,19 @@ def _parse_goals_table(
                     anomalies.append(
                         f"цель {gl['code']}: класс по коду {gl['grade']}, "
                         f"а колонка таблицы — {gl['column_grade']} класс")
-                if cur_section is not None and gl["section_no"] != cur_section:
+                if row_sec_no is not None and gl["section_no"] != row_sec_no:
                     anomalies.append(
-                        f"цель {gl['code']} стоит в разделе {cur_section}, "
+                        f"цель {gl['code']} стоит в разделе {row_sec_no}, "
                         f"а по коду относится к разделу {gl['section_no']}")
                 goals.append(gl)
+
+        # подписи вида «N. …» при одной колонке — подразделы этого раздела
+        for sub_no, title in sub_titles:
+            sec_no = next((g["section_no"] for g in goals
+                           if g["row"] == r and g["subsection_no"] == sub_no),
+                         cur_section)
+            if sec_no is not None:
+                _register_sub(sec_no, sub_no, title)
     return sections, goals
 
 
@@ -486,6 +626,12 @@ def _parse_ltp_table(
 
         found = _split_goals(cell.value)
         if not found:
+            # «N четверть» встречается и обычной строкой, не только во всю
+            # ширину — для разбора это смена четверти, а не мусор
+            mq = rules["quarter_row"].match(cell.value)
+            if mq:
+                quarter = int(mq.group(1))
+                continue
             anomalies.append(
                 f"долгосрочный план {grade_hint} кл., строка {r}: кода не видно: "
                 f"{cell.value[:100]!r}")
@@ -530,12 +676,15 @@ def parse_curriculum(
     html_text: str,
     lang: str,
     *,
+    subject: str = "math",
     document: dict[str, Any] | None = None,
     source_name: str = "",
 ) -> dict[str, Any]:
     """Разбирает текст акта и возвращает программу словарём.
 
     `html_text` — содержимое `document.text_content` из ответа adilet.
+    `subject` — код предмета из `SUBJECT_CODES`: по нему находится приложение
+    и подставляется название предмета.
     `document` — тот же `document` целиком: из него берутся выходные данные
     приказа (номер, даты, название). Без него блок `source` остаётся пустым,
     но сама программа разбирается ровно так же.
@@ -549,12 +698,16 @@ def parse_curriculum(
     if rules is None:
         raise CurriculumParseError(
             f"неизвестный язык редакции: {lang!r}, есть {', '.join(LANGUAGES)}")
+    spec = _SUBJECTS.get(subject)
+    if spec is None:
+        raise CurriculumParseError(
+            f"неизвестный предмет: {subject!r}, есть {', '.join(SUBJECT_CODES)}")
     if not html_text:
         raise CurriculumParseError(f"{source_name or 'документ'}: текста акта нет")
 
     doc = document or {}
 
-    hits = _find_appendix(html_text, rules)
+    hits = _find_appendix(html_text, rules, spec, lang)
     if not hits:
         raise CurriculumParseError(
             f"{source_name or 'документ'}: приложение с искомой программой не найдено")
@@ -582,7 +735,11 @@ def parse_curriculum(
                 top_level.append(m.start())
             depth += 1
 
-    goals_table = None
+    # У части предметов (труд, физкультура) таблиц целей несколько —
+    # по одной на раздел. Разбираем каждую и складываем цели вместе.
+    # У цифровой грамотности куски таблиц цели идут вовсе без шапки —
+    # продолжение одной таблицы, разрезанной вёрсткой; ловим их по кодам.
+    goals_tables: list[Table] = []
     ltp_tables = []
     for i, t in enumerate(tp.tables):
         # шапка таблицы целей: «Подраздел» + «1 класс»
@@ -592,16 +749,39 @@ def parse_curriculum(
             if rules["subsection_header"].search(txt) and rules["grade_header"].search(txt):
                 header_seen = True
                 break
-        if header_seen and goals_table is None:
-            goals_table = t
+        if header_seen:
+            goals_tables.append(t)
             continue
         if any(rules["ltp_goals_header"].search(t.row_text(r)) for r in range(min(t.height, 4))):
             ltp_tables.append((i, t))
+            continue
+        # без шапки: это продолжение таблицы целей, если в ней есть коды
+        # и ни одной пометки долгосрочного плана («четверть», «Сквозные темы»)
+        has_codes = any(
+            RE_CODE.search(cell.value)
+            for row in t.rows for cell in row if cell.value
+        )
+        looks_like_ltp = any(
+            rules["quarter_row"].match(t.row_text(r)) for r in range(t.height)
+        ) or any(
+            rules["ltp_goals_header"].search(t.row_text(r)) for r in range(min(t.height, 4))
+        )
+        if has_codes and not looks_like_ltp:
+            goals_tables.append(t)
 
-    if goals_table is None:
+    if not goals_tables:
         raise CurriculumParseError("таблица «Система целей обучения» не найдена")
 
-    sections, goals = _parse_goals_table(goals_table, rules, anomalies)
+    sections: dict[int, dict[str, Any]] = {}
+    goals: list[dict[str, Any]] = []
+    for table in goals_tables:
+        one_sections, one_goals = _parse_goals_table(table, rules, lang, anomalies)
+        for no, sec in one_sections.items():
+            target = sections.setdefault(no, {"title": "", "subsections": {}})
+            if sec["title"]:
+                target["title"] = sec["title"]
+            target["subsections"].update(sec["subsections"])
+        goals.extend(one_goals)
 
     ltp_rows: list[dict[str, Any]] = []
     for i, t in ltp_tables:
@@ -694,8 +874,9 @@ def parse_curriculum(
 
     return {
         "source": meta,
-        "subject": "Математика",
-        "grades": [1, 2, 3, 4],
+        "subject": spec.title,
+        "subject_code": spec.code,
+        "grades": list(spec.grades),
         "program_title": headings[0] if headings else "",
         "program_structure": headings,
         "notes": _notes(frag, rules),
@@ -727,13 +908,16 @@ def parse_curriculum(
     }
 
 
-def parse_curriculum_file(path: str | Path, lang: str) -> dict[str, Any]:
+def parse_curriculum_file(
+    path: str | Path, lang: str, subject: str = "math"
+) -> dict[str, Any]:
     """То же по сохранённому ответу adilet: `{"document": {...}}` или сам документ."""
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     doc = payload.get("document", payload)
     return parse_curriculum(
         doc.get("text_content") or "",
         lang,
+        subject=subject,
         document=doc,
         source_name=str(path),
     )
@@ -840,10 +1024,12 @@ def main() -> None:
     ap.add_argument("json_path", help="JSON от API adilet (document.text_content внутри)")
     ap.add_argument("--lang", choices=sorted(LANGUAGES), required=True,
                     help="язык редакции: ru или kz")
+    ap.add_argument("--subject", choices=sorted(SUBJECT_CODES), default="math",
+                    help="код предмета из реестра (по умолчанию math)")
     ap.add_argument("-o", "--out", help="куда положить результат (по умолчанию — stdout)")
     args = ap.parse_args()
 
-    result = parse_curriculum_file(args.json_path, args.lang)
+    result = parse_curriculum_file(args.json_path, args.lang, args.subject)
     text = json.dumps(result, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(text + "\n", encoding="utf-8")
