@@ -367,6 +367,19 @@ class LessonObjectivesOut(BaseModel):
     items: list[LessonChatObjectiveOut]
 
 
+class LessonSubjectOut(BaseModel):
+    code: str
+    title_ru: str
+    title_kz: str
+    grade_from: int
+    grade_to: int
+    langs: list[Literal["ru", "kz"]]
+
+
+class LessonSubjectsOut(BaseModel):
+    items: list[LessonSubjectOut]
+
+
 # -- Доступ к продукту (сессия L7) ---------------------------------------------
 
 

@@ -39,6 +39,7 @@ from collections.abc import Iterator
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.ai.openai_chat import AiUnavailableError
+from app.adapters.curriculum.parser import subject_title_kz
 from app.adapters.db.lesson_ai_repos import (
     LessonChatRepo,
     LessonUsageRepo,
@@ -491,25 +492,58 @@ class LessonChatService:
 
     # -- справочник для экрана «выбрать самому» ------------------------------
 
-    def objectives(self, *, q: str, grade: int | None, lang: str | None) -> dict:
+    def objectives(
+        self,
+        *,
+        q: str,
+        grade: int | None,
+        lang: str | None,
+        subject_code: str | None = None,
+    ) -> dict:
         """Цели без модели: поиск по тем же основам, что у инструмента, или
         список класса целиком — учитель открывает его и выбирает сам (раздел 1)."""
         q = q.strip()
+        # Незнакомый код — отказ, как у инструмента чата: пустой список
+        # экран прочёл бы как «в программе такого нет»
+        if subject_code is not None and not self.repo.subject_known(subject_code):
+            raise FieldError("subject_code", "Такого предмета в программе нет")
         if q:
             stems = search_stems(q)
             code = objective_code_in(q)
             rows = (
                 self.repo.find_objectives(
-                    stems, code=code, grade=grade, lang=lang, limit=FIND_LIMIT_MAX
+                    stems,
+                    code=code,
+                    grade=grade,
+                    lang=lang,
+                    limit=FIND_LIMIT_MAX,
+                    subject_code=subject_code,
                 )
                 if stems or code
                 else []
             )
         elif grade is not None and lang is not None:
-            rows = self.repo.grade_objectives(grade, lang)
+            rows = self.repo.grade_objectives(grade, lang, subject_code)
         else:
             raise FieldError("q", "Введите слова из цели или выберите класс и язык")
         return {"items": [objective_item(row) for row in rows]}
+
+    def subjects(self) -> dict:
+        """Предметы для чипов «выбрать самому»: только с опубликованными
+        программами. Пустой список — программы ещё не опубликованы."""
+        return {
+            "items": [
+                {
+                    "code": code,
+                    "title_ru": title,
+                    "title_kz": subject_title_kz(code, title),
+                    "grade_from": grade_from,
+                    "grade_to": grade_to,
+                    "langs": langs,
+                }
+                for code, title, grade_from, grade_to, langs in self.repo.published_subjects()
+            ]
+        }
 
     # -- сборка -------------------------------------------------------------
 
