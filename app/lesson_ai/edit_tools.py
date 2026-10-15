@@ -12,6 +12,7 @@
 | `delete_item` | убрать пункт блока-списка |
 | `set_objectives` | сменить набор целей урока: добавить, убрать, переставить |
 | `find_objectives`, `browse_objectives`, `show_objectives` | поиск новых целей, как в сборке |
+| `find_image` | ключ картинки для слайда из каталога готовых изображений |
 
 Своего пути к блокам у инструментов нет: каждая правка идёт через
 `LessonMaterialsService` — ту же, что ручка кнопки ИИ и ручная правка учителя.
@@ -38,7 +39,7 @@ from app.adapters.db.models import LessonMaterial, User
 from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService
 from app.domain.lesson_ai import KIND_TITLES_RU, MATERIAL_KINDS, objective_codes_in
-from app.lesson_ai import order_tools
+from app.lesson_ai import images, order_tools
 from app.lesson_ai.context import strip_codes_deep
 
 GET_MATERIAL = "get_material"
@@ -48,6 +49,7 @@ ADD = "add_item"
 REPLACE = "replace_item"
 DELETE = "delete_item"
 SET_OBJECTIVES = "set_objectives"
+FIND_IMAGE = "find_image"
 # Поиск целей — инструменты сборки заказа, без правок: читают справочник
 SEARCH_TOOLS = (order_tools.SUBJECTS, order_tools.BROWSE, order_tools.SHOW, order_tools.FIND)
 
@@ -78,9 +80,11 @@ ITEM_PROPERTY = {
     "type": ["object", "string"],
     "description": (
         "Новый пункт той же формы, что остальные пункты этого блока (посмотри блок"
-        " через get_block): слайд — объект с полями title, lines, visual, notes;"
-        " пункт из строк — строка. Текст — на языке комплекта. Кодов целей обучения"
-        " в тексте нет."
+        " через get_block): слайд — объект со всеми полями слайда (layout, title, lines,"
+        " left_title, right_title, right_lines, fact, answer, image, animation, visual,"
+        " notes — какое когда заполнять, сказано в описании слайда; чужие типу поля"
+        " пустые); ключ картинки — только из find_image; пункт из строк — строка."
+        " Текст — на языке комплекта. Кодов целей обучения в тексте нет."
     ),
 }
 
@@ -184,6 +188,19 @@ SCHEMAS.append(
 )
 # Описания инструментов поиска — те же, что у сборки заказа: часть кэшируемого начала запроса
 SCHEMAS.extend(s for s in order_tools.SCHEMAS if s["function"]["name"] in SEARCH_TOOLS)
+SCHEMAS.append(
+    _tool(
+        FIND_IMAGE,
+        "Найти картинку для слайда в каталоге готовых изображений: по слову на русском,"
+        " казахском или английском («яблоко», «алма», «rocket»). Возвращает ключи для"
+        " поля image слайда. Картинок вне каталога нет, а выдуманный ключ слайд"
+        " оставит без картинки — ключ бери только отсюда или из соседних слайдов.",
+        {
+            "query": {"type": "string", "description": "Слово или два: что нарисовано."},
+        },
+        ["query"],
+    )
+)
 
 
 @dataclass
@@ -211,9 +228,11 @@ class EditTools:
     def call(self, name: str, args: dict, ctx: EditCtx) -> dict:
         if name in SEARCH_TOOLS:
             return order_tools.OrderTools().call(name, args, ctx.search)
+        if name == FIND_IMAGE:
+            return _find_image(args)
         handler = _HANDLERS.get(name)
         if handler is None and name != SET_OBJECTIVES:
-            names = ", ".join([*_HANDLERS, SET_OBJECTIVES, *SEARCH_TOOLS])
+            names = ", ".join([*_HANDLERS, SET_OBJECTIVES, FIND_IMAGE, *SEARCH_TOOLS])
             return _refusal("unknown_tool", f"Инструмента {name} нет. Доступны: {names}.")
         if ctx.kit_id is None:
             return _refusal("no_kit", "У этого чата нет комплекта — править нечего")
@@ -223,6 +242,17 @@ class EditTools:
         if isinstance(material, dict):
             return material
         return handler(ctx, material, args)
+
+
+def _find_image(args: dict) -> dict:
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return _refusal("bad_arguments", "Нужно слово: что должно быть на картинке")
+    found = images.search(query.strip()[:80])
+    return {
+        "images": [{"key": i.key, "category": i.category, "ru": i.ru[:2]} for i in found],
+        "note": "" if found else "Подходящей картинки нет: оставь поле image пустым",
+    }
 
 
 def _get_material(ctx: EditCtx, material: LessonMaterial, args: dict) -> dict:

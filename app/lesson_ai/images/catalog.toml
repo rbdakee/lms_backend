@@ -1,0 +1,3322 @@
+# Каталог картинок для презентации: данные, а не код (по образцу games/catalog).
+# Добавить или убрать картинку — строка здесь и файл в files/; код читает каталог
+# при старте и ничего о конкретных картинках не знает.
+#
+# key        — то, что пишет в слайд модель (латиница, строчные, `_`)
+# file       — PNG в files/ (192x192, прозрачный фон)
+# src        — эмодзи Fluent, из которого сделан файл (атрибуция)
+# category   — раздел списка, который видит модель
+# ru/kz/en   — слова для поиска (find_image) и для людей; модель их не получает
+# Источник — Fluent Emoji (стиль 3D), MIT, см. LICENSE.md рядом.
+
+[[image]]
+key = "cat"
+file = "cat.png"
+src = "Fluent Emoji: Cat"
+category = "animals"
+ru = ["кошка", "кот", "котёнок"]
+kz = ["мысық"]
+en = ["cat", "kitten"]
+
+[[image]]
+key = "dog"
+file = "dog.png"
+src = "Fluent Emoji: Dog"
+category = "animals"
+ru = ["собака", "пёс", "щенок"]
+kz = ["ит", "күшік"]
+en = ["dog", "puppy"]
+
+[[image]]
+key = "rabbit"
+file = "rabbit.png"
+src = "Fluent Emoji: Rabbit"
+category = "animals"
+ru = ["заяц", "кролик", "зайчик"]
+kz = ["қоян"]
+en = ["rabbit", "hare", "bunny"]
+
+[[image]]
+key = "mouse"
+file = "mouse.png"
+src = "Fluent Emoji: Mouse"
+category = "animals"
+ru = ["мышь", "мышка"]
+kz = ["тышқан"]
+en = ["mouse"]
+
+[[image]]
+key = "hamster"
+file = "hamster.png"
+src = "Fluent Emoji: Hamster"
+category = "animals"
+ru = ["хомяк"]
+kz = ["хомяк"]
+en = ["hamster"]
+
+[[image]]
+key = "bear"
+file = "bear.png"
+src = "Fluent Emoji: Bear"
+category = "animals"
+ru = ["медведь", "мишка"]
+kz = ["аю"]
+en = ["bear"]
+
+[[image]]
+key = "panda"
+file = "panda.png"
+src = "Fluent Emoji: Panda"
+category = "animals"
+ru = ["панда"]
+kz = ["панда"]
+en = ["panda"]
+
+[[image]]
+key = "tiger"
+file = "tiger.png"
+src = "Fluent Emoji: Tiger"
+category = "animals"
+ru = ["тигр"]
+kz = ["жолбарыс"]
+en = ["tiger"]
+
+[[image]]
+key = "lion"
+file = "lion.png"
+src = "Fluent Emoji: Lion"
+category = "animals"
+ru = ["лев"]
+kz = ["арыстан"]
+en = ["lion"]
+
+[[image]]
+key = "cow"
+file = "cow.png"
+src = "Fluent Emoji: Cow"
+category = "animals"
+ru = ["корова"]
+kz = ["сиыр"]
+en = ["cow"]
+
+[[image]]
+key = "pig"
+file = "pig.png"
+src = "Fluent Emoji: Pig"
+category = "animals"
+ru = ["свинья", "поросёнок"]
+kz = ["шошқа"]
+en = ["pig"]
+
+[[image]]
+key = "horse"
+file = "horse.png"
+src = "Fluent Emoji: Horse"
+category = "animals"
+ru = ["лошадь", "конь"]
+kz = ["жылқы", "ат"]
+en = ["horse"]
+
+[[image]]
+key = "sheep"
+file = "sheep.png"
+src = "Fluent Emoji: Ewe"
+category = "animals"
+ru = ["овца", "баран"]
+kz = ["қой"]
+en = ["sheep"]
+
+[[image]]
+key = "goat"
+file = "goat.png"
+src = "Fluent Emoji: Goat"
+category = "animals"
+ru = ["коза"]
+kz = ["ешкі"]
+en = ["goat"]
+
+[[image]]
+key = "chicken"
+file = "chicken.png"
+src = "Fluent Emoji: Chicken"
+category = "animals"
+ru = ["курица"]
+kz = ["тауық"]
+en = ["chicken", "hen"]
+
+[[image]]
+key = "rooster"
+file = "rooster.png"
+src = "Fluent Emoji: Rooster"
+category = "animals"
+ru = ["петух"]
+kz = ["әтеш"]
+en = ["rooster"]
+
+[[image]]
+key = "duck"
+file = "duck.png"
+src = "Fluent Emoji: Duck"
+category = "animals"
+ru = ["утка"]
+kz = ["үйрек"]
+en = ["duck"]
+
+[[image]]
+key = "bird"
+file = "bird.png"
+src = "Fluent Emoji: Bird"
+category = "animals"
+ru = ["птица"]
+kz = ["құс"]
+en = ["bird"]
+
+[[image]]
+key = "owl"
+file = "owl.png"
+src = "Fluent Emoji: Owl"
+category = "animals"
+ru = ["сова"]
+kz = ["жапалақ"]
+en = ["owl"]
+
+[[image]]
+key = "eagle"
+file = "eagle.png"
+src = "Fluent Emoji: Eagle"
+category = "animals"
+ru = ["орёл"]
+kz = ["бүркіт", "қыран"]
+en = ["eagle"]
+
+[[image]]
+key = "frog"
+file = "frog.png"
+src = "Fluent Emoji: Frog"
+category = "animals"
+ru = ["лягушка"]
+kz = ["бақа"]
+en = ["frog"]
+
+[[image]]
+key = "turtle"
+file = "turtle.png"
+src = "Fluent Emoji: Turtle"
+category = "animals"
+ru = ["черепаха"]
+kz = ["тасбақа"]
+en = ["turtle"]
+
+[[image]]
+key = "snake"
+file = "snake.png"
+src = "Fluent Emoji: Snake"
+category = "animals"
+ru = ["змея"]
+kz = ["жылан"]
+en = ["snake"]
+
+[[image]]
+key = "fish"
+file = "fish.png"
+src = "Fluent Emoji: Fish"
+category = "animals"
+ru = ["рыба"]
+kz = ["балық"]
+en = ["fish"]
+
+[[image]]
+key = "dolphin"
+file = "dolphin.png"
+src = "Fluent Emoji: Dolphin"
+category = "animals"
+ru = ["дельфин"]
+kz = ["дельфин"]
+en = ["dolphin"]
+
+[[image]]
+key = "whale"
+file = "whale.png"
+src = "Fluent Emoji: Spouting whale"
+category = "animals"
+ru = ["кит"]
+kz = ["кит"]
+en = ["whale"]
+
+[[image]]
+key = "octopus"
+file = "octopus.png"
+src = "Fluent Emoji: Octopus"
+category = "animals"
+ru = ["осьминог"]
+kz = ["сегізаяқ"]
+en = ["octopus"]
+
+[[image]]
+key = "crab"
+file = "crab.png"
+src = "Fluent Emoji: Crab"
+category = "animals"
+ru = ["краб"]
+kz = ["шаян"]
+en = ["crab"]
+
+[[image]]
+key = "butterfly"
+file = "butterfly.png"
+src = "Fluent Emoji: Butterfly"
+category = "animals"
+ru = ["бабочка"]
+kz = ["көбелек"]
+en = ["butterfly"]
+
+[[image]]
+key = "bee"
+file = "bee.png"
+src = "Fluent Emoji: Honeybee"
+category = "animals"
+ru = ["пчела"]
+kz = ["ара"]
+en = ["bee", "honeybee"]
+
+[[image]]
+key = "ant"
+file = "ant.png"
+src = "Fluent Emoji: Ant"
+category = "animals"
+ru = ["муравей"]
+kz = ["құмырсқа"]
+en = ["ant"]
+
+[[image]]
+key = "ladybug"
+file = "ladybug.png"
+src = "Fluent Emoji: Lady beetle"
+category = "animals"
+ru = ["божья", "коровка", "жук"]
+kz = ["қоңыз"]
+en = ["ladybug", "beetle"]
+
+[[image]]
+key = "spider"
+file = "spider.png"
+src = "Fluent Emoji: Spider"
+category = "animals"
+ru = ["паук"]
+kz = ["өрмекші"]
+en = ["spider"]
+
+[[image]]
+key = "snail"
+file = "snail.png"
+src = "Fluent Emoji: Snail"
+category = "animals"
+ru = ["улитка"]
+kz = ["ұлу"]
+en = ["snail"]
+
+[[image]]
+key = "elephant"
+file = "elephant.png"
+src = "Fluent Emoji: Elephant"
+category = "animals"
+ru = ["слон"]
+kz = ["піл"]
+en = ["elephant"]
+
+[[image]]
+key = "giraffe"
+file = "giraffe.png"
+src = "Fluent Emoji: Giraffe"
+category = "animals"
+ru = ["жираф"]
+kz = ["жираф"]
+en = ["giraffe"]
+
+[[image]]
+key = "monkey"
+file = "monkey.png"
+src = "Fluent Emoji: Monkey"
+category = "animals"
+ru = ["обезьяна"]
+kz = ["маймыл"]
+en = ["monkey"]
+
+[[image]]
+key = "fox"
+file = "fox.png"
+src = "Fluent Emoji: Fox"
+category = "animals"
+ru = ["лиса"]
+kz = ["түлкі"]
+en = ["fox"]
+
+[[image]]
+key = "wolf"
+file = "wolf.png"
+src = "Fluent Emoji: Wolf"
+category = "animals"
+ru = ["волк"]
+kz = ["қасқыр"]
+en = ["wolf"]
+
+[[image]]
+key = "deer"
+file = "deer.png"
+src = "Fluent Emoji: Deer"
+category = "animals"
+ru = ["олень"]
+kz = ["бұғы"]
+en = ["deer"]
+
+[[image]]
+key = "camel"
+file = "camel.png"
+src = "Fluent Emoji: Camel"
+category = "animals"
+ru = ["верблюд"]
+kz = ["түйе"]
+en = ["camel"]
+
+[[image]]
+key = "penguin"
+file = "penguin.png"
+src = "Fluent Emoji: Penguin"
+category = "animals"
+ru = ["пингвин"]
+kz = ["пингвин"]
+en = ["penguin"]
+
+[[image]]
+key = "hedgehog"
+file = "hedgehog.png"
+src = "Fluent Emoji: Hedgehog"
+category = "animals"
+ru = ["ёж"]
+kz = ["кірпі"]
+en = ["hedgehog"]
+
+[[image]]
+key = "squirrel"
+file = "squirrel.png"
+src = "Fluent Emoji: Chipmunk"
+category = "animals"
+ru = ["белка", "бурундук"]
+kz = ["тиін"]
+en = ["squirrel", "chipmunk"]
+
+[[image]]
+key = "zebra"
+file = "zebra.png"
+src = "Fluent Emoji: Zebra"
+category = "animals"
+ru = ["зебра"]
+kz = ["зебра"]
+en = ["zebra"]
+
+[[image]]
+key = "kangaroo"
+file = "kangaroo.png"
+src = "Fluent Emoji: Kangaroo"
+category = "animals"
+ru = ["кенгуру"]
+kz = ["кенгуру"]
+en = ["kangaroo"]
+
+[[image]]
+key = "crocodile"
+file = "crocodile.png"
+src = "Fluent Emoji: Crocodile"
+category = "animals"
+ru = ["крокодил"]
+kz = ["қолтырауын"]
+en = ["crocodile"]
+
+[[image]]
+key = "dinosaur"
+file = "dinosaur.png"
+src = "Fluent Emoji: T-rex"
+category = "animals"
+ru = ["динозавр"]
+kz = ["динозавр"]
+en = ["dinosaur", "trex"]
+
+[[image]]
+key = "chick"
+file = "chick.png"
+src = "Fluent Emoji: Baby chick"
+category = "animals"
+ru = ["цыплёнок", "птенец"]
+kz = ["балапан"]
+en = ["chick"]
+
+[[image]]
+key = "dove"
+file = "dove.png"
+src = "Fluent Emoji: Dove"
+category = "animals"
+ru = ["голубь"]
+kz = ["көгершін"]
+en = ["dove", "pigeon"]
+
+[[image]]
+key = "swan"
+file = "swan.png"
+src = "Fluent Emoji: Swan"
+category = "animals"
+ru = ["лебедь"]
+kz = ["аққу"]
+en = ["swan"]
+
+[[image]]
+key = "shark"
+file = "shark.png"
+src = "Fluent Emoji: Shark"
+category = "animals"
+ru = ["акула"]
+kz = ["акула"]
+en = ["shark"]
+
+[[image]]
+key = "apple"
+file = "apple.png"
+src = "Fluent Emoji: Red apple"
+category = "food"
+ru = ["яблоко"]
+kz = ["алма"]
+en = ["apple"]
+
+[[image]]
+key = "green_apple"
+file = "green_apple.png"
+src = "Fluent Emoji: Green apple"
+category = "food"
+ru = ["зелёное", "яблоко"]
+kz = ["жасыл", "алма"]
+en = ["green", "apple"]
+
+[[image]]
+key = "banana"
+file = "banana.png"
+src = "Fluent Emoji: Banana"
+category = "food"
+ru = ["банан"]
+kz = ["банан"]
+en = ["banana"]
+
+[[image]]
+key = "pear"
+file = "pear.png"
+src = "Fluent Emoji: Pear"
+category = "food"
+ru = ["груша"]
+kz = ["алмұрт"]
+en = ["pear"]
+
+[[image]]
+key = "tangerine"
+file = "tangerine.png"
+src = "Fluent Emoji: Tangerine"
+category = "food"
+ru = ["мандарин", "апельсин"]
+kz = ["мандарин"]
+en = ["tangerine", "orange"]
+
+[[image]]
+key = "lemon"
+file = "lemon.png"
+src = "Fluent Emoji: Lemon"
+category = "food"
+ru = ["лимон"]
+kz = ["лимон"]
+en = ["lemon"]
+
+[[image]]
+key = "watermelon"
+file = "watermelon.png"
+src = "Fluent Emoji: Watermelon"
+category = "food"
+ru = ["арбуз"]
+kz = ["қарбыз"]
+en = ["watermelon"]
+
+[[image]]
+key = "grapes"
+file = "grapes.png"
+src = "Fluent Emoji: Grapes"
+category = "food"
+ru = ["виноград"]
+kz = ["жүзім"]
+en = ["grapes"]
+
+[[image]]
+key = "strawberry"
+file = "strawberry.png"
+src = "Fluent Emoji: Strawberry"
+category = "food"
+ru = ["клубника", "земляника"]
+kz = ["құлпынай"]
+en = ["strawberry"]
+
+[[image]]
+key = "cherries"
+file = "cherries.png"
+src = "Fluent Emoji: Cherries"
+category = "food"
+ru = ["вишня", "черешня"]
+kz = ["шие"]
+en = ["cherries", "cherry"]
+
+[[image]]
+key = "peach"
+file = "peach.png"
+src = "Fluent Emoji: Peach"
+category = "food"
+ru = ["персик"]
+kz = ["шабдалы"]
+en = ["peach"]
+
+[[image]]
+key = "pineapple"
+file = "pineapple.png"
+src = "Fluent Emoji: Pineapple"
+category = "food"
+ru = ["ананас"]
+kz = ["ананас"]
+en = ["pineapple"]
+
+[[image]]
+key = "carrot"
+file = "carrot.png"
+src = "Fluent Emoji: Carrot"
+category = "food"
+ru = ["морковь"]
+kz = ["сәбіз"]
+en = ["carrot"]
+
+[[image]]
+key = "tomato"
+file = "tomato.png"
+src = "Fluent Emoji: Tomato"
+category = "food"
+ru = ["помидор", "томат"]
+kz = ["қызанақ"]
+en = ["tomato"]
+
+[[image]]
+key = "potato"
+file = "potato.png"
+src = "Fluent Emoji: Potato"
+category = "food"
+ru = ["картофель", "картошка"]
+kz = ["картоп"]
+en = ["potato"]
+
+[[image]]
+key = "corn"
+file = "corn.png"
+src = "Fluent Emoji: Ear of corn"
+category = "food"
+ru = ["кукуруза"]
+kz = ["жүгері"]
+en = ["corn"]
+
+[[image]]
+key = "cucumber"
+file = "cucumber.png"
+src = "Fluent Emoji: Cucumber"
+category = "food"
+ru = ["огурец"]
+kz = ["қияр"]
+en = ["cucumber"]
+
+[[image]]
+key = "broccoli"
+file = "broccoli.png"
+src = "Fluent Emoji: Broccoli"
+category = "food"
+ru = ["брокколи", "капуста"]
+kz = ["брокколи"]
+en = ["broccoli"]
+
+[[image]]
+key = "bread"
+file = "bread.png"
+src = "Fluent Emoji: Bread"
+category = "food"
+ru = ["хлеб"]
+kz = ["нан"]
+en = ["bread"]
+
+[[image]]
+key = "cheese"
+file = "cheese.png"
+src = "Fluent Emoji: Cheese wedge"
+category = "food"
+ru = ["сыр"]
+kz = ["ірімшік"]
+en = ["cheese"]
+
+[[image]]
+key = "egg"
+file = "egg.png"
+src = "Fluent Emoji: Egg"
+category = "food"
+ru = ["яйцо"]
+kz = ["жұмыртқа"]
+en = ["egg"]
+
+[[image]]
+key = "milk"
+file = "milk.png"
+src = "Fluent Emoji: Glass of milk"
+category = "food"
+ru = ["молоко"]
+kz = ["сүт"]
+en = ["milk"]
+
+[[image]]
+key = "cake"
+file = "cake.png"
+src = "Fluent Emoji: Birthday cake"
+category = "food"
+ru = ["торт"]
+kz = ["торт"]
+en = ["cake"]
+
+[[image]]
+key = "cookie"
+file = "cookie.png"
+src = "Fluent Emoji: Cookie"
+category = "food"
+ru = ["печенье"]
+kz = ["печенье"]
+en = ["cookie", "biscuit"]
+
+[[image]]
+key = "ice_cream"
+file = "ice_cream.png"
+src = "Fluent Emoji: Ice cream"
+category = "food"
+ru = ["мороженое"]
+kz = ["балмұздақ"]
+en = ["ice", "cream"]
+
+[[image]]
+key = "candy"
+file = "candy.png"
+src = "Fluent Emoji: Candy"
+category = "food"
+ru = ["конфета"]
+kz = ["кәмпит"]
+en = ["candy", "sweet"]
+
+[[image]]
+key = "pizza"
+file = "pizza.png"
+src = "Fluent Emoji: Pizza"
+category = "food"
+ru = ["пицца"]
+kz = ["пицца"]
+en = ["pizza"]
+
+[[image]]
+key = "hamburger"
+file = "hamburger.png"
+src = "Fluent Emoji: Hamburger"
+category = "food"
+ru = ["гамбургер", "бургер"]
+kz = ["гамбургер"]
+en = ["hamburger", "burger"]
+
+[[image]]
+key = "soup"
+file = "soup.png"
+src = "Fluent Emoji: Steaming bowl"
+category = "food"
+ru = ["суп", "горячее"]
+kz = ["сорпа"]
+en = ["soup", "bowl"]
+
+[[image]]
+key = "rice"
+file = "rice.png"
+src = "Fluent Emoji: Cooked rice"
+category = "food"
+ru = ["рис"]
+kz = ["күріш"]
+en = ["rice"]
+
+[[image]]
+key = "honey"
+file = "honey.png"
+src = "Fluent Emoji: Honey pot"
+category = "food"
+ru = ["мёд"]
+kz = ["бал"]
+en = ["honey"]
+
+[[image]]
+key = "tea"
+file = "tea.png"
+src = "Fluent Emoji: Hot beverage"
+category = "food"
+ru = ["чай", "напиток"]
+kz = ["шай"]
+en = ["tea", "hot", "drink"]
+
+[[image]]
+key = "tree"
+file = "tree.png"
+src = "Fluent Emoji: Deciduous tree"
+category = "nature"
+ru = ["дерево"]
+kz = ["ағаш"]
+en = ["tree"]
+
+[[image]]
+key = "fir_tree"
+file = "fir_tree.png"
+src = "Fluent Emoji: Evergreen tree"
+category = "nature"
+ru = ["ель", "сосна", "ёлка"]
+kz = ["шырша", "қарағай"]
+en = ["fir", "pine", "evergreen"]
+
+[[image]]
+key = "palm_tree"
+file = "palm_tree.png"
+src = "Fluent Emoji: Palm tree"
+category = "nature"
+ru = ["пальма"]
+kz = ["пальма"]
+en = ["palm", "tree"]
+
+[[image]]
+key = "tulip"
+file = "tulip.png"
+src = "Fluent Emoji: Tulip"
+category = "nature"
+ru = ["цветок", "тюльпан"]
+kz = ["қызғалдақ", "гүл"]
+en = ["tulip", "flower"]
+
+[[image]]
+key = "sunflower"
+file = "sunflower.png"
+src = "Fluent Emoji: Sunflower"
+category = "nature"
+ru = ["подсолнух"]
+kz = ["күнбағыс"]
+en = ["sunflower"]
+
+[[image]]
+key = "rose"
+file = "rose.png"
+src = "Fluent Emoji: Rose"
+category = "nature"
+ru = ["роза"]
+kz = ["раушан"]
+en = ["rose"]
+
+[[image]]
+key = "leaf"
+file = "leaf.png"
+src = "Fluent Emoji: Maple leaf"
+category = "nature"
+ru = ["лист", "листок"]
+kz = ["жапырақ"]
+en = ["leaf"]
+
+[[image]]
+key = "fallen_leaf"
+file = "fallen_leaf.png"
+src = "Fluent Emoji: Fallen leaf"
+category = "nature"
+ru = ["осень", "опавший", "лист"]
+kz = ["күз", "жапырақ"]
+en = ["autumn", "fallen", "leaf"]
+
+[[image]]
+key = "seedling"
+file = "seedling.png"
+src = "Fluent Emoji: Seedling"
+category = "nature"
+ru = ["росток", "растение"]
+kz = ["көшет", "өсімдік"]
+en = ["seedling", "plant", "sprout"]
+
+[[image]]
+key = "mushroom"
+file = "mushroom.png"
+src = "Fluent Emoji: Mushroom"
+category = "nature"
+ru = ["гриб"]
+kz = ["саңырауқұлақ"]
+en = ["mushroom"]
+
+[[image]]
+key = "mountain"
+file = "mountain.png"
+src = "Fluent Emoji: Mountain"
+category = "nature"
+ru = ["гора"]
+kz = ["тау"]
+en = ["mountain"]
+
+[[image]]
+key = "snow_mountain"
+file = "snow_mountain.png"
+src = "Fluent Emoji: Snow-capped mountain"
+category = "nature"
+ru = ["горы", "снег", "вершина"]
+kz = ["қарлы", "тау"]
+en = ["snowy", "mountain", "peak"]
+
+[[image]]
+key = "volcano"
+file = "volcano.png"
+src = "Fluent Emoji: Volcano"
+category = "nature"
+ru = ["вулкан"]
+kz = ["жанартау"]
+en = ["volcano"]
+
+[[image]]
+key = "desert"
+file = "desert.png"
+src = "Fluent Emoji: Desert"
+category = "nature"
+ru = ["пустыня"]
+kz = ["шөл"]
+en = ["desert"]
+
+[[image]]
+key = "island"
+file = "island.png"
+src = "Fluent Emoji: Desert island"
+category = "nature"
+ru = ["остров"]
+kz = ["арал"]
+en = ["island"]
+
+[[image]]
+key = "wave"
+file = "wave.png"
+src = "Fluent Emoji: Water wave"
+category = "nature"
+ru = ["волна", "море"]
+kz = ["толқын", "теңіз"]
+en = ["wave", "sea"]
+
+[[image]]
+key = "fire"
+file = "fire.png"
+src = "Fluent Emoji: Fire"
+category = "nature"
+ru = ["огонь", "костёр"]
+kz = ["от", "алау"]
+en = ["fire"]
+
+[[image]]
+key = "drop"
+file = "drop.png"
+src = "Fluent Emoji: Droplet"
+category = "nature"
+ru = ["капля", "вода"]
+kz = ["тамшы", "су"]
+en = ["drop", "water"]
+
+[[image]]
+key = "clover"
+file = "clover.png"
+src = "Fluent Emoji: Four leaf clover"
+category = "nature"
+ru = ["клевер"]
+kz = ["беде"]
+en = ["clover"]
+
+[[image]]
+key = "cactus"
+file = "cactus.png"
+src = "Fluent Emoji: Cactus"
+category = "nature"
+ru = ["кактус"]
+kz = ["кактус"]
+en = ["cactus"]
+
+[[image]]
+key = "potted_plant"
+file = "potted_plant.png"
+src = "Fluent Emoji: Potted plant"
+category = "nature"
+ru = ["комнатное", "растение", "горшок"]
+kz = ["бөлме", "өсімдігі"]
+en = ["houseplant", "pot"]
+
+[[image]]
+key = "sun"
+file = "sun.png"
+src = "Fluent Emoji: Sun"
+category = "weather"
+ru = ["солнце", "солнечно"]
+kz = ["күн"]
+en = ["sun", "sunny"]
+
+[[image]]
+key = "cloud"
+file = "cloud.png"
+src = "Fluent Emoji: Cloud"
+category = "weather"
+ru = ["облако", "облачно"]
+kz = ["бұлт"]
+en = ["cloud", "cloudy"]
+
+[[image]]
+key = "sun_cloud"
+file = "sun_cloud.png"
+src = "Fluent Emoji: Sun behind cloud"
+category = "weather"
+ru = ["солнце", "за", "облаком", "переменная", "облачность"]
+kz = ["күн", "бұлт"]
+en = ["partly", "cloudy"]
+
+[[image]]
+key = "rain"
+file = "rain.png"
+src = "Fluent Emoji: Cloud with rain"
+category = "weather"
+ru = ["дождь"]
+kz = ["жаңбыр"]
+en = ["rain"]
+
+[[image]]
+key = "thunderstorm"
+file = "thunderstorm.png"
+src = "Fluent Emoji: Cloud with lightning and rain"
+category = "weather"
+ru = ["гроза", "молния"]
+kz = ["найзағай"]
+en = ["thunderstorm", "lightning"]
+
+[[image]]
+key = "snow"
+file = "snow.png"
+src = "Fluent Emoji: Cloud with snow"
+category = "weather"
+ru = ["снег", "снегопад"]
+kz = ["қар"]
+en = ["snow"]
+
+[[image]]
+key = "snowflake"
+file = "snowflake.png"
+src = "Fluent Emoji: Snowflake"
+category = "weather"
+ru = ["снежинка", "зима"]
+kz = ["қар", "ұшқыны"]
+en = ["snowflake", "winter"]
+
+[[image]]
+key = "snowman"
+file = "snowman.png"
+src = "Fluent Emoji: Snowman"
+category = "weather"
+ru = ["снеговик"]
+kz = ["қар", "адам"]
+en = ["snowman"]
+
+[[image]]
+key = "wind"
+file = "wind.png"
+src = "Fluent Emoji: Wind face"
+category = "weather"
+ru = ["ветер"]
+kz = ["жел"]
+en = ["wind"]
+
+[[image]]
+key = "fog"
+file = "fog.png"
+src = "Fluent Emoji: Fog"
+category = "weather"
+ru = ["туман"]
+kz = ["тұман"]
+en = ["fog"]
+
+[[image]]
+key = "tornado"
+file = "tornado.png"
+src = "Fluent Emoji: Tornado"
+category = "weather"
+ru = ["смерч", "торнадо", "ураган"]
+kz = ["құйын", "дауыл"]
+en = ["tornado", "storm"]
+
+[[image]]
+key = "rainbow"
+file = "rainbow.png"
+src = "Fluent Emoji: Rainbow"
+category = "weather"
+ru = ["радуга"]
+kz = ["кемпірқосақ"]
+en = ["rainbow"]
+
+[[image]]
+key = "umbrella"
+file = "umbrella.png"
+src = "Fluent Emoji: Umbrella with rain drops"
+category = "weather"
+ru = ["зонт", "зонтик"]
+kz = ["қолшатыр"]
+en = ["umbrella"]
+
+[[image]]
+key = "thermometer"
+file = "thermometer.png"
+src = "Fluent Emoji: Thermometer"
+category = "weather"
+ru = ["термометр", "температура"]
+kz = ["термометр", "температура"]
+en = ["thermometer", "temperature"]
+
+[[image]]
+key = "crescent_moon"
+file = "crescent_moon.png"
+src = "Fluent Emoji: Crescent moon"
+category = "weather"
+ru = ["месяц", "луна", "ночь"]
+kz = ["ай", "түн"]
+en = ["moon", "night"]
+
+[[image]]
+key = "school"
+file = "school.png"
+src = "Fluent Emoji: School"
+category = "school"
+ru = ["школа"]
+kz = ["мектеп"]
+en = ["school"]
+
+[[image]]
+key = "book"
+file = "book.png"
+src = "Fluent Emoji: Closed book"
+category = "school"
+ru = ["книга", "учебник"]
+kz = ["кітап", "оқулық"]
+en = ["book", "textbook"]
+
+[[image]]
+key = "open_book"
+file = "open_book.png"
+src = "Fluent Emoji: Open book"
+category = "school"
+ru = ["открытая", "книга", "чтение"]
+kz = ["ашық", "кітап", "оқу"]
+en = ["open", "book", "reading"]
+
+[[image]]
+key = "books"
+file = "books.png"
+src = "Fluent Emoji: Books"
+category = "school"
+ru = ["книги", "библиотека"]
+kz = ["кітаптар", "кітапхана"]
+en = ["books", "library"]
+
+[[image]]
+key = "pencil"
+file = "pencil.png"
+src = "Fluent Emoji: Pencil"
+category = "school"
+ru = ["карандаш"]
+kz = ["қарындаш"]
+en = ["pencil"]
+
+[[image]]
+key = "pen"
+file = "pen.png"
+src = "Fluent Emoji: Pen"
+category = "school"
+ru = ["ручка", "писать"]
+kz = ["қалам", "жазу"]
+en = ["pen", "writing"]
+
+[[image]]
+key = "notebook"
+file = "notebook.png"
+src = "Fluent Emoji: Notebook"
+category = "school"
+ru = ["тетрадь"]
+kz = ["дәптер"]
+en = ["notebook"]
+
+[[image]]
+key = "backpack"
+file = "backpack.png"
+src = "Fluent Emoji: Backpack"
+category = "school"
+ru = ["рюкзак", "портфель"]
+kz = ["рюкзак", "сөмке"]
+en = ["backpack", "school", "bag"]
+
+[[image]]
+key = "scissors"
+file = "scissors.png"
+src = "Fluent Emoji: Scissors"
+category = "school"
+ru = ["ножницы"]
+kz = ["қайшы"]
+en = ["scissors"]
+
+[[image]]
+key = "ruler"
+file = "ruler.png"
+src = "Fluent Emoji: Straight ruler"
+category = "school"
+ru = ["линейка"]
+kz = ["сызғыш"]
+en = ["ruler"]
+
+[[image]]
+key = "triangle_ruler"
+file = "triangle_ruler.png"
+src = "Fluent Emoji: Triangular ruler"
+category = "school"
+ru = ["угольник"]
+kz = ["үшбұрышты", "сызғыш"]
+en = ["triangle", "ruler", "set", "square"]
+
+[[image]]
+key = "paperclip"
+file = "paperclip.png"
+src = "Fluent Emoji: Paperclip"
+category = "school"
+ru = ["скрепка"]
+kz = ["қыстырғыш"]
+en = ["paperclip"]
+
+[[image]]
+key = "calendar"
+file = "calendar.png"
+src = "Fluent Emoji: Calendar"
+category = "school"
+ru = ["календарь", "дата"]
+kz = ["күнтізбе"]
+en = ["calendar", "date"]
+
+[[image]]
+key = "alarm_clock"
+file = "alarm_clock.png"
+src = "Fluent Emoji: Alarm clock"
+category = "school"
+ru = ["часы", "будильник", "время"]
+kz = ["сағат", "уақыт"]
+en = ["clock", "alarm", "time"]
+
+[[image]]
+key = "hourglass"
+file = "hourglass.png"
+src = "Fluent Emoji: Hourglass not done"
+category = "school"
+ru = ["песочные", "часы", "время"]
+kz = ["құм", "сағат"]
+en = ["hourglass", "timer"]
+
+[[image]]
+key = "globe"
+file = "globe.png"
+src = "Fluent Emoji: Globe showing europe-africa"
+category = "school"
+ru = ["глобус", "земля"]
+kz = ["глобус", "жер"]
+en = ["globe", "earth"]
+
+[[image]]
+key = "world_map"
+file = "world_map.png"
+src = "Fluent Emoji: World map"
+category = "school"
+ru = ["карта", "мира"]
+kz = ["әлем", "картасы"]
+en = ["world", "map"]
+
+[[image]]
+key = "magnifier"
+file = "magnifier.png"
+src = "Fluent Emoji: Magnifying glass tilted left"
+category = "school"
+ru = ["лупа", "поиск", "исследование"]
+kz = ["лупа", "іздеу"]
+en = ["magnifying", "glass", "search"]
+
+[[image]]
+key = "microscope"
+file = "microscope.png"
+src = "Fluent Emoji: Microscope"
+category = "school"
+ru = ["микроскоп"]
+kz = ["микроскоп"]
+en = ["microscope"]
+
+[[image]]
+key = "test_tube"
+file = "test_tube.png"
+src = "Fluent Emoji: Test tube"
+category = "school"
+ru = ["пробирка", "опыт", "эксперимент"]
+kz = ["сынауық", "тәжірибе"]
+en = ["test", "tube", "experiment"]
+
+[[image]]
+key = "light_bulb"
+file = "light_bulb.png"
+src = "Fluent Emoji: Light bulb"
+category = "school"
+ru = ["лампочка", "идея"]
+kz = ["шам", "идея"]
+en = ["light", "bulb", "idea"]
+
+[[image]]
+key = "bell"
+file = "bell.png"
+src = "Fluent Emoji: Bell"
+category = "school"
+ru = ["звонок", "колокольчик"]
+kz = ["қоңырау"]
+en = ["bell"]
+
+[[image]]
+key = "abacus"
+file = "abacus.png"
+src = "Fluent Emoji: Abacus"
+category = "school"
+ru = ["счёты", "счёт"]
+kz = ["санауыш"]
+en = ["abacus", "counting"]
+
+[[image]]
+key = "graduation_cap"
+file = "graduation_cap.png"
+src = "Fluent Emoji: Graduation cap"
+category = "school"
+ru = ["выпускник", "шапка", "учёба"]
+kz = ["бітіруші", "оқу"]
+en = ["graduation", "cap"]
+
+[[image]]
+key = "memo"
+file = "memo.png"
+src = "Fluent Emoji: Memo"
+category = "school"
+ru = ["записка", "заметка", "запись"]
+kz = ["жазба"]
+en = ["memo", "note"]
+
+[[image]]
+key = "paintbrush"
+file = "paintbrush.png"
+src = "Fluent Emoji: Paintbrush"
+category = "school"
+ru = ["кисть", "рисовать"]
+kz = ["қылқалам", "сурет"]
+en = ["paintbrush", "painting"]
+
+[[image]]
+key = "palette"
+file = "palette.png"
+src = "Fluent Emoji: Artist palette"
+category = "school"
+ru = ["палитра", "краски", "рисование"]
+kz = ["бояу", "палитра"]
+en = ["palette", "paints", "art"]
+
+[[image]]
+key = "crayon"
+file = "crayon.png"
+src = "Fluent Emoji: Crayon"
+category = "school"
+ru = ["мелок", "цветной", "карандаш"]
+kz = ["түрлі-түсті", "қарындаш"]
+en = ["crayon"]
+
+[[image]]
+key = "puzzle"
+file = "puzzle.png"
+src = "Fluent Emoji: Puzzle piece"
+category = "school"
+ru = ["пазл", "головоломка"]
+kz = ["жұмбақ", "пазл"]
+en = ["puzzle"]
+
+[[image]]
+key = "trophy"
+file = "trophy.png"
+src = "Fluent Emoji: Trophy"
+category = "school"
+ru = ["кубок", "победа"]
+kz = ["кубок", "жеңіс"]
+en = ["trophy", "winner"]
+
+[[image]]
+key = "gold_medal"
+file = "gold_medal.png"
+src = "Fluent Emoji: 1st place medal"
+category = "school"
+ru = ["медаль", "первое", "место"]
+kz = ["алтын", "медаль"]
+en = ["gold", "medal", "first", "place"]
+
+[[image]]
+key = "star"
+file = "star.png"
+src = "Fluent Emoji: Star"
+category = "school"
+ru = ["звезда", "звёздочка"]
+kz = ["жұлдыз"]
+en = ["star"]
+
+[[image]]
+key = "check"
+file = "check.png"
+src = "Fluent Emoji: Check mark button"
+category = "school"
+ru = ["галочка", "верно", "правильно"]
+kz = ["дұрыс", "белгі"]
+en = ["check", "correct"]
+
+[[image]]
+key = "cross"
+file = "cross.png"
+src = "Fluent Emoji: Cross mark"
+category = "school"
+ru = ["крестик", "неверно", "ошибка"]
+kz = ["қате"]
+en = ["cross", "wrong", "mistake"]
+
+[[image]]
+key = "question"
+file = "question.png"
+src = "Fluent Emoji: Red question mark"
+category = "school"
+ru = ["вопрос"]
+kz = ["сұрақ"]
+en = ["question"]
+
+[[image]]
+key = "exclamation"
+file = "exclamation.png"
+src = "Fluent Emoji: Red exclamation mark"
+category = "school"
+ru = ["внимание", "восклицание"]
+kz = ["назар", "леп", "белгісі"]
+en = ["attention", "exclamation"]
+
+[[image]]
+key = "speech_bubble"
+file = "speech_bubble.png"
+src = "Fluent Emoji: Speech balloon"
+category = "school"
+ru = ["речь", "говорить", "диалог"]
+kz = ["сөйлеу", "диалог"]
+en = ["speech", "talk", "dialog"]
+
+[[image]]
+key = "thought_bubble"
+file = "thought_bubble.png"
+src = "Fluent Emoji: Thought balloon"
+category = "school"
+ru = ["мысль", "думать"]
+kz = ["ой", "ойлау"]
+en = ["thought", "think"]
+
+[[image]]
+key = "clipboard"
+file = "clipboard.png"
+src = "Fluent Emoji: Clipboard"
+category = "school"
+ru = ["планшет", "список", "задание"]
+kz = ["тізім", "тапсырма"]
+en = ["clipboard", "list", "task"]
+
+[[image]]
+key = "glasses"
+file = "glasses.png"
+src = "Fluent Emoji: Glasses"
+category = "school"
+ru = ["очки"]
+kz = ["көзілдірік"]
+en = ["glasses"]
+
+[[image]]
+key = "laptop"
+file = "laptop.png"
+src = "Fluent Emoji: Laptop"
+category = "school"
+ru = ["ноутбук", "компьютер"]
+kz = ["ноутбук", "компьютер"]
+en = ["laptop", "computer"]
+
+[[image]]
+key = "pushpin"
+file = "pushpin.png"
+src = "Fluent Emoji: Pushpin"
+category = "school"
+ru = ["кнопка", "булавка", "закрепить"]
+kz = ["түйреуіш"]
+en = ["pushpin", "pin"]
+
+[[image]]
+key = "target"
+file = "target.png"
+src = "Fluent Emoji: Bullseye"
+category = "school"
+ru = ["цель", "мишень"]
+kz = ["мақсат", "нысана"]
+en = ["target", "goal", "bullseye"]
+
+[[image]]
+key = "digit_0"
+file = "digit_0.png"
+src = "Fluent Emoji: Keycap 0"
+category = "numbers"
+ru = ["ноль", "0"]
+kz = ["нөл", "0"]
+en = ["zero", "0"]
+
+[[image]]
+key = "digit_1"
+file = "digit_1.png"
+src = "Fluent Emoji: Keycap 1"
+category = "numbers"
+ru = ["один", "1", "единица"]
+kz = ["бір", "1"]
+en = ["one", "1"]
+
+[[image]]
+key = "digit_2"
+file = "digit_2.png"
+src = "Fluent Emoji: Keycap 2"
+category = "numbers"
+ru = ["два", "2"]
+kz = ["екі", "2"]
+en = ["two", "2"]
+
+[[image]]
+key = "digit_3"
+file = "digit_3.png"
+src = "Fluent Emoji: Keycap 3"
+category = "numbers"
+ru = ["три", "3"]
+kz = ["үш", "3"]
+en = ["three", "3"]
+
+[[image]]
+key = "digit_4"
+file = "digit_4.png"
+src = "Fluent Emoji: Keycap 4"
+category = "numbers"
+ru = ["четыре", "4"]
+kz = ["төрт", "4"]
+en = ["four", "4"]
+
+[[image]]
+key = "digit_5"
+file = "digit_5.png"
+src = "Fluent Emoji: Keycap 5"
+category = "numbers"
+ru = ["пять", "5"]
+kz = ["бес", "5"]
+en = ["five", "5"]
+
+[[image]]
+key = "digit_6"
+file = "digit_6.png"
+src = "Fluent Emoji: Keycap 6"
+category = "numbers"
+ru = ["шесть", "6"]
+kz = ["алты", "6"]
+en = ["six", "6"]
+
+[[image]]
+key = "digit_7"
+file = "digit_7.png"
+src = "Fluent Emoji: Keycap 7"
+category = "numbers"
+ru = ["семь", "7"]
+kz = ["жеті", "7"]
+en = ["seven", "7"]
+
+[[image]]
+key = "digit_8"
+file = "digit_8.png"
+src = "Fluent Emoji: Keycap 8"
+category = "numbers"
+ru = ["восемь", "8"]
+kz = ["сегіз", "8"]
+en = ["eight", "8"]
+
+[[image]]
+key = "digit_9"
+file = "digit_9.png"
+src = "Fluent Emoji: Keycap 9"
+category = "numbers"
+ru = ["девять", "9"]
+kz = ["тоғыз", "9"]
+en = ["nine", "9"]
+
+[[image]]
+key = "digit_10"
+file = "digit_10.png"
+src = "Fluent Emoji: Keycap 10"
+category = "numbers"
+ru = ["десять", "10"]
+kz = ["он", "10"]
+en = ["ten", "10"]
+
+[[image]]
+key = "plus"
+file = "plus.png"
+src = "Fluent Emoji: Plus"
+category = "numbers"
+ru = ["плюс", "сложение", "прибавить"]
+kz = ["плюс", "қосу"]
+en = ["plus", "add"]
+
+[[image]]
+key = "minus"
+file = "minus.png"
+src = "Fluent Emoji: Minus"
+category = "numbers"
+ru = ["минус", "вычитание", "отнять"]
+kz = ["минус", "алу"]
+en = ["minus", "subtract"]
+
+[[image]]
+key = "multiply"
+file = "multiply.png"
+src = "Fluent Emoji: Multiply"
+category = "numbers"
+ru = ["умножение", "умножить"]
+kz = ["көбейту"]
+en = ["multiply", "times"]
+
+[[image]]
+key = "divide"
+file = "divide.png"
+src = "Fluent Emoji: Divide"
+category = "numbers"
+ru = ["деление", "разделить"]
+kz = ["бөлу"]
+en = ["divide"]
+
+[[image]]
+key = "equals"
+file = "equals.png"
+src = "Fluent Emoji: Heavy equals sign"
+category = "numbers"
+ru = ["равно", "равенство"]
+kz = ["тең", "теңдік"]
+en = ["equals"]
+
+[[image]]
+key = "red_circle"
+file = "red_circle.png"
+src = "Fluent Emoji: Red circle"
+category = "numbers"
+ru = ["круг", "красный"]
+kz = ["дөңгелек", "қызыл"]
+en = ["circle", "red"]
+
+[[image]]
+key = "blue_circle"
+file = "blue_circle.png"
+src = "Fluent Emoji: Blue circle"
+category = "numbers"
+ru = ["круг", "синий"]
+kz = ["дөңгелек", "көк"]
+en = ["circle", "blue"]
+
+[[image]]
+key = "green_circle"
+file = "green_circle.png"
+src = "Fluent Emoji: Green circle"
+category = "numbers"
+ru = ["круг", "зелёный"]
+kz = ["дөңгелек", "жасыл"]
+en = ["circle", "green"]
+
+[[image]]
+key = "yellow_circle"
+file = "yellow_circle.png"
+src = "Fluent Emoji: Yellow circle"
+category = "numbers"
+ru = ["круг", "жёлтый"]
+kz = ["дөңгелек", "сары"]
+en = ["circle", "yellow"]
+
+[[image]]
+key = "orange_circle"
+file = "orange_circle.png"
+src = "Fluent Emoji: Orange circle"
+category = "numbers"
+ru = ["круг", "оранжевый"]
+kz = ["дөңгелек", "қызғылт", "сары"]
+en = ["circle", "orange"]
+
+[[image]]
+key = "purple_circle"
+file = "purple_circle.png"
+src = "Fluent Emoji: Purple circle"
+category = "numbers"
+ru = ["круг", "фиолетовый"]
+kz = ["дөңгелек", "күлгін"]
+en = ["circle", "purple"]
+
+[[image]]
+key = "red_square"
+file = "red_square.png"
+src = "Fluent Emoji: Red square"
+category = "numbers"
+ru = ["квадрат", "красный"]
+kz = ["шаршы", "қызыл"]
+en = ["square", "red"]
+
+[[image]]
+key = "blue_square"
+file = "blue_square.png"
+src = "Fluent Emoji: Blue square"
+category = "numbers"
+ru = ["квадрат", "синий"]
+kz = ["шаршы", "көк"]
+en = ["square", "blue"]
+
+[[image]]
+key = "green_square"
+file = "green_square.png"
+src = "Fluent Emoji: Green square"
+category = "numbers"
+ru = ["квадрат", "зелёный"]
+kz = ["шаршы", "жасыл"]
+en = ["square", "green"]
+
+[[image]]
+key = "yellow_square"
+file = "yellow_square.png"
+src = "Fluent Emoji: Yellow square"
+category = "numbers"
+ru = ["квадрат", "жёлтый"]
+kz = ["шаршы", "сары"]
+en = ["square", "yellow"]
+
+[[image]]
+key = "triangle"
+file = "triangle.png"
+src = "Fluent Emoji: Red triangle"
+category = "numbers"
+ru = ["треугольник"]
+kz = ["үшбұрыш"]
+en = ["triangle"]
+
+[[image]]
+key = "diamond"
+file = "diamond.png"
+src = "Fluent Emoji: Large blue diamond"
+category = "numbers"
+ru = ["ромб"]
+kz = ["ромб"]
+en = ["diamond", "rhombus"]
+
+[[image]]
+key = "heart"
+file = "heart.png"
+src = "Fluent Emoji: Red heart"
+category = "numbers"
+ru = ["сердце", "любовь"]
+kz = ["жүрек", "сүйіспеншілік"]
+en = ["heart", "love"]
+
+[[image]]
+key = "hundred"
+file = "hundred.png"
+src = "Fluent Emoji: Hundred points"
+category = "numbers"
+ru = ["сто", "100", "отлично"]
+kz = ["жүз", "100", "өте", "жақсы"]
+en = ["hundred", "100", "perfect"]
+
+[[image]]
+key = "dice"
+file = "dice.png"
+src = "Fluent Emoji: Game die"
+category = "numbers"
+ru = ["кубик", "игральный", "кость"]
+kz = ["ойын", "сүйегі"]
+en = ["dice", "die"]
+
+[[image]]
+key = "infinity"
+file = "infinity.png"
+src = "Fluent Emoji: Infinity"
+category = "numbers"
+ru = ["бесконечность"]
+kz = ["шексіздік"]
+en = ["infinity"]
+
+[[image]]
+key = "car"
+file = "car.png"
+src = "Fluent Emoji: Automobile"
+category = "transport"
+ru = ["машина", "автомобиль"]
+kz = ["көлік", "автомобиль"]
+en = ["car", "automobile"]
+
+[[image]]
+key = "bus"
+file = "bus.png"
+src = "Fluent Emoji: Bus"
+category = "transport"
+ru = ["автобус"]
+kz = ["автобус"]
+en = ["bus"]
+
+[[image]]
+key = "train"
+file = "train.png"
+src = "Fluent Emoji: Train"
+category = "transport"
+ru = ["поезд"]
+kz = ["пойыз"]
+en = ["train"]
+
+[[image]]
+key = "tram"
+file = "tram.png"
+src = "Fluent Emoji: Tram"
+category = "transport"
+ru = ["трамвай"]
+kz = ["трамвай"]
+en = ["tram"]
+
+[[image]]
+key = "airplane"
+file = "airplane.png"
+src = "Fluent Emoji: Airplane"
+category = "transport"
+ru = ["самолёт"]
+kz = ["ұшақ"]
+en = ["airplane", "plane"]
+
+[[image]]
+key = "helicopter"
+file = "helicopter.png"
+src = "Fluent Emoji: Helicopter"
+category = "transport"
+ru = ["вертолёт"]
+kz = ["тікұшақ"]
+en = ["helicopter"]
+
+[[image]]
+key = "ship"
+file = "ship.png"
+src = "Fluent Emoji: Ship"
+category = "transport"
+ru = ["корабль", "пароход"]
+kz = ["кеме"]
+en = ["ship"]
+
+[[image]]
+key = "sailboat"
+file = "sailboat.png"
+src = "Fluent Emoji: Sailboat"
+category = "transport"
+ru = ["парусник", "лодка"]
+kz = ["желкенді", "қайық"]
+en = ["sailboat", "boat"]
+
+[[image]]
+key = "bicycle"
+file = "bicycle.png"
+src = "Fluent Emoji: Bicycle"
+category = "transport"
+ru = ["велосипед"]
+kz = ["велосипед"]
+en = ["bicycle", "bike"]
+
+[[image]]
+key = "motorcycle"
+file = "motorcycle.png"
+src = "Fluent Emoji: Motorcycle"
+category = "transport"
+ru = ["мотоцикл"]
+kz = ["мотоцикл"]
+en = ["motorcycle"]
+
+[[image]]
+key = "taxi"
+file = "taxi.png"
+src = "Fluent Emoji: Taxi"
+category = "transport"
+ru = ["такси"]
+kz = ["такси"]
+en = ["taxi"]
+
+[[image]]
+key = "police_car"
+file = "police_car.png"
+src = "Fluent Emoji: Police car"
+category = "transport"
+ru = ["полицейская", "машина"]
+kz = ["полиция", "көлігі"]
+en = ["police", "car"]
+
+[[image]]
+key = "fire_engine"
+file = "fire_engine.png"
+src = "Fluent Emoji: Fire engine"
+category = "transport"
+ru = ["пожарная", "машина"]
+kz = ["өрт", "сөндіру", "көлігі"]
+en = ["fire", "engine"]
+
+[[image]]
+key = "ambulance"
+file = "ambulance.png"
+src = "Fluent Emoji: Ambulance"
+category = "transport"
+ru = ["скорая", "помощь"]
+kz = ["жедел", "жәрдем"]
+en = ["ambulance"]
+
+[[image]]
+key = "truck"
+file = "truck.png"
+src = "Fluent Emoji: Delivery truck"
+category = "transport"
+ru = ["грузовик"]
+kz = ["жүк", "көлігі"]
+en = ["truck", "lorry"]
+
+[[image]]
+key = "tractor"
+file = "tractor.png"
+src = "Fluent Emoji: Tractor"
+category = "transport"
+ru = ["трактор"]
+kz = ["трактор"]
+en = ["tractor"]
+
+[[image]]
+key = "scooter"
+file = "scooter.png"
+src = "Fluent Emoji: Kick scooter"
+category = "transport"
+ru = ["самокат"]
+kz = ["самокат"]
+en = ["scooter"]
+
+[[image]]
+key = "traffic_light"
+file = "traffic_light.png"
+src = "Fluent Emoji: Vertical traffic light"
+category = "transport"
+ru = ["светофор"]
+kz = ["бағдаршам"]
+en = ["traffic", "light"]
+
+[[image]]
+key = "stop_sign"
+file = "stop_sign.png"
+src = "Fluent Emoji: Stop sign"
+category = "transport"
+ru = ["знак", "стоп"]
+kz = ["тоқта", "белгісі"]
+en = ["stop", "sign"]
+
+[[image]]
+key = "metro"
+file = "metro.png"
+src = "Fluent Emoji: Metro"
+category = "transport"
+ru = ["метро"]
+kz = ["метро"]
+en = ["metro", "subway"]
+
+[[image]]
+key = "rocket"
+file = "rocket.png"
+src = "Fluent Emoji: Rocket"
+category = "transport"
+ru = ["ракета"]
+kz = ["зымыран"]
+en = ["rocket"]
+
+[[image]]
+key = "teacher"
+file = "teacher.png"
+src = "Fluent Emoji: Teacher"
+category = "professions"
+ru = ["учитель"]
+kz = ["мұғалім"]
+en = ["teacher"]
+
+[[image]]
+key = "doctor"
+file = "doctor.png"
+src = "Fluent Emoji: Health worker"
+category = "professions"
+ru = ["врач", "доктор"]
+kz = ["дәрігер"]
+en = ["doctor", "health", "worker"]
+
+[[image]]
+key = "cook"
+file = "cook.png"
+src = "Fluent Emoji: Cook"
+category = "professions"
+ru = ["повар"]
+kz = ["аспаз"]
+en = ["cook", "chef"]
+
+[[image]]
+key = "farmer"
+file = "farmer.png"
+src = "Fluent Emoji: Farmer"
+category = "professions"
+ru = ["фермер"]
+kz = ["фермер", "диқан"]
+en = ["farmer"]
+
+[[image]]
+key = "firefighter"
+file = "firefighter.png"
+src = "Fluent Emoji: Firefighter"
+category = "professions"
+ru = ["пожарный"]
+kz = ["өрт", "сөндіруші"]
+en = ["firefighter"]
+
+[[image]]
+key = "police_officer"
+file = "police_officer.png"
+src = "Fluent Emoji: Police officer"
+category = "professions"
+ru = ["полицейский"]
+kz = ["полицей"]
+en = ["police", "officer"]
+
+[[image]]
+key = "pilot"
+file = "pilot.png"
+src = "Fluent Emoji: Pilot"
+category = "professions"
+ru = ["лётчик", "пилот"]
+kz = ["ұшқыш"]
+en = ["pilot"]
+
+[[image]]
+key = "astronaut"
+file = "astronaut.png"
+src = "Fluent Emoji: Astronaut"
+category = "professions"
+ru = ["космонавт", "астронавт"]
+kz = ["ғарышкер"]
+en = ["astronaut"]
+
+[[image]]
+key = "scientist"
+file = "scientist.png"
+src = "Fluent Emoji: Scientist"
+category = "professions"
+ru = ["учёный"]
+kz = ["ғалым"]
+en = ["scientist"]
+
+[[image]]
+key = "artist"
+file = "artist.png"
+src = "Fluent Emoji: Artist"
+category = "professions"
+ru = ["художник"]
+kz = ["суретші"]
+en = ["artist", "painter"]
+
+[[image]]
+key = "singer"
+file = "singer.png"
+src = "Fluent Emoji: Singer"
+category = "professions"
+ru = ["певец", "певица"]
+kz = ["әнші"]
+en = ["singer"]
+
+[[image]]
+key = "builder"
+file = "builder.png"
+src = "Fluent Emoji: Construction worker"
+category = "professions"
+ru = ["строитель"]
+kz = ["құрылысшы"]
+en = ["builder", "construction", "worker"]
+
+[[image]]
+key = "mechanic"
+file = "mechanic.png"
+src = "Fluent Emoji: Mechanic"
+category = "professions"
+ru = ["механик", "мастер"]
+kz = ["механик", "шебер"]
+en = ["mechanic"]
+
+[[image]]
+key = "judge"
+file = "judge.png"
+src = "Fluent Emoji: Judge"
+category = "professions"
+ru = ["судья"]
+kz = ["сот"]
+en = ["judge"]
+
+[[image]]
+key = "student"
+file = "student.png"
+src = "Fluent Emoji: Student"
+category = "professions"
+ru = ["ученик", "школьник"]
+kz = ["оқушы"]
+en = ["student", "pupil"]
+
+[[image]]
+key = "office_worker"
+file = "office_worker.png"
+src = "Fluent Emoji: Office worker"
+category = "professions"
+ru = ["служащий", "офис"]
+kz = ["қызметкер"]
+en = ["office", "worker"]
+
+[[image]]
+key = "baby"
+file = "baby.png"
+src = "Fluent Emoji: Baby"
+category = "people"
+ru = ["малыш", "младенец"]
+kz = ["нәресте"]
+en = ["baby"]
+
+[[image]]
+key = "child"
+file = "child.png"
+src = "Fluent Emoji: Child"
+category = "people"
+ru = ["ребёнок"]
+kz = ["бала"]
+en = ["child"]
+
+[[image]]
+key = "boy"
+file = "boy.png"
+src = "Fluent Emoji: Boy"
+category = "people"
+ru = ["мальчик"]
+kz = ["ұл", "бала"]
+en = ["boy"]
+
+[[image]]
+key = "girl"
+file = "girl.png"
+src = "Fluent Emoji: Girl"
+category = "people"
+ru = ["девочка"]
+kz = ["қыз", "бала"]
+en = ["girl"]
+
+[[image]]
+key = "man"
+file = "man.png"
+src = "Fluent Emoji: Man"
+category = "people"
+ru = ["мужчина", "папа"]
+kz = ["ер", "адам", "әке"]
+en = ["man", "father", "dad"]
+
+[[image]]
+key = "woman"
+file = "woman.png"
+src = "Fluent Emoji: Woman"
+category = "people"
+ru = ["женщина", "мама"]
+kz = ["әйел", "адам", "ана"]
+en = ["woman", "mother", "mom"]
+
+[[image]]
+key = "old_man"
+file = "old_man.png"
+src = "Fluent Emoji: Old man"
+category = "people"
+ru = ["дедушка", "старик"]
+kz = ["ата"]
+en = ["grandfather", "old", "man"]
+
+[[image]]
+key = "old_woman"
+file = "old_woman.png"
+src = "Fluent Emoji: Old woman"
+category = "people"
+ru = ["бабушка", "старушка"]
+kz = ["әже"]
+en = ["grandmother", "old", "woman"]
+
+[[image]]
+key = "hugging"
+file = "hugging.png"
+src = "Fluent Emoji: People hugging"
+category = "people"
+ru = ["обнимашки", "дружба", "вместе"]
+kz = ["құшақтасу", "достық"]
+en = ["hug", "friendship", "together"]
+
+[[image]]
+key = "happy"
+file = "happy.png"
+src = "Fluent Emoji: Smiling face with smiling eyes"
+category = "emotions"
+ru = ["радость", "довольный", "улыбка"]
+kz = ["қуаныш", "күлкі"]
+en = ["happy", "smile"]
+
+[[image]]
+key = "grin"
+file = "grin.png"
+src = "Fluent Emoji: Grinning face"
+category = "emotions"
+ru = ["весело", "смех"]
+kz = ["көңілді"]
+en = ["grin", "cheerful"]
+
+[[image]]
+key = "laugh"
+file = "laugh.png"
+src = "Fluent Emoji: Face with tears of joy"
+category = "emotions"
+ru = ["смеётся", "смешно"]
+kz = ["күледі"]
+en = ["laugh", "funny"]
+
+[[image]]
+key = "love_face"
+file = "love_face.png"
+src = "Fluent Emoji: Smiling face with heart-eyes"
+category = "emotions"
+ru = ["нравится", "влюблён"]
+kz = ["ұнайды"]
+en = ["love", "like"]
+
+[[image]]
+key = "cool"
+file = "cool.png"
+src = "Fluent Emoji: Smiling face with sunglasses"
+category = "emotions"
+ru = ["круто", "классно"]
+kz = ["керемет"]
+en = ["cool"]
+
+[[image]]
+key = "thinking"
+file = "thinking.png"
+src = "Fluent Emoji: Thinking face"
+category = "emotions"
+ru = ["думает", "размышляет"]
+kz = ["ойланады"]
+en = ["thinking"]
+
+[[image]]
+key = "sad"
+file = "sad.png"
+src = "Fluent Emoji: Pensive face"
+category = "emotions"
+ru = ["грустно", "печаль"]
+kz = ["қайғы", "мұң"]
+en = ["sad"]
+
+[[image]]
+key = "crying"
+file = "crying.png"
+src = "Fluent Emoji: Loudly crying face"
+category = "emotions"
+ru = ["плачет", "слёзы"]
+kz = ["жылайды"]
+en = ["crying"]
+
+[[image]]
+key = "angry"
+file = "angry.png"
+src = "Fluent Emoji: Angry face"
+category = "emotions"
+ru = ["злой", "сердитый"]
+kz = ["ашулы"]
+en = ["angry"]
+
+[[image]]
+key = "surprised"
+file = "surprised.png"
+src = "Fluent Emoji: Astonished face"
+category = "emotions"
+ru = ["удивление", "удивлён"]
+kz = ["таңдану"]
+en = ["surprised", "astonished"]
+
+[[image]]
+key = "scared"
+file = "scared.png"
+src = "Fluent Emoji: Fearful face"
+category = "emotions"
+ru = ["страх", "испуг"]
+kz = ["қорқыныш"]
+en = ["scared", "fear"]
+
+[[image]]
+key = "sleepy"
+file = "sleepy.png"
+src = "Fluent Emoji: Sleepy face"
+category = "emotions"
+ru = ["сон", "спать", "сонный"]
+kz = ["ұйқы"]
+en = ["sleepy", "sleep"]
+
+[[image]]
+key = "shy"
+file = "shy.png"
+src = "Fluent Emoji: Flushed face"
+category = "emotions"
+ru = ["смущение", "стесняется"]
+kz = ["ұялу"]
+en = ["shy", "embarrassed"]
+
+[[image]]
+key = "wink"
+file = "wink.png"
+src = "Fluent Emoji: Winking face"
+category = "emotions"
+ru = ["подмигивает"]
+kz = ["көзін", "қысады"]
+en = ["wink"]
+
+[[image]]
+key = "party_face"
+file = "party_face.png"
+src = "Fluent Emoji: Partying face"
+category = "emotions"
+ru = ["праздник", "веселье"]
+kz = ["мереке"]
+en = ["party", "celebrate"]
+
+[[image]]
+key = "sick"
+file = "sick.png"
+src = "Fluent Emoji: Face with thermometer"
+category = "emotions"
+ru = ["болеет", "болезнь"]
+kz = ["ауру"]
+en = ["sick", "ill"]
+
+[[image]]
+key = "thumbs_up"
+file = "thumbs_up.png"
+src = "Fluent Emoji: Thumbs up"
+category = "emotions"
+ru = ["молодец", "хорошо", "класс"]
+kz = ["жарайсың"]
+en = ["thumbs", "up", "good"]
+
+[[image]]
+key = "thumbs_down"
+file = "thumbs_down.png"
+src = "Fluent Emoji: Thumbs down"
+category = "emotions"
+ru = ["плохо", "не", "нравится"]
+kz = ["нашар"]
+en = ["thumbs", "down", "bad"]
+
+[[image]]
+key = "clap"
+file = "clap.png"
+src = "Fluent Emoji: Clapping hands"
+category = "emotions"
+ru = ["аплодисменты", "хлопаем"]
+kz = ["қол", "соғу"]
+en = ["clap", "applause"]
+
+[[image]]
+key = "wave_hand"
+file = "wave_hand.png"
+src = "Fluent Emoji: Waving hand"
+category = "emotions"
+ru = ["привет", "здравствуйте", "пока"]
+kz = ["сәлем", "қош", "бол"]
+en = ["wave", "hello", "goodbye"]
+
+[[image]]
+key = "raised_hand"
+file = "raised_hand.png"
+src = "Fluent Emoji: Raised hand"
+category = "emotions"
+ru = ["поднять", "руку", "ответить"]
+kz = ["қол", "көтеру"]
+en = ["raised", "hand", "answer"]
+
+[[image]]
+key = "soccer"
+file = "soccer.png"
+src = "Fluent Emoji: Soccer ball"
+category = "sport"
+ru = ["футбол", "мяч"]
+kz = ["футбол", "доп"]
+en = ["soccer", "football", "ball"]
+
+[[image]]
+key = "basketball"
+file = "basketball.png"
+src = "Fluent Emoji: Basketball"
+category = "sport"
+ru = ["баскетбол"]
+kz = ["баскетбол"]
+en = ["basketball"]
+
+[[image]]
+key = "volleyball"
+file = "volleyball.png"
+src = "Fluent Emoji: Volleyball"
+category = "sport"
+ru = ["волейбол"]
+kz = ["волейбол"]
+en = ["volleyball"]
+
+[[image]]
+key = "tennis"
+file = "tennis.png"
+src = "Fluent Emoji: Tennis"
+category = "sport"
+ru = ["теннис"]
+kz = ["теннис"]
+en = ["tennis"]
+
+[[image]]
+key = "baseball"
+file = "baseball.png"
+src = "Fluent Emoji: Baseball"
+category = "sport"
+ru = ["бейсбол"]
+kz = ["бейсбол"]
+en = ["baseball"]
+
+[[image]]
+key = "ping_pong"
+file = "ping_pong.png"
+src = "Fluent Emoji: Ping pong"
+category = "sport"
+ru = ["настольный", "теннис"]
+kz = ["үстел", "теннисі"]
+en = ["ping", "pong", "table", "tennis"]
+
+[[image]]
+key = "badminton"
+file = "badminton.png"
+src = "Fluent Emoji: Badminton"
+category = "sport"
+ru = ["бадминтон"]
+kz = ["бадминтон"]
+en = ["badminton"]
+
+[[image]]
+key = "bowling"
+file = "bowling.png"
+src = "Fluent Emoji: Bowling"
+category = "sport"
+ru = ["боулинг", "кегли"]
+kz = ["боулинг"]
+en = ["bowling"]
+
+[[image]]
+key = "ice_skate"
+file = "ice_skate.png"
+src = "Fluent Emoji: Ice skate"
+category = "sport"
+ru = ["коньки", "каток"]
+kz = ["коньки", "мұз", "айдыны"]
+en = ["ice", "skate"]
+
+[[image]]
+key = "skis"
+file = "skis.png"
+src = "Fluent Emoji: Skis"
+category = "sport"
+ru = ["лыжи"]
+kz = ["шаңғы"]
+en = ["skis", "ski"]
+
+[[image]]
+key = "swimming"
+file = "swimming.png"
+src = "Fluent Emoji: Person swimming"
+category = "sport"
+ru = ["плавание", "плыть"]
+kz = ["жүзу"]
+en = ["swimming", "swim"]
+
+[[image]]
+key = "running"
+file = "running.png"
+src = "Fluent Emoji: Person running"
+category = "sport"
+ru = ["бег", "бежать"]
+kz = ["жүгіру"]
+en = ["running", "run"]
+
+[[image]]
+key = "biking"
+file = "biking.png"
+src = "Fluent Emoji: Person biking"
+category = "sport"
+ru = ["велоспорт", "ехать", "на", "велосипеде"]
+kz = ["велосипед", "тебу"]
+en = ["cycling", "biking"]
+
+[[image]]
+key = "sports_medal"
+file = "sports_medal.png"
+src = "Fluent Emoji: Sports medal"
+category = "sport"
+ru = ["медаль", "спорт", "награда"]
+kz = ["медаль", "марапат"]
+en = ["medal", "award"]
+
+[[image]]
+key = "boxing_glove"
+file = "boxing_glove.png"
+src = "Fluent Emoji: Boxing glove"
+category = "sport"
+ru = ["бокс", "перчатка"]
+kz = ["бокс", "қолғап"]
+en = ["boxing", "glove"]
+
+[[image]]
+key = "kite"
+file = "kite.png"
+src = "Fluent Emoji: Kite"
+category = "sport"
+ru = ["воздушный", "змей"]
+kz = ["батпырауық", "ұшпа"]
+en = ["kite"]
+
+[[image]]
+key = "yo_yo"
+file = "yo_yo.png"
+src = "Fluent Emoji: Yo-yo"
+category = "sport"
+ru = ["йо-йо", "игрушка"]
+kz = ["ойыншық"]
+en = ["yo-yo", "toy"]
+
+[[image]]
+key = "goal"
+file = "goal.png"
+src = "Fluent Emoji: Goal net"
+category = "sport"
+ru = ["ворота", "гол"]
+kz = ["қақпа", "гол"]
+en = ["goal", "net"]
+
+[[image]]
+key = "flag"
+file = "flag.png"
+src = "Fluent Emoji: Chequered flag"
+category = "sport"
+ru = ["финиш", "флаг"]
+kz = ["мәре", "жалау"]
+en = ["finish", "flag"]
+
+[[image]]
+key = "music_note"
+file = "music_note.png"
+src = "Fluent Emoji: Musical note"
+category = "music"
+ru = ["нота", "музыка"]
+kz = ["ноты", "музыка"]
+en = ["musical", "note", "music"]
+
+[[image]]
+key = "music_notes"
+file = "music_notes.png"
+src = "Fluent Emoji: Musical notes"
+category = "music"
+ru = ["ноты", "мелодия", "песня"]
+kz = ["әуен", "ән"]
+en = ["notes", "melody", "song"]
+
+[[image]]
+key = "guitar"
+file = "guitar.png"
+src = "Fluent Emoji: Guitar"
+category = "music"
+ru = ["гитара"]
+kz = ["гитара"]
+en = ["guitar"]
+
+[[image]]
+key = "violin"
+file = "violin.png"
+src = "Fluent Emoji: Violin"
+category = "music"
+ru = ["скрипка"]
+kz = ["скрипка"]
+en = ["violin"]
+
+[[image]]
+key = "drum"
+file = "drum.png"
+src = "Fluent Emoji: Drum"
+category = "music"
+ru = ["барабан"]
+kz = ["барабан"]
+en = ["drum"]
+
+[[image]]
+key = "trumpet"
+file = "trumpet.png"
+src = "Fluent Emoji: Trumpet"
+category = "music"
+ru = ["труба"]
+kz = ["керней", "сырнай"]
+en = ["trumpet"]
+
+[[image]]
+key = "piano"
+file = "piano.png"
+src = "Fluent Emoji: Musical keyboard"
+category = "music"
+ru = ["пианино", "клавиши"]
+kz = ["пианино"]
+en = ["piano", "keyboard"]
+
+[[image]]
+key = "flute"
+file = "flute.png"
+src = "Fluent Emoji: Flute"
+category = "music"
+ru = ["флейта"]
+kz = ["сыбызғы"]
+en = ["flute"]
+
+[[image]]
+key = "microphone"
+file = "microphone.png"
+src = "Fluent Emoji: Microphone"
+category = "music"
+ru = ["микрофон", "петь"]
+kz = ["микрофон", "ән", "айту"]
+en = ["microphone", "sing"]
+
+[[image]]
+key = "headphones"
+file = "headphones.png"
+src = "Fluent Emoji: Headphone"
+category = "music"
+ru = ["наушники", "слушать"]
+kz = ["құлаққап", "тыңдау"]
+en = ["headphones", "listen"]
+
+[[image]]
+key = "saxophone"
+file = "saxophone.png"
+src = "Fluent Emoji: Saxophone"
+category = "music"
+ru = ["саксофон"]
+kz = ["саксофон"]
+en = ["saxophone"]
+
+[[image]]
+key = "accordion"
+file = "accordion.png"
+src = "Fluent Emoji: Accordion"
+category = "music"
+ru = ["аккордеон", "гармошка"]
+kz = ["аккордеон"]
+en = ["accordion"]
+
+[[image]]
+key = "maracas"
+file = "maracas.png"
+src = "Fluent Emoji: Maracas"
+category = "music"
+ru = ["маракасы", "погремушка"]
+kz = ["маракас", "сылдырмақ"]
+en = ["maracas", "rattle"]
+
+[[image]]
+key = "earth"
+file = "earth.png"
+src = "Fluent Emoji: Globe showing asia-australia"
+category = "space"
+ru = ["земля", "планета"]
+kz = ["жер", "планета"]
+en = ["earth", "planet"]
+
+[[image]]
+key = "full_moon"
+file = "full_moon.png"
+src = "Fluent Emoji: Full moon face"
+category = "space"
+ru = ["луна", "полнолуние"]
+kz = ["толған", "ай"]
+en = ["full", "moon"]
+
+[[image]]
+key = "sparkles"
+file = "sparkles.png"
+src = "Fluent Emoji: Sparkles"
+category = "space"
+ru = ["искры", "волшебство", "блеск"]
+kz = ["жарқыл"]
+en = ["sparkles", "magic"]
+
+[[image]]
+key = "shooting_star"
+file = "shooting_star.png"
+src = "Fluent Emoji: Shooting star"
+category = "space"
+ru = ["падающая", "звезда"]
+kz = ["құйрықты", "жұлдыз"]
+en = ["shooting", "star"]
+
+[[image]]
+key = "comet"
+file = "comet.png"
+src = "Fluent Emoji: Comet"
+category = "space"
+ru = ["комета"]
+kz = ["құйрықты", "жұлдыз"]
+en = ["comet"]
+
+[[image]]
+key = "ringed_planet"
+file = "ringed_planet.png"
+src = "Fluent Emoji: Ringed planet"
+category = "space"
+ru = ["сатурн", "планета"]
+kz = ["сатурн", "планета"]
+en = ["saturn", "planet"]
+
+[[image]]
+key = "ufo"
+file = "ufo.png"
+src = "Fluent Emoji: Flying saucer"
+category = "space"
+ru = ["нло", "тарелка", "инопланетяне"]
+kz = ["ұшатын", "тарелке"]
+en = ["ufo", "flying", "saucer"]
+
+[[image]]
+key = "alien"
+file = "alien.png"
+src = "Fluent Emoji: Alien"
+category = "space"
+ru = ["инопланетянин", "пришелец"]
+kz = ["жерсіз", "тұрғын"]
+en = ["alien"]
+
+[[image]]
+key = "satellite"
+file = "satellite.png"
+src = "Fluent Emoji: Satellite"
+category = "space"
+ru = ["спутник"]
+kz = ["жер", "серігі"]
+en = ["satellite"]
+
+[[image]]
+key = "telescope"
+file = "telescope.png"
+src = "Fluent Emoji: Telescope"
+category = "space"
+ru = ["телескоп"]
+kz = ["телескоп"]
+en = ["telescope"]
+
+[[image]]
+key = "milky_way"
+file = "milky_way.png"
+src = "Fluent Emoji: Milky way"
+category = "space"
+ru = ["галактика", "млечный", "путь"]
+kz = ["галактика"]
+en = ["galaxy", "milky", "way"]
+
+[[image]]
+key = "night_stars"
+file = "night_stars.png"
+src = "Fluent Emoji: Night with stars"
+category = "space"
+ru = ["звёздное", "небо", "ночь"]
+kz = ["жұлдызды", "аспан", "түн"]
+en = ["starry", "night", "sky"]
+
+[[image]]
+key = "sunrise"
+file = "sunrise.png"
+src = "Fluent Emoji: Sunrise"
+category = "space"
+ru = ["рассвет", "утро"]
+kz = ["таң", "атты", "таңертең"]
+en = ["sunrise", "morning"]
+
+[[image]]
+key = "sunset"
+file = "sunset.png"
+src = "Fluent Emoji: Sunset"
+category = "space"
+ru = ["закат", "вечер"]
+kz = ["күн", "батты", "кеш"]
+en = ["sunset", "evening"]
+
+[[image]]
+key = "eye"
+file = "eye.png"
+src = "Fluent Emoji: Eye"
+category = "body"
+ru = ["глаз", "зрение"]
+kz = ["көз"]
+en = ["eye", "vision"]
+
+[[image]]
+key = "eyes"
+file = "eyes.png"
+src = "Fluent Emoji: Eyes"
+category = "body"
+ru = ["глаза", "смотреть"]
+kz = ["көздер", "қарау"]
+en = ["eyes", "look"]
+
+[[image]]
+key = "ear"
+file = "ear.png"
+src = "Fluent Emoji: Ear"
+category = "body"
+ru = ["ухо", "слух"]
+kz = ["құлақ"]
+en = ["ear", "hearing"]
+
+[[image]]
+key = "nose"
+file = "nose.png"
+src = "Fluent Emoji: Nose"
+category = "body"
+ru = ["нос", "запах"]
+kz = ["мұрын"]
+en = ["nose", "smell"]
+
+[[image]]
+key = "mouth"
+file = "mouth.png"
+src = "Fluent Emoji: Mouth"
+category = "body"
+ru = ["рот"]
+kz = ["ауыз"]
+en = ["mouth"]
+
+[[image]]
+key = "tongue"
+file = "tongue.png"
+src = "Fluent Emoji: Tongue"
+category = "body"
+ru = ["язык", "вкус"]
+kz = ["тіл", "дәм"]
+en = ["tongue", "taste"]
+
+[[image]]
+key = "tooth"
+file = "tooth.png"
+src = "Fluent Emoji: Tooth"
+category = "body"
+ru = ["зуб"]
+kz = ["тіс"]
+en = ["tooth"]
+
+[[image]]
+key = "brain"
+file = "brain.png"
+src = "Fluent Emoji: Brain"
+category = "body"
+ru = ["мозг"]
+kz = ["ми"]
+en = ["brain"]
+
+[[image]]
+key = "lungs"
+file = "lungs.png"
+src = "Fluent Emoji: Lungs"
+category = "body"
+ru = ["лёгкие", "дыхание"]
+kz = ["өкпе", "тыныс"]
+en = ["lungs", "breathing"]
+
+[[image]]
+key = "heart_organ"
+file = "heart_organ.png"
+src = "Fluent Emoji: Anatomical heart"
+category = "body"
+ru = ["сердце", "орган", "пульс"]
+kz = ["жүрек", "мүшесі"]
+en = ["heart", "organ"]
+
+[[image]]
+key = "bone"
+file = "bone.png"
+src = "Fluent Emoji: Bone"
+category = "body"
+ru = ["кость", "скелет"]
+kz = ["сүйек"]
+en = ["bone", "skeleton"]
+
+[[image]]
+key = "hand"
+file = "hand.png"
+src = "Fluent Emoji: Hand with fingers splayed"
+category = "body"
+ru = ["рука", "ладонь", "пальцы"]
+kz = ["қол", "алақан"]
+en = ["hand", "fingers"]
+
+[[image]]
+key = "foot"
+file = "foot.png"
+src = "Fluent Emoji: Foot"
+category = "body"
+ru = ["стопа", "нога"]
+kz = ["табан", "аяқ"]
+en = ["foot"]
+
+[[image]]
+key = "muscle"
+file = "muscle.png"
+src = "Fluent Emoji: Flexed biceps"
+category = "body"
+ru = ["сила", "мышцы", "сильный"]
+kz = ["күш", "бұлшықет"]
+en = ["strong", "muscle"]
+
+[[image]]
+key = "footprints"
+file = "footprints.png"
+src = "Fluent Emoji: Footprints"
+category = "body"
+ru = ["следы", "шаги"]
+kz = ["із", "қадам"]
+en = ["footprints", "steps"]
+
+[[image]]
+key = "writing_hand"
+file = "writing_hand.png"
+src = "Fluent Emoji: Writing hand"
+category = "body"
+ru = ["писать", "рука", "письмо"]
+kz = ["жазу", "қол"]
+en = ["writing", "hand"]
+
+[[image]]
+key = "pointing_up"
+file = "pointing_up.png"
+src = "Fluent Emoji: Index pointing up"
+category = "body"
+ru = ["указывать", "внимание", "палец"]
+kz = ["саусақ", "нұсқау"]
+en = ["pointing", "finger", "up"]
+
+[[image]]
+key = "house"
+file = "house.png"
+src = "Fluent Emoji: House"
+category = "home"
+ru = ["дом"]
+kz = ["үй"]
+en = ["house", "home"]
+
+[[image]]
+key = "garden_house"
+file = "garden_house.png"
+src = "Fluent Emoji: House with garden"
+category = "home"
+ru = ["дом", "с", "садом"]
+kz = ["бақшасы", "бар", "үй"]
+en = ["house", "garden"]
+
+[[image]]
+key = "bed"
+file = "bed.png"
+src = "Fluent Emoji: Bed"
+category = "home"
+ru = ["кровать"]
+kz = ["төсек"]
+en = ["bed"]
+
+[[image]]
+key = "chair"
+file = "chair.png"
+src = "Fluent Emoji: Chair"
+category = "home"
+ru = ["стул"]
+kz = ["орындық"]
+en = ["chair"]
+
+[[image]]
+key = "couch"
+file = "couch.png"
+src = "Fluent Emoji: Couch and lamp"
+category = "home"
+ru = ["диван"]
+kz = ["диван"]
+en = ["sofa", "couch"]
+
+[[image]]
+key = "door"
+file = "door.png"
+src = "Fluent Emoji: Door"
+category = "home"
+ru = ["дверь"]
+kz = ["есік"]
+en = ["door"]
+
+[[image]]
+key = "window"
+file = "window.png"
+src = "Fluent Emoji: Window"
+category = "home"
+ru = ["окно"]
+kz = ["терезе"]
+en = ["window"]
+
+[[image]]
+key = "key"
+file = "key.png"
+src = "Fluent Emoji: Key"
+category = "home"
+ru = ["ключ"]
+kz = ["кілт"]
+en = ["key"]
+
+[[image]]
+key = "shower"
+file = "shower.png"
+src = "Fluent Emoji: Shower"
+category = "home"
+ru = ["душ"]
+kz = ["душ"]
+en = ["shower"]
+
+[[image]]
+key = "soap"
+file = "soap.png"
+src = "Fluent Emoji: Soap"
+category = "home"
+ru = ["мыло", "мыть", "руки"]
+kz = ["сабын"]
+en = ["soap", "wash"]
+
+[[image]]
+key = "toothbrush"
+file = "toothbrush.png"
+src = "Fluent Emoji: Toothbrush"
+category = "home"
+ru = ["зубная", "щётка"]
+kz = ["тіс", "щеткасы"]
+en = ["toothbrush"]
+
+[[image]]
+key = "broom"
+file = "broom.png"
+src = "Fluent Emoji: Broom"
+category = "home"
+ru = ["метла", "веник", "уборка"]
+kz = ["сыпырғыш"]
+en = ["broom", "cleaning"]
+
+[[image]]
+key = "basket"
+file = "basket.png"
+src = "Fluent Emoji: Basket"
+category = "home"
+ru = ["корзина"]
+kz = ["себет"]
+en = ["basket"]
+
+[[image]]
+key = "bucket"
+file = "bucket.png"
+src = "Fluent Emoji: Bucket"
+category = "home"
+ru = ["ведро"]
+kz = ["шелек"]
+en = ["bucket"]
+
+[[image]]
+key = "television"
+file = "television.png"
+src = "Fluent Emoji: Television"
+category = "home"
+ru = ["телевизор"]
+kz = ["теледидар"]
+en = ["television", "tv"]
+
+[[image]]
+key = "telephone"
+file = "telephone.png"
+src = "Fluent Emoji: Telephone"
+category = "home"
+ru = ["телефон"]
+kz = ["телефон"]
+en = ["telephone", "phone"]
+
+[[image]]
+key = "fork_knife"
+file = "fork_knife.png"
+src = "Fluent Emoji: Fork and knife with plate"
+category = "home"
+ru = ["еда", "обед", "тарелка"]
+kz = ["тамақ", "ас"]
+en = ["meal", "plate", "lunch"]
+
+[[image]]
+key = "spoon"
+file = "spoon.png"
+src = "Fluent Emoji: Spoon"
+category = "home"
+ru = ["ложка"]
+kz = ["қасық"]
+en = ["spoon"]
+
+[[image]]
+key = "teapot"
+file = "teapot.png"
+src = "Fluent Emoji: Teapot"
+category = "home"
+ru = ["чайник"]
+kz = ["шәйнек"]
+en = ["teapot"]
+
+[[image]]
+key = "candle"
+file = "candle.png"
+src = "Fluent Emoji: Candle"
+category = "home"
+ru = ["свеча"]
+kz = ["шам"]
+en = ["candle"]
+
+[[image]]
+key = "tent"
+file = "tent.png"
+src = "Fluent Emoji: Tent"
+category = "home"
+ru = ["палатка", "поход"]
+kz = ["шатыр", "жорық"]
+en = ["tent", "camping"]
+
+[[image]]
+key = "gift"
+file = "gift.png"
+src = "Fluent Emoji: Wrapped gift"
+category = "other"
+ru = ["подарок"]
+kz = ["сыйлық"]
+en = ["gift", "present"]
+
+[[image]]
+key = "balloon"
+file = "balloon.png"
+src = "Fluent Emoji: Balloon"
+category = "other"
+ru = ["воздушный", "шар", "шарик"]
+kz = ["әуе", "шары"]
+en = ["balloon"]
+
+[[image]]
+key = "party_popper"
+file = "party_popper.png"
+src = "Fluent Emoji: Party popper"
+category = "other"
+ru = ["хлопушка", "праздник"]
+kz = ["мереке"]
+en = ["party", "popper"]
+
+[[image]]
+key = "crown"
+file = "crown.png"
+src = "Fluent Emoji: Crown"
+category = "other"
+ru = ["корона", "король"]
+kz = ["тәж"]
+en = ["crown"]
+
+[[image]]
+key = "coin"
+file = "coin.png"
+src = "Fluent Emoji: Coin"
+category = "other"
+ru = ["монета", "деньги"]
+kz = ["тиын", "ақша"]
+en = ["coin", "money"]
+
+[[image]]
+key = "money_bag"
+file = "money_bag.png"
+src = "Fluent Emoji: Money bag"
+category = "other"
+ru = ["мешок", "денег", "богатство"]
+kz = ["ақша", "қалта"]
+en = ["money", "bag"]
+
+[[image]]
+key = "shopping_cart"
+file = "shopping_cart.png"
+src = "Fluent Emoji: Shopping cart"
+category = "other"
+ru = ["магазин", "покупки", "тележка"]
+kz = ["дүкен", "сауда"]
+en = ["shop", "shopping", "cart"]
+
+[[image]]
+key = "magnet"
+file = "magnet.png"
+src = "Fluent Emoji: Magnet"
+category = "other"
+ru = ["магнит"]
+kz = ["магнит"]
+en = ["magnet"]
+
+[[image]]
+key = "gear"
+file = "gear.png"
+src = "Fluent Emoji: Gear"
+category = "other"
+ru = ["шестерёнка", "механизм"]
+kz = ["тісті", "доңғалақ"]
+en = ["gear", "mechanism"]
+
+[[image]]
+key = "battery"
+file = "battery.png"
+src = "Fluent Emoji: Battery"
+category = "other"
+ru = ["батарейка"]
+kz = ["батарея"]
+en = ["battery"]
+
+[[image]]
+key = "fireworks"
+file = "fireworks.png"
+src = "Fluent Emoji: Fireworks"
+category = "other"
+ru = ["салют", "фейерверк"]
+kz = ["салют"]
+en = ["fireworks"]
+
+[[image]]
+key = "wheel"
+file = "wheel.png"
+src = "Fluent Emoji: Wheel"
+category = "other"
+ru = ["колесо"]
+kz = ["дөңгелек"]
+en = ["wheel"]
+
+[[image]]
+key = "hammer"
+file = "hammer.png"
+src = "Fluent Emoji: Hammer"
+category = "other"
+ru = ["молоток"]
+kz = ["балға"]
+en = ["hammer"]
+
+[[image]]
+key = "wrench"
+file = "wrench.png"
+src = "Fluent Emoji: Wrench"
+category = "other"
+ru = ["гаечный", "ключ", "инструмент"]
+kz = ["кілт", "құрал"]
+en = ["wrench", "tool"]
+
+[[image]]
+key = "compass"
+file = "compass.png"
+src = "Fluent Emoji: Compass"
+category = "other"
+ru = ["компас", "направление"]
+kz = ["компас", "бағыт"]
+en = ["compass", "direction"]
+
+[[image]]
+key = "recycle"
+file = "recycle.png"
+src = "Fluent Emoji: Recycling symbol"
+category = "other"
+ru = ["переработка", "мусор", "экология"]
+kz = ["қайта", "өңдеу", "экология"]
+en = ["recycling", "ecology"]
+
+[[image]]
+key = "warning"
+file = "warning.png"
+src = "Fluent Emoji: Warning"
+category = "other"
+ru = ["осторожно", "опасность"]
+kz = ["сақ", "болыңыз", "қауіп"]
+en = ["warning", "danger"]
+
+[[image]]
+key = "no_entry"
+file = "no_entry.png"
+src = "Fluent Emoji: No entry"
+category = "other"
+ru = ["нельзя", "запрещено"]
+kz = ["тыйым", "салынған"]
+en = ["forbidden", "no", "entry"]
+
+[[image]]
+key = "lock"
+file = "lock.png"
+src = "Fluent Emoji: Locked"
+category = "other"
+ru = ["замок", "закрыто"]
+kz = ["құлып"]
+en = ["lock"]
+
+[[image]]
+key = "camera"
+file = "camera.png"
+src = "Fluent Emoji: Camera"
+category = "other"
+ru = ["фотоаппарат", "фото"]
+kz = ["фотоаппарат"]
+en = ["camera", "photo"]
+
+[[image]]
+key = "envelope"
+file = "envelope.png"
+src = "Fluent Emoji: Envelope"
+category = "other"
+ru = ["письмо", "конверт"]
+kz = ["хат"]
+en = ["letter", "envelope"]
+
+[[image]]
+key = "flashlight"
+file = "flashlight.png"
+src = "Fluent Emoji: Flashlight"
+category = "other"
+ru = ["фонарик"]
+kz = ["қалта", "шамы"]
+en = ["flashlight", "torch"]
