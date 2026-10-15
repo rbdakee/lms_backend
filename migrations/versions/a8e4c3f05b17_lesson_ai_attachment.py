@@ -9,7 +9,7 @@
 (backend/CLAUDE.md, «Миграции»).
 
 Revision ID: a8e4c3f05b17
-Revises: d5f3b9a1c274
+Revises: 7d3e560e9148
 Create Date: 2026-10-16 10:00:00.000000
 
 """
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "a8e4c3f05b17"
-down_revision = "d5f3b9a1c274"
+down_revision = "7d3e560e9148"
 branch_labels = None
 depends_on = None
 
