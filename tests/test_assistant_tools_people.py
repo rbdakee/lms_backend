@@ -17,11 +17,12 @@ import pytest
 from sqlalchemy.orm import Session as OrmSession
 
 from app.adapters.db.base import get_engine
-from app.adapters.db.models import AssistantProposal, Enrollment, Lead, User
+from app.adapters.db.models import Enrollment, Lead, User
 from app.assistant import registry
 from app.assistant.registry import ToolError
 from app.assistant.tools import people
 from tests.conftest import (
+    execute,
     fake_iin,
     login_admin,
     make_course,
@@ -32,8 +33,8 @@ from tests.conftest import (
     make_submission,
     make_task,
     make_user,
+    plan,
 )
-from tests.test_assistant_chat import turn_of
 
 # Вымышленные номер и фамилия: их ищут в тексте ответа инструментов, и найти
 # их там нельзя ни в одном списке.
@@ -41,8 +42,6 @@ PHONE = "+77010000042"
 SURNAME = "Сериккызы"
 SCHOOL = "КГУ «Средняя школа №5»"
 REGION = "Алматы"
-
-
 
 
 def a_teacher(phone: str = PHONE) -> User:
@@ -55,21 +54,6 @@ def a_teacher(phone: str = PHONE) -> User:
         region=REGION,
         iin=fake_iin(),
     )
-
-
-def new_thread(client) -> int:
-    resp = client.post("/admin/assistant/threads", json={})
-    assert resp.status_code == 201, resp.text
-    return resp.json()["id"]
-
-
-def give_grant(client, thread_id: int, user_id: int, level: str) -> None:
-    """Допуск выдаёт админ кнопкой — тем же способом, что и в бою."""
-    resp = client.post(
-        f"/admin/assistant/threads/{thread_id}/grants",
-        json={"user_id": user_id, "level": level},
-    )
-    assert resp.status_code == 201, resp.text
 
 
 def as_text(result: dict) -> str:
@@ -115,19 +99,15 @@ def test_read_grant_does_not_open_the_edit(client, sms, tool_ctx):
     """Допуск открывает дверь, но правка чужих данных требует своего уровня."""
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
-    thread = new_thread(client)
 
     with pytest.raises(ToolError) as exc:
         registry.call(
             "teacher_update",
             {"user_id": person.id, "school": "Другая школа"},
-            tool_ctx(admin, thread, grants={person.id: "read"}),
+            tool_ctx(admin, grants={person.id: "read"}),
         )
 
     assert exc.value.code == "pd_grant_level"
-    # Предложения не завелось: отказ пришёл ходом раньше кнопки
-    with OrmSession(get_engine()) as db:
-        assert db.query(AssistantProposal).count() == 0
 
 
 def test_only_one_tool_here_shows_a_person(client, sms):
@@ -205,27 +185,6 @@ def test_teachers_find_gives_ids_and_courses_but_no_names(client, sms, tool_ctx)
     assert SURNAME not in as_text(found)
 
 
-def test_card_result_does_not_land_in_the_feed(client, sms, ai):
-    """Персданные не сохраняются даже с допуском: в ленте остаётся пометка,
-    а не поля карточки (ASSISTANT_BRIEF, раздел 5)."""
-    login_admin(client, sms)
-    person = a_teacher()
-    thread = new_thread(client)
-    give_grant(client, thread, person.id, "read")
-    ai.wants("teacher_card", user_id=person.id).says("Карточка открыта, смотрите в ленте.")
-
-    resp = client.post(
-        f"/admin/assistant/threads/{thread}/messages", json={"text": "открой карточку"}
-    )
-
-    card = turn_of(resp)["items"][1]
-    assert card["tool_name"] == "teacher_card"
-    assert card["tool_result"]["hidden"] == "pd_not_stored"
-    assert f"учитель #{person.id}" in card["tool_result"]["note"]
-    assert SURNAME not in resp.text
-    assert PHONE not in resp.text
-
-
 # -- опасные действия ----------------------------------------------------
 
 
@@ -248,13 +207,12 @@ def test_access_is_not_granted_without_a_platform(client, sms, tool_ctx):
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
     course = make_course()
-    thread = new_thread(client)
 
     with pytest.raises(ToolError) as exc:
         registry.call(
             "enrollment_grant",
             {"user_id": person.id, "course_id": course.id, "paid": True},
-            tool_ctx(admin, thread, grants={person.id: "write"}),
+            tool_ctx(admin, grants={person.id: "write"}),
         )
 
     assert exc.value.code == "missing_argument"
@@ -266,10 +224,9 @@ def test_grant_preview_names_the_course_and_the_platform(client, sms, tool_ctx):
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
     course = make_course(title="Оценивание", platforms={"p1": 45000, "p2": 60000})
-    thread = new_thread(client)
-    ctx = tool_ctx(admin, thread, grants={person.id: "write"})
+    ctx = tool_ctx(admin, grants={person.id: "write"})
 
-    result = registry.call(
+    result = plan(
         "enrollment_grant",
         {"user_id": person.id, "course_id": course.id, "platform": "p2", "paid": True},
         ctx,
@@ -277,7 +234,6 @@ def test_grant_preview_names_the_course_and_the_platform(client, sms, tool_ctx):
     ctx.db.commit()
 
     what = result["what_happens"]
-    assert result["status"] == "waiting_confirmation"
     assert "Оценивание" in what
     assert "p2" in what
     assert "60000" in what
@@ -295,30 +251,27 @@ def test_access_needs_a_write_grant(client, sms, tool_ctx):
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
     course = make_course()
-    thread = new_thread(client)
 
     with pytest.raises(ToolError) as exc:
         registry.call(
             "enrollment_grant",
             {"user_id": person.id, "course_id": course.id, "platform": "p1", "paid": True},
-            tool_ctx(admin, thread, grants={person.id: "read"}),
+            tool_ctx(admin, grants={person.id: "read"}),
         )
 
     assert exc.value.code == "pd_grant_level"
 
 
-def test_confirmed_grant_opens_the_course_and_closes_the_lead(client, sms, tool_ctx):
-    """Кнопка «Выполнить» доводит выдачу до конца: доступ появился на своей
+def test_grant_opens_the_course_and_closes_the_lead(client, sms, tool_ctx):
+    """Выдача доводится до конца: доступ появился на своей
     площадке, а открытая заявка закрылась сама."""
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
     course = make_course(platforms={"p1": 45000, "p2": 60000})
     lead = make_lead(person.id, course.id, platform="p2")
-    thread = new_thread(client)
-    give_grant(client, thread, person.id, "write")
 
-    ctx = tool_ctx(admin, thread, grants={person.id: "write"})
-    proposal_id = registry.call(
+    ctx = tool_ctx(admin, grants={person.id: "write"})
+    granted = registry.call(
         "enrollment_grant",
         {
             "user_id": person.id,
@@ -328,14 +281,11 @@ def test_confirmed_grant_opens_the_course_and_closes_the_lead(client, sms, tool_
             "note": "оплата 08.09",
         },
         ctx,
-    )["proposal_id"]
+    )
     ctx.db.commit()
 
-    resp = client.post(f"/admin/assistant/proposals/{proposal_id}/execute")
-
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["result"]["platform"] == "p2"
-    assert resp.json()["result"]["paid"] is True
+    assert granted["platform"] == "p2"
+    assert granted["paid"] is True
     with OrmSession(get_engine()) as db:
         enrollment = db.query(Enrollment).one()
         assert (enrollment.user_id, enrollment.platform) == (person.id, "p2")
@@ -347,10 +297,9 @@ def test_revoke_preview_says_what_stays(client, sms, tool_ctx):
     person = a_teacher()
     course = make_course(title="Оценивание")
     enrollment = make_enrollment(person.id, course.id)
-    thread = new_thread(client)
-    ctx = tool_ctx(admin, thread)
+    ctx = tool_ctx(admin)
 
-    result = registry.call("enrollment_revoke", {"enrollment_id": enrollment.id}, ctx)
+    result = plan("enrollment_revoke", {"enrollment_id": enrollment.id}, ctx)
     ctx.db.commit()
 
     what = result["what_happens"]
@@ -366,10 +315,9 @@ def test_retake_preview_names_the_quiz_and_the_platform(client, sms, tool_ctx):
     course = make_course(title="Оценивание")
     module = make_module(course.id)
     quiz = make_quiz(module.id, title="Итоговый тест")
-    thread = new_thread(client)
-    ctx = tool_ctx(admin, thread)
+    ctx = tool_ctx(admin)
 
-    result = registry.call(
+    result = plan(
         "quiz_retake_allow",
         {
             "user_id": person.id,
@@ -395,10 +343,9 @@ def test_review_preview_names_the_verdict_and_the_platform(client, sms, tool_ctx
     module = make_module(course.id)
     task = make_task(module.id, title="Разбор урока")
     submission = make_submission(person.id, task.id, platform="p2")
-    thread = new_thread(client)
-    ctx = tool_ctx(admin, thread)
+    ctx = tool_ctx(admin)
 
-    result = registry.call(
+    result = plan(
         "submission_review",
         {"submission_id": submission.id, "verdict": "rework", "comment": "добавьте критерии"},
         ctx,
@@ -415,19 +362,17 @@ def test_review_preview_names_the_verdict_and_the_platform(client, sms, tool_ctx
 # -- правка данных человека ----------------------------------------------
 
 
-def test_edit_asks_for_a_button_and_keeps_values_out_of_the_proposal(client, sms, tool_ctx):
-    """Правка данных требует и допуска с правкой, и подтверждения кнопкой.
+def test_edit_needs_a_write_grant_and_keeps_values_out_of_the_preview(client, sms, tool_ctx):
+    """Правка данных требует допуска с правкой.
 
-    В тексте предложения — какие поля меняются, а не на что: он остаётся
-    в базе чатов навсегда, и новым ФИО там копиться незачем.
+    В описании последствий — какие поля меняются, а не на что: оно может
+    попасть в журнал, и новым ФИО там копиться незачем.
     """
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
-    thread = new_thread(client)
-    give_grant(client, thread, person.id, "write")
 
-    ctx = tool_ctx(admin, thread, grants={person.id: "write"})
-    result = registry.call(
+    ctx = tool_ctx(admin, grants={person.id: "write"})
+    result = plan(
         "teacher_update",
         {"user_id": person.id, "school": "КГУ «Гимназия №1»", "subject": "Химия"},
         ctx,
@@ -439,11 +384,10 @@ def test_edit_asks_for_a_button_and_keeps_values_out_of_the_proposal(client, sms
     assert "Гимназия" not in what
     assert "Химия" not in what
 
-    resp = client.post(f"/admin/assistant/proposals/{result['proposal_id']}/execute")
+    executed = execute(result)
 
-    assert resp.status_code == 200, resp.text
-    # В ответе имена полей, а не значения: результат ложится в ленту как есть
-    assert resp.json()["result"] == {"user_id": person.id, "changed": ["school", "subject"]}
+    # В ответе имена полей, а не значения: результат сохраняется как есть
+    assert executed == {"user_id": person.id, "changed": ["school", "subject"]}
     with OrmSession(get_engine()) as db:
         changed = db.get(User, person.id)
         assert (changed.school, changed.subject) == ("КГУ «Гимназия №1»", "Химия")
@@ -452,13 +396,12 @@ def test_edit_asks_for_a_button_and_keeps_values_out_of_the_proposal(client, sms
 def test_edit_without_fields_is_refused(client, sms, tool_ctx):
     admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
-    thread = new_thread(client)
 
     with pytest.raises(ToolError) as exc:
         registry.call(
             "teacher_update",
             {"user_id": person.id},
-            tool_ctx(admin, thread, grants={person.id: "write"}),
+            tool_ctx(admin, grants={person.id: "write"}),
         )
 
     assert exc.value.code == "no_fields"
@@ -527,24 +470,18 @@ def test_submissions_queue_shows_days_and_platforms(client, sms, tool_ctx):
     assert all(row["teacher"]["user_id"] == person.id for row in queue["items"])
 
 
-def test_queue_lands_in_the_feed_whole(client, sms, ai):
-    """Ответ списка ложится в ленту в JSONB, и `datetime` туда не пишется
-    вовсе: даты уходят строкой, иначе падал бы весь ход, а не один вызов."""
-    login_admin(client, sms)
+def test_queue_is_plain_json(client, sms, tool_ctx):
+    """Ответ списка сериализуется без подсказок: `datetime` в нём не остаётся,
+    даты уходят строкой, иначе падал бы вызов у любого вызывающего."""
+    admin = login_admin(client, sms).json()["id"]
     person = a_teacher()
     course = make_course()
     make_lead(person.id, course.id)
-    thread = new_thread(client)
-    ai.wants("leads_list").says("Одна заявка на p1, ждёт нулевой день.")
 
-    resp = client.post(
-        f"/admin/assistant/threads/{thread}/messages", json={"text": "сколько заявок?"}
-    )
+    result = registry.call("leads_list", {}, tool_ctx(admin))
 
-    # `resp.text` — весь стрим целиком, а значит проверка «фамилии нет»
-    # покрывает и куски ответа, и карточки вызовов, а не одну ленту
-    card = turn_of(resp)["items"][1]["tool_result"]
-    assert card["total"] == 1
-    assert card["by_platform"] == {"p1": 1, "p2": 0}
-    assert card["items"][0]["teacher"]["ref"] == f"Учитель #{person.id}"
-    assert SURNAME not in resp.text
+    text = json.dumps(result, ensure_ascii=False)
+    assert result["total"] == 1
+    assert result["by_platform"] == {"p1": 1, "p2": 0}
+    assert result["items"][0]["teacher"]["ref"] == f"Учитель #{person.id}"
+    assert SURNAME not in text

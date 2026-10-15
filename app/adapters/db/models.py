@@ -661,12 +661,15 @@ class AuthCode(Base):
     used_at: Mapped[datetime | None] = mapped_column()
 
 
-# Ассистент в админке (ASSISTANT_BRIEF). Пять таблиц: чат, лента, память,
-# предложения опасных действий и допуски к персональным данным.
+# Допуски к персональным данным — то, на чём держится маскирование в реестре
+# действий (`app/assistant/masking.py`). Допуск привязан к «чату», поэтому
+# вместе с ним остаётся таблица чата: чат-ассистент из кода убран (владелец,
+# 15.10.2026), но таблицы в базе живы вместе с историей, и миграций, которые
+# их дропают, нет. Лента, память и предложения здесь больше не описаны — их
+# строки остаются в базе нетронутыми.
 #
-# Площадки здесь нет ни у одной таблицы, и это не забывчивость: ассистент
-# живёт в админке, а она одна на обе площадки. Площадка приходит аргументом
-# инструмента (ASSISTANT_BRIEF, решение 11), то есть внутрь `tool_args`.
+# Площадки здесь нет ни у одной таблицы: админка одна на обе площадки,
+# площадка приходит аргументом инструмента.
 
 
 class AssistantThread(Base):
@@ -680,8 +683,7 @@ class AssistantThread(Base):
     # Заголовок ассистент пишет сам после первого ответа; до тех пор пусто,
     # и список чатов показывает начало первого сообщения.
     title: Mapped[str] = mapped_column(Text, default="", server_default="")
-    # Закреплённый курс: подмешивает память курса в индекс и даёт
-    # инструментам course_id по умолчанию (ASSISTANT_BRIEF, раздел 8).
+    # Закреплённый курс.
     #
     # `SET NULL`, а не запрет: иначе удаление курса роняло бы запрос админа
     # с 500 всякий раз, когда этот курс закреплён в чьём-то чате. Чат —
@@ -692,130 +694,6 @@ class AssistantThread(Base):
     archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-
-class AssistantMessage(Base):
-    """Лента чата. Роль `tool` — карточка вызова: имя, аргументы и ответ
-    инструмента лежат рядом с текстом, потому что экран показывает их
-    свёрнутой карточкой (ASSISTANT_BRIEF, раздел 10).
-
-    Персданных здесь не хранится даже с допуском: вместо карточки учителя
-    в `tool_result` ложится пометка «карточка учителя #418, показана тогда-то»
-    (раздел 5). Пока допуск жив, ассистент перезапрашивает её тем ходом,
-    где она нужна.
-    """
-
-    __tablename__ = "assistant_message"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    # Своего индекса по одному thread_id нет: составной (thread_id, id)
-    # ниже покрывает и его, а лента иначе не читается вовсе.
-    thread_id: Mapped[int] = mapped_column(ForeignKey("assistant_thread.id", ondelete="CASCADE"))
-    role: Mapped[str] = mapped_column(Text)
-    content: Mapped[str] = mapped_column(Text, default="", server_default="")
-    tool_name: Mapped[str | None] = mapped_column(Text)
-    tool_args: Mapped[dict | None] = mapped_column(JSONB)
-    tool_result: Mapped[dict | None] = mapped_column(JSONB)
-    # Идентификатор вызова, который придумала модель. Хранится, чтобы хвост
-    # истории можно было отдать ей обратно как есть: без него связь «просьба
-    # вызвать — результат» рвётся, и следующим ходом ассистент не помнит,
-    # что он только что смотрел.
-    tool_call_id: Mapped[str | None] = mapped_column(Text)
-    # Предложение, порождённое этим вызовом: карточка в ленте показывает
-    # его состояние, а после выполнения превращается в результат.
-    proposal_id: Mapped[int | None] = mapped_column(
-        ForeignKey("assistant_proposal.id", ondelete="SET NULL")
-    )
-    # Токены пишутся, чтобы счёт за месяц можно было объяснить (раздел 9).
-    tokens_in: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    tokens_out: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-    __table_args__ = (
-        CheckConstraint("role IN ('user', 'assistant', 'tool')", name="role"),
-        # Лента читается всегда одним запросом: свой чат, по порядку
-        Index("ix_assistant_message_thread_id_id", "thread_id", "id"),
-    )
-
-
-class AssistantMemory(Base):
-    """Память ассистента: общая на всех админов, устройство как у MEMORY.md —
-    индекс в промпте каждый ход, тело по вызову `memory_read`.
-
-    Уникальность двумя частичными индексами, а не одним UNIQUE (scope,
-    course_id, name): у общей записи `course_id` пустой, а Postgres считает
-    NULL-ы различными — общий ключ не запретил бы двух `pricing` подряд.
-    """
-
-    __tablename__ = "assistant_memory"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    scope: Mapped[str] = mapped_column(Text)
-    # `CASCADE`: запись про удалённый курс не значит ничего, а без каскада
-    # удаление курса упиралось бы в неё с 500.
-    course_id: Mapped[int | None] = mapped_column(
-        ForeignKey("course.id", ondelete="CASCADE"), index=True
-    )
-    name: Mapped[str] = mapped_column(Text)
-    description: Mapped[str] = mapped_column(Text, default="", server_default="")
-    body: Mapped[str] = mapped_column(Text, default="", server_default="")
-    # У записи есть автор: в память от чужого имени ассистент не пишет.
-    author_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-    __table_args__ = (
-        CheckConstraint("scope IN ('global', 'course')", name="scope"),
-        # Общая запись без курса, запись курса — с курсом. Иначе «память
-        # курса» без курса молча стала бы второй общей.
-        CheckConstraint(
-            "(scope = 'global' AND course_id IS NULL)"
-            " OR (scope = 'course' AND course_id IS NOT NULL)",
-            name="scope_course",
-        ),
-        Index(
-            "uq_assistant_memory_global_name",
-            "name",
-            unique=True,
-            postgresql_where=text("scope = 'global'"),
-        ),
-        Index(
-            "uq_assistant_memory_course_name",
-            "course_id",
-            "name",
-            unique=True,
-            postgresql_where=text("scope = 'course'"),
-        ),
-    )
-
-
-class AssistantProposal(Base):
-    """Предложение опасного действия. Инструмент с пометкой `confirm`
-    не исполняется вовсе — он заводит эту строку, а ручка `execute` берёт
-    аргументы **отсюда**, а не из тела запроса: иначе подтверждение
-    подтверждает не то, что было показано (ASSISTANT_BRIEF, раздел 6).
-
-    Одноразовое и живёт час.
-    """
-
-    __tablename__ = "assistant_proposal"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    thread_id: Mapped[int] = mapped_column(
-        ForeignKey("assistant_thread.id", ondelete="CASCADE"), index=True
-    )
-    tool_name: Mapped[str] = mapped_column(Text)
-    tool_args: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
-    # «Что произойдёт» человеческим языком, с числами и с площадкой: именно
-    # этот текст админ читает перед тем, как нажать «Выполнить».
-    what_happens: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    expires_at: Mapped[datetime] = mapped_column()
-    executed_at: Mapped[datetime | None] = mapped_column()
-    # Кто нажал: у действий админа хранится actor_id (backend/CLAUDE.md).
-    executed_by: Mapped[int | None] = mapped_column(ForeignKey("user.id"))
-    result: Mapped[dict | None] = mapped_column(JSONB)
-    cancelled_at: Mapped[datetime | None] = mapped_column()
 
 
 class AssistantPdGrant(Base):

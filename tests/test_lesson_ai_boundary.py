@@ -1,7 +1,7 @@
-"""Граница между ассистентом админки и «Жоспаром» — по коду, а не по промпту.
+"""Граница между реестром админских действий и «Жоспаром» — по коду, а не по промпту.
 
-Бриф (TEACHER_AI_BRIEF, раздел 6): `registry.py`, `masking.py`, `knowledge.py`
-и `prompt.py` в учительский продукт **не импортируются** — не «не вызываются»,
+Бриф (TEACHER_AI_BRIEF, раздел 6): `registry.py` и `masking.py`
+в учительский продукт **не импортируются** — не «не вызываются»,
 а не импортируются. Промпт L6: «проверяется тестом на импорты, а не обещанием
 в промпте». Поэтому здесь две независимые проверки одного и того же:
 
@@ -12,9 +12,8 @@
   динамика не видит: внутри функции, в ветке, которая при импорте не исполняется.
 
 Переиспользуется только водопровод — общий цикл `app/application/ai_loop.py`
-(L6.decisions, запись 1), поэтому он проверяется отдельно: нейтрален к обоим
-продуктам. И отдельно — что ассистент после выноса цикла работает как прежде,
-а у учительского чата ровно два своих инструмента.
+(L6.decisions, запись 1), поэтому он проверяется отдельно: нейтрален к реестру.
+И отдельно — что у учительского чата ровно два своих инструмента.
 """
 
 import ast
@@ -29,16 +28,12 @@ import pytest
 
 # Без него реестр пуст: инструменты регистрируются импортом модулей
 import app.assistant.tools  # noqa: F401
-from app.application import ai_loop
-from app.application.ports import AiToolCall
-from app.assistant import loop as assistant_loop
 from app.assistant import registry
-from app.assistant.loop import AssistantLoop
 from app.config import get_settings
 from app.lesson_ai import order_tools
 from app.lesson_ai.order_tools import OrderTools
 from app.main import app as fastapi_app
-from tests.conftest import ADMIN_PHONE, PHONE, age_codes, login, login_admin, make_admin
+from tests.conftest import ADMIN_PHONE, PHONE, age_codes, login, make_admin
 
 # Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
 # а сама проверка доступа — в `test_lesson_ai_access.py`
@@ -265,29 +260,6 @@ def test_admin_tool_is_unknown_to_the_order_chat(monkeypatch):
         if (result.get("error") or {}).get("code") != "unknown_tool"
     )
     assert accepted == [], f"учительский чат не отказал в админских инструментах: {accepted[:5]}"
-
-
-# -- ассистент после выноса цикла -----------------------------------------------
-
-
-def test_assistant_loop_is_the_shared_loop_with_the_registry():
-    assert issubclass(AssistantLoop, ai_loop.ToolLoop)
-    for name in ("Step", "LoopResult", "LoopEvent", "AiStreamBrokenError"):
-        assert getattr(assistant_loop, name) is getattr(ai_loop, name), name
-    assert isinstance(assistant_loop.CAP_MESSAGE, str) and assistant_loop.CAP_MESSAGE
-    assert AssistantLoop(ai=None, max_tool_calls=10).tools.schemas() == registry.openai_tools()
-
-
-def test_assistant_tool_refusal_is_still_a_result(client, sms, tool_ctx):
-    """Отказ реестра (`ToolError`) — обычный результат для модели, а не
-    упавший ход: так было до выноса цикла, так и осталось."""
-    admin = login_admin(client, sms).json()["id"]
-    thread = client.post("/admin/assistant/threads", json={}).json()
-    ctx = tool_ctx(admin, thread["id"])
-    call = AiToolCall(id="call_1", name="course_card", arguments={"cource_id": 1})
-    step = AssistantLoop(ai=None, max_tool_calls=10)._one(call, ctx)
-    assert step.result["error"]["code"] == "unknown_argument"
-    assert step.name == "course_card"
 
 
 # -- роутер: только учительская кука --------------------------------------------

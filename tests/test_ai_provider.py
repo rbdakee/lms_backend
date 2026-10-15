@@ -31,7 +31,6 @@ HELLO = [AiMessage(role="user", content="Привет")]
 # Настройки ИИ из окружения машины, где идут тесты. Там бывает настоящий ключ,
 # и попади он в настройки — упавший тест напечатал бы его в выводе
 AI_ENV = (
-    "ASSISTANT_AI_PROVIDER",
     "LESSON_AI_PROVIDER",
     "ZAI_API_KEY",
     "ZAI_BASE_URL",
@@ -57,8 +56,8 @@ def _cfg(**kw) -> Settings:
 
 
 def _zai(**kw) -> Settings:
-    both = {"assistant_ai_provider": "zai", "lesson_ai_provider": "zai"}
-    return _cfg(**{**both, "zai_api_key": ZAI_KEY, "zai_model": "glm-4.7", **kw})
+    base = {"lesson_ai_provider": "zai", "zai_api_key": ZAI_KEY, "zai_model": "glm-4.7"}
+    return _cfg(**{**base, **kw})
 
 
 def _usage(tokens_in=7, tokens_out=3):
@@ -89,8 +88,8 @@ def test_openai_is_the_default_and_nothing_changes_for_it():
     """Без настроек провайдера всё как до подготовки GLM: тот же адрес, тот же ключ,
     строгая схема, кэш промпта и расход в стриме."""
     cfg = _cfg()
-    assert (cfg.assistant_ai_provider, cfg.lesson_ai_provider) == ("openai", "openai")
-    chat = ai_chat(cfg, cfg.assistant_ai_provider)
+    assert cfg.lesson_ai_provider == "openai"
+    chat = ai_chat(cfg, cfg.lesson_ai_provider)
     assert type(chat) is OpenAiChat
     assert str(chat.client.base_url).startswith("https://api.openai.com/")
     assert chat.model == "gpt-4.1"
@@ -114,7 +113,7 @@ def test_openai_is_the_default_and_nothing_changes_for_it():
 
 def test_zai_is_picked_by_config_and_goes_to_the_general_api():
     cfg = _zai()
-    chat = ai_chat(cfg, cfg.assistant_ai_provider)
+    chat = ai_chat(cfg, cfg.lesson_ai_provider)
     assert type(chat) is ZaiChat
     assert str(chat.client.base_url) == "https://api.z.ai/api/paas/v4/"
     assert chat.client.api_key == ZAI_KEY
@@ -164,33 +163,15 @@ def test_zai_stream_takes_usage_from_the_last_chunk_without_stream_options():
 
 
 def test_the_openai_key_does_not_switch_glm_on():
-    """При `zai` ключ OpenAI не считается: иначе ассистент «был бы включён»,
+    """При `zai` ключ OpenAI не считается: иначе «Жоспар» «был бы включён»,
     а ходил бы к Z.ai с чужим ключом."""
-    cfg = _cfg(assistant_ai_provider="zai", zai_model="glm-4.7")
-    assert cfg.ai_api_key("zai") == ""
-    assert not cfg.assistant_on
+    assert _cfg(zai_model="glm-4.7").ai_api_key("zai") == ""
     assert not _cfg(lesson_ai_provider="zai", lesson_ai_enabled=True).lesson_ai_on
     assert _zai(lesson_ai_enabled=True).lesson_ai_on
 
 
-def test_admins_on_glm_and_teachers_on_openai():
-    """Решение владельца 25.09.2026: ассистент админки на GLM, «Жоспар»
-    учителей на OpenAI — каждый со своим ключом и своей моделью."""
-    cfg = _zai(lesson_ai_provider="openai", lesson_ai_enabled=True)
-    assistant = ai_chat(cfg, cfg.assistant_ai_provider)
-    assert type(assistant) is ZaiChat
-    assert assistant.client.api_key == ZAI_KEY
-    lesson = ai_chat(cfg, cfg.lesson_ai_provider, model=cfg.lesson_model)
-    assert type(lesson) is OpenAiChat
-    assert lesson.client.api_key == OPENAI_KEY
-    assert lesson.model == "gpt-4.1"
-    assert cfg.assistant_on and cfg.lesson_ai_on
-    check_providers(cfg)
-
-
 def test_one_product_on_zai_does_not_need_the_others_model():
-    """«Жоспару» на GLM хватает своей модели: ZAI_MODEL ассистента,
-    который остался на OpenAI, от него не требуется."""
+    """«Жоспару» на GLM хватает своей модели: общий ZAI_MODEL от него не требуется."""
     check_zai(_cfg(lesson_ai_provider="zai", zai_api_key=ZAI_KEY, lesson_ai_zai_model="glm-4.7"))
 
 
@@ -201,10 +182,9 @@ def test_lesson_model_follows_the_provider():
     assert _zai(lesson_ai_provider="openai").lesson_model == "gpt-4.1"
 
 
-@pytest.mark.parametrize("field", ["assistant_ai_provider", "lesson_ai_provider"])
-def test_a_typo_in_ai_provider_stops_the_service(field):
-    with pytest.raises(RuntimeError, match=field.upper()):
-        check_providers(_cfg(**{field: "glm"}))
+def test_a_typo_in_ai_provider_stops_the_service():
+    with pytest.raises(RuntimeError, match="LESSON_AI_PROVIDER"):
+        check_providers(_cfg(lesson_ai_provider="glm"))
 
 
 def test_zai_with_a_key_but_no_model_stops_the_service():
@@ -217,7 +197,7 @@ def test_zai_with_a_key_but_no_model_stops_the_service():
 
 def test_zai_without_a_key_is_a_warning_not_a_failure(caplog):
     with caplog.at_level(logging.WARNING):
-        check_zai(_cfg(assistant_ai_provider="zai"))
+        check_zai(_cfg(lesson_ai_provider="zai"))
     assert "ZAI_API_KEY" in caplog.text
 
 

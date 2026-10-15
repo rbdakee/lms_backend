@@ -13,7 +13,6 @@ from app.api.errors import register_error_handlers
 from app.api.routers import (
     admin,
     admin_admins,
-    admin_assistant,
     admin_categories,
     admin_certificates,
     admin_courses,
@@ -42,11 +41,6 @@ from app.api.routers import (
     telegram,
 )
 from app.application.bootstrap import ensure_bootstrap_admin
-
-# Импорт ради побочного действия: декораторы `@tool` наполняют реестр
-# ассистента при загрузке пакета. Без этой строки список инструментов
-# пуст, и модель не умеет ничего.
-from app.assistant import tools as _assistant_tools  # noqa: F401
 from app.config import check_providers, get_settings
 from app.lesson_ai.worker import start_workers
 
@@ -134,7 +128,6 @@ def create_app() -> FastAPI:
     app.include_router(admin_reviews.router)
     app.include_router(admin_categories.router)
     app.include_router(admin_admins.router)
-    app.include_router(admin_assistant.router)
     app.include_router(admin_curriculum.router)
     app.include_router(admin_lesson_ai.router)
     app.include_router(lesson_ai.access_router)

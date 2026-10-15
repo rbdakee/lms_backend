@@ -1,77 +1,50 @@
-"""Реестр действий ассистента — механика и только она.
+"""Реестр действий — механика и только она.
 
 Закрытый список именованных операций вместо свободного `http_request`
-(`ASSISTANT_BRIEF`, раздел 1). Из одного списка получаются три вещи:
+(`ASSISTANT_BRIEF`, раздел 1). Из одного списка получаются две вещи:
 
 | Кому | Что берёт |
 |---|---|
-| GPT | JSON-описания в поле `tools` запроса |
 | исполнитель | соответствие «имя → функция» и проверка аргументов |
-| MCP, когда понадобится | тот же список, завёрнутый в протокол (раздел 15) |
+| MCP-сервер | тот же список, завёрнутый в протокол (раздел 15) |
 
-Здесь же **механика предложений**: инструмент с пометкой `confirm`
-не исполняется вовсе — он заводит строку `assistant_proposal`, а ручка
-`execute` берёт аргументы из строки. Обещание модели «я спрошу перед
-удалением» механизмом не является; исполнение опасного инструмента
-физически недоступно циклу вызовов.
+Пометка опасности `read|write|confirm` — данные, а не механизм: реестр
+исполняет любое действие сразу. Что делать с `confirm` (в MCP — пометка
+destructive у инструмента), решает тот, кто реестр вызывает. Чата
+с предложениями и кнопкой «Выполнить» больше нет: он убран из кода,
+полная версия лежит в ветке `assistant`.
 
 Сами инструменты живут в `tools/*.py` и сюда не складываются: их пишут
 несколько человек сразу, а двое в одном файле дают потерянные куски,
 которых не видит ни один тест.
 
 **Реестр не предполагает, что вызывающий — наш собственный чат** (раздел 15):
-`ctx` собирается из админа и сессии базы, а не из куки, и `thread_id`
-в нём может быть пустым — тогда предложения просто негде заводить.
+`ctx` собирается из админа и сессии базы, а не из куки.
 """
 
-import json
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session as DbSession
 
-from app.adapters.db.models import AssistantPdGrant, AssistantProposal, User
+from app.adapters.db.models import AssistantPdGrant, User
 from app.domain.platform import PLATFORMS
-
-log = logging.getLogger(__name__)
 
 # Три пометки опасности (ASSISTANT_BRIEF, раздел 6).
 DANGER_LEVELS = ("read", "write", "confirm")
 
-# Предложение одноразовое и живёт час: столько админ читает карточку
-# и решается. Дольше — и «Выполнить» нажимается по забытому тексту.
-PROPOSAL_TTL_MIN = 60
-
-# Строка, которая дописывается к описанию `confirm`-инструмента. Модель
-# не должна обещать «сейчас удалю»: инструмент вернёт ей предложение,
-# а не результат, и говорить об этом надо заранее.
-CONFIRM_NOTE = (
-    " ОПАСНОЕ ДЕЙСТВИЕ: сразу не выполняется. Вызов создаёт предложение"
-    " с кнопкой «Выполнить», которую нажимает администратор."
-)
+# Строка, которая дописывается к описанию `confirm`-инструмента: вызывающий
+# должен знать, что действие трудно или невозможно отменить.
+CONFIRM_NOTE = " ОПАСНОЕ ДЕЙСТВИЕ: трудно или невозможно отменить."
 
 # То же для `write`: изменение произойдёт молча, и модель обязана об этом
 # сказать вслух, а не отчитаться постфактум.
 WRITE_NOTE = " Изменяет данные."
 
 
-def json_safe(value: Any) -> Any:
-    """Ответ инструмента в том виде, в каком его примет JSONB.
-
-    Сценарии отдают то, что удобно им: `date` у даты старта курса, `Decimal`
-    у цены, `datetime` у отметки времени. Модели это уходит через `json.dumps`
-    с `default=str` и не мешает, а вот запись в `assistant_message.tool_result`
-    падает — и вместе с ней падает весь ход. Один инструмент, забывший привести
-    дату к строке, ронял бы чат целиком, поэтому приведение стоит здесь, а не
-    в каждом из шестидесяти инструментов.
-    """
-    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
-
-
-# Что стоит в ленте на месте персональных данных. Не пустая строка: видно,
+# Что стоит в журнале на месте персональных данных. Не пустая строка: видно,
 # что поле правилось, — просто чем именно, в истории не остаётся.
 HIDDEN = "скрыто"
 
@@ -79,9 +52,8 @@ HIDDEN = "скрыто"
 def mask_args(spec: "ToolSpec", args: dict) -> dict:
     """Аргументы для хранения: значения персональных полей заменены пометкой.
 
-    Модель их получила и инструмент их применил — а вот карточка вызова живёт
-    в ленте вечно, и новый телефон учителя в ней копился бы ровно так же, как
-    копилась бы карточка (`ASSISTANT_BRIEF`, раздел 5).
+    Инструмент аргументы применил, а журнал вызовов живёт вечно, и новый
+    телефон учителя копился бы в нём (`ASSISTANT_BRIEF`, раздел 5).
     """
     if not spec.pd_args:
         return args
@@ -91,11 +63,11 @@ def mask_args(spec: "ToolSpec", args: dict) -> dict:
 
 
 class ToolError(Exception):
-    """Отказ инструмента, который **видит модель**, а не фронт.
+    """Отказ инструмента, который видит вызывающий, а не пользователь.
 
-    Это не ошибка HTTP: сам запрос чата удался. Текст уходит в ленту
-    результатом вызова, и правило разговора «ошибку показывает как есть»
-    держится именно на нём.
+    Это не ошибка HTTP: вызов дошёл до реестра, а инструмент отказал по
+    существу. Текст уходит вызывающему результатом, и он показывает ошибку
+    как есть.
     """
 
     def __init__(self, code: str, message: str, **details: Any):
@@ -158,13 +130,12 @@ class ToolSpec:
     description: str
     args: dict[str, Arg]
     func: Callable[..., Any]
-    # Ответ содержит персональные данные. Такой результат не ложится в ленту
-    # чата вовсе — вместо него остаётся пометка (`ASSISTANT_BRIEF`, раздел 5).
+    # Ответ содержит персональные данные. Такой результат не сохраняется
+    # в журнале вызовов — вместо него остаётся пометка (`ASSISTANT_BRIEF`, раздел 5).
     pd: bool = False
     # Аргументы, значения которых нельзя хранить: правка чужих данных приходит
     # новыми ФИО и телефоном, а карточка вызова живёт в ленте вечно. В ленте
-    # от них остаются имена полей, а из строки предложения значения стираются
-    # сразу после выполнения — держать их дольше незачем.
+    # от них остаются имена полей (`mask_args`) — держать значения дольше незачем.
     pd_args: tuple[str, ...] = ()
     # Человекочитаемое «что произойдёт» для `confirm`. Заводится отдельным
     # декоратором `@preview`, потому что текст считается по данным:
@@ -253,7 +224,7 @@ def preview(tool_name: str):
         if spec is None:
             raise RuntimeError(f"@preview({tool_name!r}): такого инструмента нет")
         if spec.danger != "confirm":
-            raise RuntimeError(f"@preview({tool_name!r}): предложения бывают только у confirm")
+            raise RuntimeError(f"@preview({tool_name!r}): описание бывает только у confirm")
         spec.preview = func
         return func
 
@@ -303,13 +274,7 @@ class ToolCtx:
     db: DbSession
     admin: User
     now: datetime
-    # Чат, из которого пришёл вызов. Пусто — предложения заводить негде:
-    # так ассистента зовут черновики ответов, где инструментов нет вовсе.
-    thread_id: int | None = None
-    # Закреплённый у чата курс: инструменты получают его как course_id
-    # по умолчанию (раздел 8).
-    course_id: int | None = None
-    # Допуски этого чата: subject_user_id → 'read' | 'write'.
+    # Допуски вызывающего: subject_user_id → 'read' | 'write'.
     grants: dict[int, str] = field(default_factory=dict)
 
     def grant_level(self, user_id: int) -> str | None:
@@ -326,7 +291,7 @@ class ToolCtx:
             raise ToolError(
                 "pd_grant_required",
                 f"Нужен допуск к данным этого человека (учитель #{user_id})."
-                " Администратор выдаёт его кнопкой в чате.",
+                " Администратор выдаёт его отдельным допуском.",
                 subject_user_id=user_id,
                 need_level=level,
             )
@@ -445,73 +410,10 @@ def _as_bool(where: str, value: Any) -> bool:
 
 
 def call(name: str, args: dict, ctx: ToolCtx) -> dict:
-    """Один вызов инструмента из цикла.
+    """Один вызов инструмента: проверка аргументов и исполнение.
 
-    `confirm` здесь **не исполняется**: вместо результата заводится
-    предложение. Это и есть механизм — обещание модели механизмом не является.
+    `confirm` исполняется так же, как `write`: пометка опасности — данные
+    для того, кто реестр вызывает (в MCP — destructive у инструмента).
     """
     spec = get(name)
-    clean = check_args(spec, args)
-    if spec.danger == "confirm":
-        return propose(spec, clean, ctx)
-    return spec.func(ctx, **clean)
-
-
-def propose(spec: ToolSpec, args: dict, ctx: ToolCtx) -> dict:
-    """Заводит предложение и возвращает модели то, что она скажет вслух."""
-    if ctx.thread_id is None:
-        raise ToolError(
-            "no_thread", f"{spec.name} — опасное действие, а подтверждать его здесь негде"
-        )
-    what = _what_happens(spec, args, ctx)
-    row = AssistantProposal(
-        thread_id=ctx.thread_id,
-        tool_name=spec.name,
-        tool_args=args,
-        what_happens=what,
-        expires_at=ctx.now + timedelta(minutes=PROPOSAL_TTL_MIN),
-    )
-    ctx.db.add(row)
-    ctx.db.flush()
-    return {
-        "status": "waiting_confirmation",
-        "proposal_id": row.id,
-        "what_happens": what,
-        "expires_in_min": PROPOSAL_TTL_MIN,
-    }
-
-
-def _what_happens(spec: ToolSpec, args: dict, ctx: ToolCtx) -> str:
-    """Последствия своими словами. Забытый `@preview` не роняет сервис —
-    его ловит тест (`check_registry`), а здесь остаётся честный, пусть
-    и бледный, текст: молчания в карточке подтверждения быть не должно."""
-    if spec.preview is None:
-        log.warning("У инструмента %s нет @preview — админ увидит общий текст", spec.name)
-        return f"{spec.description} Аргументы: {args}"
-    return spec.preview(ctx, **args)
-
-
-def run_proposal(proposal: AssistantProposal, ctx: ToolCtx) -> dict:
-    """Выполнить подтверждённое действие.
-
-    Аргументы берутся **из строки**, а не из тела запроса: иначе
-    подтверждение подтверждает не то, что было показано (раздел 6).
-    """
-    if proposal.executed_at is not None:
-        raise ToolError("already_executed", "Это действие уже выполнено")
-    if proposal.cancelled_at is not None:
-        raise ToolError("cancelled", "Предложение отменено")
-    if proposal.expires_at <= ctx.now:
-        raise ToolError(
-            "expired", "Предложение устарело — попросите ассистента предложить заново"
-        )
-    spec = get(proposal.tool_name)
-    clean = check_args(spec, dict(proposal.tool_args or {}))
-    result = spec.func(ctx, **clean)
-    proposal.executed_at = ctx.now
-    proposal.executed_by = ctx.admin.id
-    proposal.result = json_safe(result)
-    # Значения персональных полей из строки стираются сразу: подтверждать
-    # больше нечего, а предложение остаётся в базе навсегда
-    proposal.tool_args = mask_args(spec, proposal.tool_args or {})
-    return result
+    return spec.func(ctx, **check_args(spec, args))
