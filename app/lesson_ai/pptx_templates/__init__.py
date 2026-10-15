@@ -47,6 +47,8 @@ class Slot(BaseModel):
     max_chars: int | None = None
     max_items: int | None = None
     required: bool = False
+    # Нижняя граница кегля при переполнении; пусто — обычные 24 pt (спека, п. 6)
+    min_pt: int | None = Field(default=None, ge=10, le=72)
 
 
 class DeckTemplate(BaseModel):
@@ -60,6 +62,11 @@ class DeckTemplate(BaseModel):
     slots: list[Slot]
     # Имена украшений, которые сценарий может удалить, — без префикса `deco:`
     removable: list[str] = Field(default_factory=list)
+    # Украшения-спутники: имя украшения → условия «за какими слотами оно
+    # следует». Условие — пара (слот, N): слот пуст или пунктов в нём меньше N.
+    # Украшение уходит вместе со слотом, когда не выполнилось ни одно условие;
+    # модель об этом не просит — исполнитель делает сам (спека, п. 4)
+    follows: dict[str, tuple[tuple[str, int | None], ...]] = Field(default_factory=dict)
     # Порядок появления по клику по умолчанию: имена слотов
     default_order: list[str] = Field(default_factory=list)
 
@@ -80,6 +87,7 @@ def load(directory: Path) -> dict[str, DeckTemplate]:
             stage=item["stage"],
             slots=item.get("slot") or [],
             removable=(item.get("deco") or {}).get("removable") or [],
+            follows=_parse_follows((item.get("deco") or {}).get("follows") or {}),
             default_order=(item.get("animation") or {}).get("default") or [],
         )
         if template.key in found:
@@ -89,6 +97,26 @@ def load(directory: Path) -> dict[str, DeckTemplate]:
         raise ValueError("каталог пуст: ни одного шаблона")
     _check_shapes(directory, found)
     return found
+
+
+def _parse_follows(raw: dict) -> dict[str, tuple[tuple[str, int | None], ...]]:
+    """`follows = { picture_bg = "picture", row4 = ["left:4", "right:4"] }` —
+    значения TOML приводятся к парам (слот, минимум пунктов)."""
+    follows = {}
+    for deco, value in raw.items():
+        if isinstance(value, str):
+            value = [value]
+        follows[deco] = tuple(_condition(str(c)) for c in value)
+    return follows
+
+
+def _condition(value: str) -> tuple[str, int | None]:
+    name, _, count = value.partition(":")
+    if not count:
+        return name, None
+    if not count.isdigit() or int(count) < 1:
+        raise ValueError(f"в deco.follows условие {value!r}: число пунктов должно быть целым ≥ 1")
+    return name, int(count)
 
 
 def _check_shapes(directory: Path, found: dict[str, DeckTemplate]) -> None:
@@ -109,6 +137,23 @@ def _check_shapes(directory: Path, found: dict[str, DeckTemplate]) -> None:
                 raise ValueError(
                     f"{template.key}: на слайде {template.slide} нет фигуры deco:{name}"
                 )
+        slots = {slot.name: slot for slot in template.slots}
+        for deco, conditions in template.follows.items():
+            if f"deco:{deco}" not in names:
+                raise ValueError(
+                    f"{template.key}: на слайде {template.slide} нет фигуры deco:{deco}"
+                )
+            for name, at_least in conditions:
+                slot = slots.get(name)
+                if slot is None:
+                    raise ValueError(
+                        f"{template.key}: в deco.follows имя {name!r} — не слот шаблона"
+                    )
+                if at_least and (slot.kind != "bullets" or at_least > (slot.max_items or 0)):
+                    raise ValueError(
+                        f"{template.key}: в deco.follows «{name}:{at_least}» — число пунктов"
+                        " только для bullets и не больше max_items"
+                    )
         known = {slot.name for slot in template.slots}
         for name in template.default_order:
             if name not in known:

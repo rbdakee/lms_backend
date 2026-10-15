@@ -214,6 +214,131 @@ def test_deco_is_removed_only_when_named_and_only_deco(lib):
     assert any("не украшение" in w for w in out.warnings)
 
 
+# -- пустые слоты и украшения-спутники -------------------------------------------------
+
+
+def test_unfilled_optional_slot_is_removed_with_placeholder(lib):
+    """Пустой необязательный слот уходит целиком, с текстом-заполнителем
+    шаблона: в комплекте учителя заполнителей нет (спека, раздел 3, п. 4)."""
+    _, opened = built(lib, scenario_slide("big_number", fill=[fill("number", text="42")]))
+
+    sld = opened.slides[2]
+    assert "slot:caption" not in shapes_by_name(sld)
+    assert "Подпись" not in texts(sld)
+
+
+def test_empty_fill_counts_as_unfilled(lib):
+    out = deck.render_deck(
+        deck_content(
+            scenario_slide(
+                "question_choice",
+                fill=[fill("question", text="Где?"), fill("options", items=["А"]), fill("answer")],
+            )
+        ),
+        HEADER,
+        lib,
+    )
+    opened = Presentation(BytesIO(out.data))
+
+    assert "slot:answer" not in shapes_by_name(opened.slides[2])
+    assert not any("«answer»" in w for w in out.warnings)  # слот необязательный
+
+
+def test_deco_following_empty_slot_is_removed(lib):
+    """Украшение-спутник из deco.follows уходит вместе с опустевшим слотом,
+    само, без `remove` в сценарии."""
+    _, without = built(
+        lib,
+        scenario_slide(
+            "question_choice",
+            fill=[fill("question", text="Где?"), fill("options", items=["А", "Б"])],
+        ),
+    )
+    _, with_picture = built(lib, question_slide())
+
+    assert "deco:picture_bg" not in shapes_by_name(without.slides[2])
+    assert "deco:picture_bg" in shapes_by_name(with_picture.slides[2])
+
+
+def test_deco_group_is_removed_whole(lib):
+    """deco: может быть группой фигур — снимается целиком, вместе с детьми."""
+    _, opened = built(lib, scenario_slide("cover", remove=["deco:border"]))
+    _, kept = built(lib, scenario_slide("cover"))
+
+    assert "deco:border" not in shapes_by_name(opened.slides[2])
+    children = {
+        part.name
+        for shape in kept.slides[2].shapes
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP
+        for part in shape.shapes
+    }
+    assert "border-part-1" in children and "border-part-2" in children
+
+
+def test_follows_pointing_at_unknown_slot_is_refused(tmp_path):
+    broken = build_library(tmp_path)
+    text = (broken / "catalog.toml").read_text(encoding="utf-8")
+    (broken / "catalog.toml").write_text(
+        text.replace('follows = { picture_bg = "picture" }', 'follows = { picture_bg = "absent" }'),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="follows"):
+        pptx_templates.load(broken)
+
+
+def test_default_animation_skips_unfilled_slots_silently(lib):
+    out = deck.render_deck(
+        deck_content(
+            scenario_slide(
+                "question_choice",
+                fill=[fill("question", text="Где?"), fill("options", items=["А"])],
+            )
+        ),
+        HEADER,
+        lib,
+    )
+
+    assert not any("animation.order" in w for w in out.warnings)
+
+
+# -- списки и кегль -------------------------------------------------------------------
+
+
+def test_bullets_keep_template_numbering(lib):
+    """Каждый пункт наследует абзац-образец шаблона: автонумерация та же,
+    что в шаблоне (у вариантов — буквы A. B. C., у шагов — 1. 2. 3.),
+    и кегль не ниже границы (спека, п. 6)."""
+    _, opened = built(
+        lib,
+        question_slide(),
+        scenario_slide("steps", fill=[fill("title", text="Как"), fill("steps", items=["Раз"])]),
+    )
+
+    options = shapes_by_name(opened.slides[2])["slot:options"]
+    for paragraph in options.text_frame.paragraphs:
+        num = paragraph._p.pPr.find(qn("a:buAutoNum"))
+        assert num is not None and num.get("type") == "alphaUcPeriod"
+        assert paragraph.runs[0].font.size.pt >= 24
+    steps = shapes_by_name(opened.slides[3])["slot:steps"]
+    num = steps.text_frame.paragraphs[0]._p.pPr.find(qn("a:buAutoNum"))
+    assert num is not None and num.get("type") == "arabicPeriod"
+    assert steps.text_frame.paragraphs[0].runs[0].font.size.pt >= 24
+
+
+def test_preview_shows_template_markers(lib):
+    data, _ = built(
+        lib,
+        question_slide(),
+        scenario_slide("steps", fill=[fill("title", text="Как"), fill("steps", items=["Раз"])]),
+    )
+
+    html = lesson_preview.render("pptx", data, "ru")
+
+    assert ">A. </span>" in html  # буквы шаблона, а не «1. 2. 3.»
+    assert ">1. </span>" in html
+
+
 def test_library_picture_travels_with_the_slide(lib):
     """Клон слайда переезжает вместе со связями: картинка библиотеки —
     та же, байт в байт."""
@@ -225,13 +350,14 @@ def test_library_picture_travels_with_the_slide(lib):
 
 
 def test_slot_image_fits_frame_and_placeholder_is_gone(lib):
-    _, empty = built(lib, scenario_slide("question_choice"))
-    frame = shapes_by_name(empty.slides[2])["slot:picture"]
+    frame = shapes_by_name(Presentation(str(lib / "library.pptx")).slides[2])["slot:picture"]
     _, opened = built(lib, question_slide())
 
     sld = opened.slides[2]
-    assert "slot:picture" not in shapes_by_name(sld)
-    pic = pictures(sld)[0]
+    # Картинка заменила рамку и переняла её имя slot:<name>
+    named = [s for s in sld.shapes if s.name == "slot:picture"]
+    assert len(named) == 1 and named[0].shape_type == MSO_SHAPE_TYPE.PICTURE
+    pic = named[0]
     # Вписана в рамку слота с сохранением пропорций (PNG каталога квадратный)
     assert pic.left >= frame.left and pic.top >= frame.top
     assert pic.left + pic.width <= frame.left + frame.width + 1000
@@ -542,7 +668,11 @@ def test_edit_chat_prompt_carries_the_template_catalog(lib, monkeypatch):
     assert "прежней формы" in block
 
 
-def test_edit_chat_prompt_without_library_has_no_catalog():
+def test_edit_chat_prompt_without_library_has_no_catalog(monkeypatch, tmp_path):
+    """Настоящая библиотека лежит по пути по умолчанию — отсутствие каталога
+    в промпте проверяется на заведомо несуществующем пути настройки."""
+    monkeypatch.setattr(pptx_templates, "root", lambda: tmp_path / "nowhere")
+
     assert edit_chat.templates_block() == ""
 
 

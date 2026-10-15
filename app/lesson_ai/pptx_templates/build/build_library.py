@@ -170,7 +170,9 @@ def title_slot(text, color=INK, w=12.13, x=0.6, required=True):
 # ---------- шаблоны ----------
 
 
-def template(key, title, purpose, stage, bg, els, anim=(), notes=""):
+def template(key, title, purpose, stage, bg, els, anim=(), follows=None):
+    # follows — украшения-спутники: имя → слот или список слотов («слот:N» —
+    # пунктов меньше N); украшение уходит, когда пусты все его слоты
     return dict(
         key=key,
         title=title,
@@ -179,7 +181,7 @@ def template(key, title, purpose, stage, bg, els, anim=(), notes=""):
         bg=bg,
         els=els,
         anim=list(anim),
-        notes=notes,
+        follows=follows or {},
     )
 
 
@@ -214,6 +216,7 @@ TEMPLATES = [
                 required=False,
             ),
         ],
+        follows={"picture_bg": "picture"},
     ),
     template(
         "today",
@@ -288,6 +291,7 @@ TEMPLATES = [
             ),
         ],
         anim=["highlight"],
+        follows={"picture_bg": "picture"},
     ),
     template(
         "compare",
@@ -372,6 +376,7 @@ TEMPLATES = [
             image_slot("picture", 10.79, 5.04, 1.6),
         ],
         anim=["caption"],
+        follows={"picture_bg": "picture"},
     ),
     template(
         "question_choice",
@@ -429,6 +434,7 @@ TEMPLATES = [
             image_slot("picture", 9.07, 3.07, 3.2),
         ],
         anim=["options", "answer"],
+        follows={"picture_bg": "picture"},
     ),
     template(
         "true_false",
@@ -479,6 +485,7 @@ TEMPLATES = [
             ),
         ],
         anim=["answer"],
+        follows={"picture_bg": "picture"},
     ),
     template(
         "steps",
@@ -517,6 +524,7 @@ TEMPLATES = [
             ),
         ],
         anim=["steps"],
+        follows={"picture_bg": "picture"},
     ),
 ]
 
@@ -550,11 +558,15 @@ TEMPLATES.append(
     template(
         "word_cards",
         "Карточки слов",
-        "1–3 новых слова: слово, картинка, перевод. Пустую карточку убрать (deco:cardN)",
+        "1–3 новых слова: слово, картинка, перевод. Незаполненные карточки убираются сами",
         ["beginning", "middle"],
         GL,
         [title_slot("Новые слова")] + word_card(1, 0.6) + word_card(2, 4.76) + word_card(3, 8.92),
         anim=["translation1", "translation2", "translation3"],
+        follows={
+            "card2": ["word2", "picture2"],
+            "card3": ["word3", "picture3"],
+        },
     )
 )
 
@@ -600,13 +612,14 @@ TEMPLATES.append(
         "table",
         "Таблица",
         "Таблица в 2–3 столбца и до 4 строк: короткие ячейки в одну строку. "
-        "Для двух столбцов убрать col3 и deco:col3_bg",
+        "Без третьего столбца подложка убирается сама",
         ["middle"],
         WHITE,
         [title_slot("Таблица")]
         + table_col(1, 0.6, 3.95, "Столбец 1", ["строка 1", "строка 2", "строка 3"], True)
         + table_col(2, 4.69, 3.95, "Столбец 2", ["строка 1", "строка 2", "строка 3"], True)
         + table_col(3, 8.78, 3.95, "Столбец 3", ["строка 1", "строка 2", "строка 3"], False),
+        follows={"col3_bg": ["col3_head", "col3_items"]},
     )
 )
 
@@ -652,7 +665,7 @@ TEMPLATES.append(
     template(
         "match_pairs",
         "Найди пару",
-        "Соединить пары: 3–4 пункта слева и перемешанные ответы справа. Лишние ряды — deco:rowN",
+        "Соединить пары: 3–4 пункта слева и перемешанные ответы справа. Лишний ряд убирается сам",
         ["middle", "end"],
         WHITE,
         [title_slot("Найди пару")]
@@ -661,6 +674,7 @@ TEMPLATES.append(
             pair_col("left", 0.6, ["один", "два", "три", "четыре"]),
             pair_col("right", 7.83, ["two", "four", "one", "three"]),
         ],
+        follows={"row4": ["left:4", "right:4"]},
     )
 )
 
@@ -705,6 +719,7 @@ TEMPLATES += [
             ),
         ],
         anim=["answer"],
+        follows={"picture_bg": "picture"},
     ),
     template(
         "physical",
@@ -741,6 +756,7 @@ TEMPLATES += [
                 max_items=4,
             ),
         ],
+        follows={"picture_bg": "picture"},
     ),
     template(
         "reflection",
@@ -815,6 +831,7 @@ TEMPLATES += [
             shape("deco:picture_bg", "oval", 9.415, 3.6, 3.3, 3.3, fill=WHITE),
             image_slot("picture", 9.865, 4.05, 2.4),
         ],
+        follows={"picture_bg": "picture"},
     ),
 ]
 
@@ -1210,6 +1227,18 @@ def round_limit(n):
     return n - n % 5 if n >= 20 else n
 
 
+def toml_follows(follows):
+    parts = []
+    for name, slots in follows.items():
+        if isinstance(slots, str):
+            slots = [slots]
+        if len(slots) == 1:
+            parts.append(f'{name} = "{slots[0]}"')
+        else:
+            parts.append(name + " = [" + ", ".join(f'"{s}"' for s in slots) + "]")
+    return "{" + ", ".join(parts) + "}"
+
+
 def catalog(limits):
     out = [CATALOG_HEAD]
     for i, tpl in enumerate(TEMPLATES, 1):
@@ -1239,6 +1268,8 @@ def catalog(limits):
             out.append(f"  required = {'true' if s['required'] else 'false'}")
         out.append("  [template.deco]")
         out.append("  removable = [" + ", ".join(f'"{d}"' for d in decos) + "]")
+        if tpl["follows"]:
+            out.append("  follows = " + toml_follows(tpl["follows"]))
         out.append("  [template.animation]")
         out.append("  default = [" + ", ".join(f'"{a}"' for a in tpl["anim"]) + "]")
         out.append("")
@@ -1275,10 +1306,12 @@ CATALOG_HEAD = """\
 #   кегль ставит исполнитель.
 # - deco:* — украшения: фигура, картинка (true_mark/false_mark — значки
 #   каталога check/cross) или группа (rowN в match_pairs). Удалять можно любую.
-#   Если не заполнена картинка, рядом стоящую подложку deco:picture_bg (и
-#   deco:cardN в word_cards, deco:col3_bg в table, deco:rowN в match_pairs при
-#   меньшем числе пунктов) тоже лучше убрать — сам исполнитель этого не знает,
-#   правило стоит в purpose шаблона.
+#   Украшения-спутники исполнитель убирает сам, модель об этом не просит:
+#   правило — поле follows у [template.deco], имя украшения → слоты, за
+#   которыми оно следует («слот» или «слот:N» — пунктов меньше N, для bullets).
+#   Украшение уходит вместе со слотом, когда пусты все его слоты: пустая
+#   картинка уносит deco:picture_bg, слово3 с картинкой3 — deco:card3, третий
+#   столбец — deco:col3_bg, три пункта вместо четырёх — deco:row4.
 # - Фигуры без префикса — каркас (панели, карточки столбцов), имена panel_*.
 #
 # Шрифты: заголовки Verdana (запасная Tahoma, затем Arial), текст Arial — есть

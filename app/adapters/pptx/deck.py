@@ -17,6 +17,11 @@ python-pptx не умеет копировать слайды, поэтому ш
 лимита каталога или рамки слота — кегль ступенями вниз, но не ниже нижней
 границы (24 pt для слотов, 18 для подписи `caption`), и предупреждение
 в результате проверки — модели при правке, учителю в лог.
+
+Пустой необязательный слот удаляется целиком, с текстом-заполнителем шаблона,
+а украшения из `deco.follows` уходят вместе с опустевшими слотами — на модель
+это не перекладывается. Слот-картинка заменяется рисунком каталога, который
+перенимает имя `slot:<name>`: пунктирной рамки под картинкой не остаётся.
 """
 
 import copy
@@ -141,25 +146,36 @@ def _build_scenario_slide(
     shapes = {shape.name: shape for shape in slide.shapes}
     targets: dict[str, int] = {}
     fills = {f.get("slot"): f for f in item.get("fill") or [] if isinstance(f, dict)}
+    filled: dict[str, int] = {}  # слот → сколько содержимого в него легло
 
     for slot in template.slots:
         shape = shapes.get(f"slot:{slot.name}")
         if shape is None:  # каталог сверяется со слайдами при загрузке — не бывает
             continue
-        fill = fills.get(slot.name)
-        if fill is None:
+        lines = _slot_lines(slot, fills.get(slot.name))
+        if not lines:
+            # Пустой слот: обязательный — предупреждение, необязательный
+            # уходит целиком, вместе с текстом-заполнителем шаблона
             if slot.required:
                 out.warn(number, template.key, f"обязательный слот «{slot.name}» не заполнен")
+            else:
+                _drop_shape(shape)
             continue
-        targets[slot.name] = _fill_slot(slide, shape, slot, fill, lang, number, template.key, out)
+        target, count = _fill_slot(slide, shape, slot, lines, lang, number, template.key, out)
+        if target is not None:
+            targets[slot.name] = target
+        filled[slot.name] = count
+
+    # Украшения-спутники уходят вместе с опустевшими слотами — сами,
+    # без просьбы модели (спека, раздел 3, п. 4)
+    _drop_following(shapes, template, filled)
 
     for name in item.get("remove") or []:
         shape = shapes.get(name) if isinstance(name, str) else None
         if shape is None or not name.startswith("deco:"):
             out.warn(number, template.key, f"удалить {name!r} нельзя — это не украшение шаблона")
             continue
-        if shape._element.getparent() is not None:  # слот мог быть заполнен картинкой
-            shape._element.getparent().remove(shape._element)
+        _drop_shape(shape)  # украшение может быть и группой — снимается целиком
 
     for index, added in enumerate(item.get("add") or [], start=1):
         shape = _add_item(slide, deck, added, number, template.key, out)
@@ -171,6 +187,38 @@ def _build_scenario_slide(
     if notes:
         slide.notes_slide.notes_text_frame.text = notes
     return slide
+
+
+def _slot_lines(slot: Slot, fill: dict | None) -> list[str]:
+    """Содержимое слота непустыми строками; пустой список — слот пуст,
+    как будто сценарий о нём вовсе не писал."""
+    if fill is None:
+        return []
+    if slot.kind == "image":
+        key = (fill.get("image") or "").strip()
+        return [key] if key else []
+    if slot.kind == "bullets":
+        return [line for line in fill.get("items") or [] if line]
+    text = (fill.get("text") or "").strip()
+    return [text] if text else []
+
+
+def _drop_shape(shape) -> None:
+    parent = shape._element.getparent()
+    if parent is not None:  # уже убранный слот или украшение не трогаем
+        parent.remove(shape._element)
+
+
+def _drop_following(shapes: dict, template: DeckTemplate, filled: dict[str, int]) -> None:
+    """Удалить украшения из `deco.follows`: слоты, за которыми украшение
+    следует, пусты или короче указанного числа пунктов — все условия
+    сработали, украшению там делать нечего."""
+    for name, conditions in template.follows.items():
+        shape = shapes.get(f"deco:{name}")
+        if shape is None or shape._element.getparent() is None:
+            continue  # нет на слайде или уже убран сценарием
+        if all(filled.get(slot, 0) < (at_least or 1) for slot, at_least in conditions):
+            _drop_shape(shape)
 
 
 # -- клон шаблонного слайда --------------------------------------------------------
@@ -189,6 +237,11 @@ def _clone_slide(deck, source):
     tree = slide.shapes._spTree
     for shape in list(slide.shapes):
         tree.remove(shape._element)
+    # Фон у шаблонного слайда свой (цвет заливки в `p:bg`), в дерево фигур
+    # он не входит — переносится отдельной первой вершиной `cSld`
+    background = source._element.cSld.find(qn("p:bg"))
+    if background is not None:
+        slide._element.cSld.insert(0, copy.deepcopy(background))
     rid_map: dict[str, str] = {}
     for rel in list(source.part.rels.values()):
         if rel.reltype == RT.SLIDE_LAYOUT:
@@ -228,50 +281,51 @@ def _drop_slides(deck, slides: list) -> None:
 
 
 def _fill_slot(
-    slide, shape, slot: Slot, fill: dict, lang: str, number: int, key: str, out: DeckResult
-) -> int:
+    slide, shape, slot: Slot, lines: list[str], lang: str, number: int, key: str, out: DeckResult
+) -> tuple[int, int]:
     """Вписать содержимое в слот; вернуть id фигуры, которую открывает
-    анимация (у картинки это вставленный рисунок, а не заполнитель)."""
+    анимация (у картинки это вставленный рисунок, а не заполнитель),
+    и сколько содержимого легло (у картинки 1/0 — легла ли)."""
     if slot.kind == "image":
-        return _fill_image(slide, shape, fill, number, key, out)
-    lines = list(fill.get("items") or []) if slot.kind == "bullets" else [fill.get("text") or ""]
-    lines = [line for line in lines if line]
+        return _fill_image(slide, shape, lines[0], number, key, out)
     original = _template_size(shape)
+    floor = slot.min_pt or SLOT_MIN_PT
     limit = _limit(slot)
     if limit and any(len(line) > limit for line in lines):
         out.warn(
             number,
             key,
-            f"слот «{slot.name}»: текст длиннее лимита ({limit} зн.), кегль {SLOT_MIN_PT} pt",
+            f"слот «{slot.name}»: текст длиннее лимита ({limit} зн.), кегль {floor} pt",
         )
-        size = SLOT_MIN_PT
-    elif lines:
-        size = _fit_size(shape, lines, original)
+        size = floor
+    else:
+        size = _fit_size(shape, lines, original, floor)
         if size < original:
             out.warn(
                 number,
                 key,
                 f"слот «{slot.name}»: текст не влезает, кегль снижен до {size} pt",
             )
-    else:
-        size = original
     if slot.kind == "bullets" and slot.max_items and len(lines) > slot.max_items:
         out.warn(number, key, f"слот «{slot.name}»: пунктов {len(lines)} — больше лимита")
     _put_lines(shape, lines, lang=lang, size=size)
-    return shape.shape_id
+    return shape.shape_id, len(lines)
 
 
-def _fill_image(slide, shape, fill: dict, number: int, key: str, out: DeckResult) -> int:
-    key_value = (fill.get("image") or "").strip()
-    image = images.lookup(key_value) if key_value else None
+def _fill_image(
+    slide, shape, key_value: str, number: int, key: str, out: DeckResult
+) -> tuple[int, int]:
+    image = images.lookup(key_value)
     if image is None:
         if key_value:  # пустой ключ молча оставляет слот пустым — как в старой сборке
             out.warn(number, key, f"картинки {key_value!r} нет в каталоге, слот пустой")
-        return shape.shape_id
+        return shape.shape_id, 0
     picture = _insert_picture(slide, image, shape.left, shape.top, shape.width, shape.height)
-    # Заполнитель под картинкой не нужен: рамку держит сам рисунок
-    shape._element.getparent().remove(shape._element)
-    return picture.shape_id
+    # Картинка заменяет рамку и перенимает её имя `slot:<name>`: пунктир
+    # и подпись «картинка» под рисунком остаться не должны (спека, п. 3)
+    picture.name = shape.name
+    _drop_shape(shape)
+    return picture.shape_id, 1
 
 
 def _insert_picture(slide, image, left: int, top: int, width: int, height: int):
@@ -315,15 +369,15 @@ def _limit(slot: Slot) -> int:
     return NUMBER_MAX_CHARS if slot.kind == "number" else 0
 
 
-def _fit_size(shape, lines: list[str], original: int) -> int:
-    """Самый крупный кегль от шаблонного до нижней границы, при котором
-    текст влезает в рамку слота. Расчёт тот же грубый, что у старой сборки:
-    лучше мельче, чем за краем плашки."""
+def _fit_size(shape, lines: list[str], original: int, floor: int) -> int:
+    """Самый крупный кегль от шаблонного до нижней границы (`min_pt` каталога,
+    по умолчанию 24), при котором текст влезает в рамку слота. Расчёт тот же
+    грубый, что у старой сборки: лучше мельче, чем за краем плашки."""
     frame = shape.text_frame
     inner_w = shape.width / 914400 - (frame.margin_left + frame.margin_right) / 914400
     inner_h = shape.height / 914400 - (frame.margin_top + frame.margin_bottom) / 914400
     # Шаблон мельче границы — граница не сильнее дизайнера
-    sizes = tuple(range(original, SLOT_MIN_PT - 1, -2)) if original > SLOT_MIN_PT else (original,)
+    sizes = tuple(range(original, floor - 1, -2)) if original > floor else (original,)
     return _fit(lines, inner_w, inner_h, sizes)
 
 
@@ -426,22 +480,22 @@ def _percent(value, total: int) -> Emu:
 def _apply_animation(slide, template: DeckTemplate, item: dict, targets: dict, number, out):
     animation = item.get("animation") or {}
     effect = animation.get("effect") or "appear"
-    order = [
-        name
-        for name in animation.get("order") or []
-        if isinstance(name, str)
-    ] or template.default_order
+    model_order = [name for name in animation.get("order") or [] if isinstance(name, str)]
+    order = model_order or template.default_order
     if effect == "none" or not order:
         return
     groups = []
     for name in order:
         shape_id = targets.get(name)
         if shape_id is None:
-            out.warn(
-                number,
-                template.key,
-                f"в animation.order имя {name!r} — не слот и не add этого слайда",
-            )
+            # В умолчании каталога нет пустых слотов — это нормально; чужое
+            # имя в порядке от модели — ошибка, о ней и говорим
+            if model_order:
+                out.warn(
+                    number,
+                    template.key,
+                    f"в animation.order имя {name!r} — не слот и не add этого слайда",
+                )
             continue
         groups.append([Target(shape_id)])
     if groups:

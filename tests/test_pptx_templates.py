@@ -67,6 +67,25 @@ def test_removable_and_animation_point_at_real_shapes(catalog, slides):
         assert set(t["animation"]["default"]) <= slots, t["key"]
 
 
+def test_follows_point_at_real_slots(catalog):
+    """Украшение-спутник следует за настоящими слотами шаблона; число пунктов
+    («слот:N») — только у bullets и в пределах max_items."""
+    for t in catalog:
+        slots = {s["name"]: s for s in t["slot"]}
+        for deco, value in (t["deco"].get("follows") or {}).items():
+            conditions = value if isinstance(value, list) else [value]
+            assert deco in t["deco"]["removable"], (t["key"], deco)
+            for condition in conditions:
+                name, _, count = str(condition).partition(":")
+                assert name in slots, (t["key"], deco, condition)
+                if count:
+                    slot = slots[name]
+                    assert slot["kind"] == "bullets" and int(count) <= slot["max_items"], (
+                        t["key"],
+                        condition,
+                    )
+
+
 def test_text_slots_are_large_enough_for_the_board(catalog, slides):
     # Смарт-доска с пяти метров: текст в слотах не мельче 24 pt
     for t, slide in zip(catalog, slides, strict=True):

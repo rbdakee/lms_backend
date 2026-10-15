@@ -27,10 +27,12 @@
 #   кегль ставит исполнитель.
 # - deco:* — украшения: фигура, картинка (true_mark/false_mark — значки
 #   каталога check/cross) или группа (rowN в match_pairs). Удалять можно любую.
-#   Если не заполнена картинка, рядом стоящую подложку deco:picture_bg (и
-#   deco:cardN в word_cards, deco:col3_bg в table, deco:rowN в match_pairs при
-#   меньшем числе пунктов) тоже лучше убрать — сам исполнитель этого не знает,
-#   правило стоит в purpose шаблона.
+#   Украшения-спутники исполнитель убирает сам, модель об этом не просит:
+#   правило — поле follows у [template.deco], имя украшения → слоты, за
+#   которыми оно следует («слот» или «слот:N» — пунктов меньше N, для bullets).
+#   Украшение уходит вместе со слотом, когда пусты все его слоты: пустая
+#   картинка уносит deco:picture_bg, слово3 с картинкой3 — deco:card3, третий
+#   столбец — deco:col3_bg, три пункта вместо четырёх — deco:row4.
 # - Фигуры без префикса — каркас (панели, карточки столбцов), имена panel_*.
 #
 # Шрифты: заголовки Verdana (запасная Tahoma, затем Arial), текст Arial — есть
@@ -60,6 +62,7 @@ stage = ["beginning"]
   required = false
   [template.deco]
   removable = ["wave_back", "wave_front", "sun", "picture_bg"]
+  follows = { picture_bg = "picture" }
   [template.animation]
   default = []
 
@@ -121,6 +124,7 @@ stage = ["middle"]
   required = false
   [template.deco]
   removable = ["picture_bg"]
+  follows = { picture_bg = "picture" }
   [template.animation]
   default = ["highlight"]
 
@@ -197,6 +201,7 @@ stage = ["middle", "end"]
   required = false
   [template.deco]
   removable = ["sun", "picture_bg"]
+  follows = { picture_bg = "picture" }
   [template.animation]
   default = ["caption"]
 
@@ -228,6 +233,7 @@ stage = ["middle", "end"]
   required = false
   [template.deco]
   removable = ["badge", "picture_bg"]
+  follows = { picture_bg = "picture" }
   [template.animation]
   default = ["options", "answer"]
 
@@ -253,6 +259,7 @@ stage = ["beginning", "middle", "end"]
   required = false
   [template.deco]
   removable = ["picture_bg", "true_mark", "false_mark"]
+  follows = { picture_bg = "picture" }
   [template.animation]
   default = ["answer"]
 
@@ -279,6 +286,7 @@ stage = ["middle"]
   required = false
   [template.deco]
   removable = ["sun", "picture_bg"]
+  follows = { picture_bg = "picture" }
   [template.animation]
   default = ["steps"]
 
@@ -286,7 +294,7 @@ stage = ["middle"]
 key = "word_cards"
 slide = 9
 title = "Карточки слов"
-purpose = "1–3 новых слова: слово, картинка, перевод. Пустую карточку убрать (deco:cardN)"
+purpose = "1–3 новых слова: слово, картинка, перевод. Незаполненные карточки убираются сами"
 stage = ["beginning", "middle"]
   [[template.slot]]
   name = "title"
@@ -337,6 +345,7 @@ stage = ["beginning", "middle"]
   required = false
   [template.deco]
   removable = ["card1", "card2", "card3"]
+  follows = { card2 = ["word2", "picture2"], card3 = ["word3", "picture3"] }
   [template.animation]
   default = ["translation1", "translation2", "translation3"]
 
@@ -344,7 +353,7 @@ stage = ["beginning", "middle"]
 key = "table"
 slide = 10
 title = "Таблица"
-purpose = "Таблица в 2–3 столбца и до 4 строк: короткие ячейки в одну строку. Для двух столбцов убрать col3 и deco:col3_bg"
+purpose = "Таблица в 2–3 столбца и до 4 строк: короткие ячейки в одну строку. Без третьего столбца подложка убирается сама"
 stage = ["middle"]
   [[template.slot]]
   name = "title"
@@ -386,6 +395,7 @@ stage = ["middle"]
   required = false
   [template.deco]
   removable = ["col1_bg", "col2_bg", "col3_bg"]
+  follows = { col3_bg = ["col3_head", "col3_items"] }
   [template.animation]
   default = []
 
@@ -393,7 +403,7 @@ stage = ["middle"]
 key = "match_pairs"
 slide = 11
 title = "Найди пару"
-purpose = "Соединить пары: 3–4 пункта слева и перемешанные ответы справа. Лишние ряды — deco:rowN"
+purpose = "Соединить пары: 3–4 пункта слева и перемешанные ответы справа. Лишний ряд убирается сам"
 stage = ["middle", "end"]
   [[template.slot]]
   name = "title"
@@ -414,6 +424,7 @@ stage = ["middle", "end"]
   required = true
   [template.deco]
   removable = ["row1", "row2", "row3", "row4"]
+  follows = { row4 = ["left:4", "right:4"] }
   [template.animation]
   default = []
 
@@ -444,6 +455,7 @@ stage = ["middle"]
   required = false
   [template.deco]
   removable = ["picture_bg", "answer_box"]
+  follows = { picture_bg = "picture" }
   [template.animation]
   default = ["answer"]
 
@@ -470,6 +482,7 @@ stage = ["middle"]
   required = false
   [template.deco]
   removable = ["wave", "picture_bg", "dot"]
+  follows = { picture_bg = "picture" }
   [template.animation]
   default = []
 
@@ -504,6 +517,7 @@ stage = ["end"]
   required = false
   [template.deco]
   removable = ["mood_bg"]
+  follows = { mood_bg = ["mood1", "mood2", "mood3"] }
   [template.animation]
   default = []
 
@@ -535,5 +549,6 @@ stage = ["end"]
   required = false
   [template.deco]
   removable = ["picture_bg"]
+  follows = { picture_bg = "picture" }
   [template.animation]
   default = []

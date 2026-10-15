@@ -17,6 +17,7 @@ from pathlib import Path
 
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
 from app.lesson_ai import images
@@ -90,6 +91,10 @@ stage = ["middle", "end"]
   name = "picture"
   kind = "image"
 
+  [template.deco]
+  removable = ["picture_bg"]
+  follows = { picture_bg = "picture" }
+
   [template.animation]
   default = ["options", "answer"]
 
@@ -126,7 +131,11 @@ def build(directory: Path) -> Path:
 
     cover = deck.slides.add_slide(blank)
     _text(cover, "slot:topic", 0.9, 2.0, 11.5, 2.2, 44, "Тема урока")
-    _deco(cover, "deco:border", 0.4, 0.4, 12.5, 6.7)
+    # Рамка-украшение как группа: декорация может быть и группой фигур
+    border = cover.shapes.add_group_shape()
+    _deco(border.shapes, "border-part-1", 0.4, 0.4, 12.5, 0.25)
+    _deco(border.shapes, "border-part-2", 0.4, 6.85, 12.5, 0.25)
+    border.name = "deco:border"
 
     fact = deck.slides.add_slide(blank)
     _text(fact, "slot:number", 0.9, 1.4, 11.5, 2.8, 96, "42")
@@ -134,14 +143,15 @@ def build(directory: Path) -> Path:
 
     question = deck.slides.add_slide(blank)
     _text(question, "slot:question", 0.9, 0.6, 11.5, 1.5, 36, "Вопрос?")
-    _text(question, "slot:options", 0.9, 2.4, 7.0, 3.4, 28, "Вариант")
+    _bullets(question, "slot:options", 0.9, 2.4, 7.0, 3.4, 28, "Вариант", "alphaUcPeriod")
     _text(question, "slot:answer", 0.9, 6.0, 11.5, 1.0, 32, "Ответ")
+    _deco(question.shapes, "deco:picture_bg", 8.5, 2.3, 4.0, 3.6)
     _frame(question, "slot:picture", 8.6, 2.4, 3.8, 3.4)
 
     steps = deck.slides.add_slide(blank)
     _text(steps, "slot:title", 0.9, 0.5, 11.5, 1.2, 40, "Шаги")
-    _text(steps, "slot:steps", 0.9, 2.0, 11.5, 4.6, 28, "Шаг")
-    _deco(steps, "deco:wave", 0.0, 6.9, 13.34, 0.6)
+    _bullets(steps, "slot:steps", 0.9, 2.0, 11.5, 4.6, 28, "Шаг", "arabicPeriod")
+    _deco(steps.shapes, "deco:wave", 0.0, 6.9, 13.34, 0.6)
     # Настоящая картинка со связью: клон слайда обязан перевезти и её
     blob = (images.FILES / "check.png").read_bytes()
     picture = steps.shapes.add_picture(BytesIO(blob), Inches(10.2), Inches(0.4), Inches(1.4))
@@ -169,10 +179,23 @@ def _text(slide, name: str, x: float, y: float, w: float, h: float, pt: int, tex
     return box
 
 
-def _deco(slide, name: str, x: float, y: float, w: float, h: float):
-    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+def _deco(shapes, name: str, x: float, y: float, w: float, h: float):
+    """Украшение; первый аргумент — коллекция фигур слайда или группы."""
+    shape = shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
     shape.name = name
     return shape
+
+
+def _bullets(
+    slide, name: str, x: float, y: float, w: float, h: float, pt: int, text: str, num_type: str
+):
+    """Слот-список с автонумерацией шаблона: исполнитель обязан сохранять
+    её в каждом пункте (`buAutoNum` в `pPr` абзаца-образца)."""
+    box = _text(slide, name, x, y, w, h, pt, text)
+    ppr = box.text_frame.paragraphs[0]._p.get_or_add_pPr()
+    num = ppr.makeelement(qn("a:buAutoNum"), {"type": num_type})
+    ppr.append(num)
+    return box
 
 
 def _frame(slide, name: str, x: float, y: float, w: float, h: float):
