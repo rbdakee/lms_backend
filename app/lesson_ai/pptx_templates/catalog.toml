@@ -1,0 +1,554 @@
+# Каталог шаблонных слайдов «Жоспара» — PPTX_TEMPLATES_SPEC.md, раздел 1.
+# Записи идут в порядке слайдов library.pptx; slide — номер слайда с 1.
+# Собрано build/build_library.py из одного описания геометрии; правка руками
+# в library.pptx без правки скрипта разойдётся со снимками previews/.
+#
+# Как устроены слоты (для исполнителя):
+# - text / number — одна фигура, один абзац с одним run. Формат (шрифт, кегль,
+#   цвет, жирность) брать из rPr первого run и вписывать текст в него.
+# - bullets — одна фигура, абзац на пункт. Новый пункт — копия pPr/rPr первого
+#   абзаца; маркер или автонумерация уже в pPr (buChar / buAutoNum).
+#   В table и match_pairs пункты — ряды: шаг ряда держится интервалом после
+#   абзаца, поэтому ячейка обязана помещаться в одну строку (max_chars).
+# - image — прямоугольник с пунктирной рамкой и подписью «картинка». Его
+#   заменяют картинкой каталога, вписанной в рамку с сохранением пропорций
+#   (рамки квадратные, картинки каталога 192x192), а сам прямоугольник удаляют;
+#   имя slot:<name> лучше перенести на картинку.
+# - Незаполненный необязательный слот исполнитель удаляет целиком: в шаблоне
+#   стоит текст-заполнитель («Тема урока», «картинка»), в комплект он попасть
+#   не должен. У answer/highlight/statement/prompts/tasks/page плашка — это
+#   сама фигура слота, она уходит вместе с ним.
+# - Кегль: в шаблоне стоит номинальный (текст 26–32 pt, заголовки 36–48 pt,
+#   number 40–88 pt). max_chars — вместимость при номинальном кегле с запасом
+#   10 % (замерено в браузере теми же шрифтами, для bullets — при max_items
+#   пунктах). Превышение — уменьшать кегль, но не ниже 24 pt, и предупреждать.
+#   В фигурах включено «сжать текст при переполнении» (normAutofit) — это для
+#   ручной правки в PowerPoint; при открытии PowerPoint его не пересчитывает,
+#   кегль ставит исполнитель.
+# - deco:* — украшения: фигура, картинка (true_mark/false_mark — значки
+#   каталога check/cross) или группа (rowN в match_pairs). Удалять можно любую.
+#   Украшения-спутники исполнитель убирает сам, модель об этом не просит:
+#   правило — поле follows у [template.deco], имя украшения → слоты, за
+#   которыми оно следует («слот» или «слот:N» — пунктов меньше N, для bullets).
+#   Украшение уходит вместе со слотом, когда пусты все его слоты: пустая
+#   картинка уносит deco:picture_bg, слово3 с картинкой3 — deco:card3, третий
+#   столбец — deco:col3_bg, три пункта вместо четырёх — deco:row4.
+# - Фигуры без префикса — каркас (панели, карточки столбцов), имена panel_*.
+#
+# Шрифты: заголовки Verdana (запасная Tahoma, затем Arial), текст Arial — есть
+# на Windows и macOS, все казахские буквы на месте. Шрифты не встраиваются.
+# Палитра: основной 1F7A5C, акцент FFC233, нейтральные E6F3EC / FFF0C2 / 1C2B33.
+
+
+[[template]]
+key = "title"
+slide = 1
+title = "Титульный"
+purpose = "Первый слайд: тема урока, предмет и класс, картинка темы"
+stage = ["beginning"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 30
+  required = true
+  [[template.slot]]
+  name = "subtitle"
+  kind = "text"
+  max_chars = 60
+  required = false
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["wave_back", "wave_front", "sun", "picture_bg"]
+  follows = { picture_bg = "picture" }
+  [template.animation]
+  default = []
+
+[[template]]
+key = "today"
+slide = 2
+title = "Сегодня на уроке"
+purpose = "План урока для детей: 3–5 коротких пунктов, что будем делать"
+stage = ["beginning"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 20
+  required = true
+  [[template.slot]]
+  name = "items"
+  kind = "bullets"
+  max_chars = 30
+  max_items = 5
+  required = true
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["panel", "sun"]
+  [template.animation]
+  default = []
+
+[[template]]
+key = "explain"
+slide = 3
+title = "Объяснение с картинкой"
+purpose = "Новое правило или понятие: короткое объяснение, картинка и главное в жёлтой плашке"
+stage = ["middle"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 30
+  required = true
+  [[template.slot]]
+  name = "body"
+  kind = "text"
+  max_chars = 210
+  required = true
+  [[template.slot]]
+  name = "highlight"
+  kind = "text"
+  max_chars = 55
+  required = false
+  [[template.slot]]
+  name = "caption"
+  kind = "text"
+  max_chars = 35
+  required = false
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["picture_bg"]
+  follows = { picture_bg = "picture" }
+  [template.animation]
+  default = ["highlight"]
+
+[[template]]
+key = "compare"
+slide = 4
+title = "Два столбца"
+purpose = "Сравнение двух групп или правил: заголовок и 2–4 пункта в каждом столбце"
+stage = ["middle"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 30
+  required = true
+  [[template.slot]]
+  name = "left_title"
+  kind = "text"
+  max_chars = 20
+  required = true
+  [[template.slot]]
+  name = "left_items"
+  kind = "bullets"
+  max_chars = 20
+  max_items = 4
+  required = true
+  [[template.slot]]
+  name = "right_title"
+  kind = "text"
+  max_chars = 20
+  required = true
+  [[template.slot]]
+  name = "right_items"
+  kind = "bullets"
+  max_chars = 20
+  max_items = 4
+  required = true
+  [[template.slot]]
+  name = "left_picture"
+  kind = "image"
+  required = false
+  [[template.slot]]
+  name = "right_picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = []
+  [template.animation]
+  default = ["right_items"]
+
+[[template]]
+key = "big_fact"
+slide = 5
+title = "Крупный факт"
+purpose = "Одно число, слово или формула крупно и короткое пояснение — запомнить"
+stage = ["middle", "end"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 25
+  required = false
+  [[template.slot]]
+  name = "number"
+  kind = "number"
+  max_chars = 12
+  required = true
+  [[template.slot]]
+  name = "caption"
+  kind = "text"
+  max_chars = 115
+  required = false
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["sun", "picture_bg"]
+  follows = { picture_bg = "picture" }
+  [template.animation]
+  default = ["caption"]
+
+[[template]]
+key = "question_choice"
+slide = 6
+title = "Вопрос с вариантами"
+purpose = "Проверка понимания: вопрос, 2–4 варианта, ответ раскрывается по клику"
+stage = ["middle", "end"]
+  [[template.slot]]
+  name = "question"
+  kind = "text"
+  max_chars = 60
+  required = true
+  [[template.slot]]
+  name = "options"
+  kind = "bullets"
+  max_chars = 25
+  max_items = 4
+  required = true
+  [[template.slot]]
+  name = "answer"
+  kind = "text"
+  max_chars = 30
+  required = false
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["badge", "picture_bg"]
+  follows = { picture_bg = "picture" }
+  [template.animation]
+  default = ["options", "answer"]
+
+[[template]]
+key = "true_false"
+slide = 7
+title = "Верно или неверно"
+purpose = "Утверждение, класс показывает «верно/неверно», объяснение ответа по клику"
+stage = ["beginning", "middle", "end"]
+  [[template.slot]]
+  name = "statement"
+  kind = "text"
+  max_chars = 120
+  required = true
+  [[template.slot]]
+  name = "answer"
+  kind = "text"
+  max_chars = 60
+  required = false
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["picture_bg", "true_mark", "false_mark"]
+  follows = { picture_bg = "picture" }
+  [template.animation]
+  default = ["answer"]
+
+[[template]]
+key = "steps"
+slide = 8
+title = "Шаги"
+purpose = "Порядок действий: 3–5 пронумерованных шагов алгоритма или инструкции"
+stage = ["middle"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 25
+  required = true
+  [[template.slot]]
+  name = "steps"
+  kind = "bullets"
+  max_chars = 60
+  max_items = 5
+  required = true
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["sun", "picture_bg"]
+  follows = { picture_bg = "picture" }
+  [template.animation]
+  default = ["steps"]
+
+[[template]]
+key = "word_cards"
+slide = 9
+title = "Карточки слов"
+purpose = "1–3 новых слова: слово, картинка, перевод. Незаполненные карточки убираются сами"
+stage = ["beginning", "middle"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 30
+  required = true
+  [[template.slot]]
+  name = "word1"
+  kind = "text"
+  max_chars = 11
+  required = true
+  [[template.slot]]
+  name = "translation1"
+  kind = "text"
+  max_chars = 30
+  required = false
+  [[template.slot]]
+  name = "word2"
+  kind = "text"
+  max_chars = 11
+  required = false
+  [[template.slot]]
+  name = "translation2"
+  kind = "text"
+  max_chars = 30
+  required = false
+  [[template.slot]]
+  name = "word3"
+  kind = "text"
+  max_chars = 11
+  required = false
+  [[template.slot]]
+  name = "translation3"
+  kind = "text"
+  max_chars = 30
+  required = false
+  [[template.slot]]
+  name = "picture1"
+  kind = "image"
+  required = true
+  [[template.slot]]
+  name = "picture2"
+  kind = "image"
+  required = false
+  [[template.slot]]
+  name = "picture3"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["card1", "card2", "card3"]
+  follows = { card2 = ["word2", "picture2"], card3 = ["word3", "picture3"] }
+  [template.animation]
+  default = ["translation1", "translation2", "translation3"]
+
+[[template]]
+key = "table"
+slide = 10
+title = "Таблица"
+purpose = "Таблица в 2–3 столбца и до 4 строк: короткие ячейки в одну строку. Без третьего столбца подложка убирается сама"
+stage = ["middle"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 30
+  required = true
+  [[template.slot]]
+  name = "col1_head"
+  kind = "text"
+  max_chars = 17
+  required = true
+  [[template.slot]]
+  name = "col1_items"
+  kind = "bullets"
+  max_chars = 18
+  max_items = 4
+  required = true
+  [[template.slot]]
+  name = "col2_head"
+  kind = "text"
+  max_chars = 17
+  required = true
+  [[template.slot]]
+  name = "col2_items"
+  kind = "bullets"
+  max_chars = 18
+  max_items = 4
+  required = true
+  [[template.slot]]
+  name = "col3_head"
+  kind = "text"
+  max_chars = 17
+  required = false
+  [[template.slot]]
+  name = "col3_items"
+  kind = "bullets"
+  max_chars = 18
+  max_items = 4
+  required = false
+  [template.deco]
+  removable = ["col1_bg", "col2_bg", "col3_bg"]
+  follows = { col3_bg = ["col3_head", "col3_items"] }
+  [template.animation]
+  default = []
+
+[[template]]
+key = "match_pairs"
+slide = 11
+title = "Найди пару"
+purpose = "Соединить пары: 3–4 пункта слева и перемешанные ответы справа. Лишний ряд убирается сам"
+stage = ["middle", "end"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 30
+  required = true
+  [[template.slot]]
+  name = "left"
+  kind = "bullets"
+  max_chars = 19
+  max_items = 4
+  required = true
+  [[template.slot]]
+  name = "right"
+  kind = "bullets"
+  max_chars = 19
+  max_items = 4
+  required = true
+  [template.deco]
+  removable = ["row1", "row2", "row3", "row4"]
+  follows = { row4 = ["left:4", "right:4"] }
+  [template.animation]
+  default = []
+
+[[template]]
+key = "task_answer"
+slide = 12
+title = "Задание с местом для ответа"
+purpose = "Задание классу; рамка для ответа на доске, ответ появляется по клику"
+stage = ["middle"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 20
+  required = true
+  [[template.slot]]
+  name = "task"
+  kind = "text"
+  max_chars = 160
+  required = true
+  [[template.slot]]
+  name = "answer"
+  kind = "text"
+  max_chars = 120
+  required = false
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["picture_bg", "answer_box"]
+  follows = { picture_bg = "picture" }
+  [template.animation]
+  default = ["answer"]
+
+[[template]]
+key = "physical"
+slide = 13
+title = "Физминутка"
+purpose = "Короткая разминка: 2–4 движения, которые дети повторяют за учителем"
+stage = ["middle"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 14
+  required = true
+  [[template.slot]]
+  name = "moves"
+  kind = "bullets"
+  max_chars = 25
+  max_items = 4
+  required = true
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["wave", "picture_bg", "dot"]
+  follows = { picture_bg = "picture" }
+  [template.animation]
+  default = []
+
+[[template]]
+key = "reflection"
+slide = 14
+title = "Рефлексия"
+purpose = "Итог урока: 2–3 начала фраз для детей и шкала настроения"
+stage = ["end"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 30
+  required = true
+  [[template.slot]]
+  name = "prompts"
+  kind = "bullets"
+  max_chars = 55
+  max_items = 3
+  required = true
+  [[template.slot]]
+  name = "mood1"
+  kind = "image"
+  required = false
+  [[template.slot]]
+  name = "mood2"
+  kind = "image"
+  required = false
+  [[template.slot]]
+  name = "mood3"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["mood_bg"]
+  follows = { mood_bg = ["mood1", "mood2", "mood3"] }
+  [template.animation]
+  default = []
+
+[[template]]
+key = "homework"
+slide = 15
+title = "Домашнее задание"
+purpose = "Домашнее задание: 1–3 пункта, страница или номер упражнения"
+stage = ["end"]
+  [[template.slot]]
+  name = "title"
+  kind = "text"
+  max_chars = 20
+  required = true
+  [[template.slot]]
+  name = "tasks"
+  kind = "bullets"
+  max_chars = 60
+  max_items = 3
+  required = true
+  [[template.slot]]
+  name = "page"
+  kind = "number"
+  max_chars = 7
+  required = false
+  [[template.slot]]
+  name = "picture"
+  kind = "image"
+  required = false
+  [template.deco]
+  removable = ["picture_bg"]
+  follows = { picture_bg = "picture" }
+  [template.animation]
+  default = []

@@ -41,7 +41,7 @@ from app.adapters.db.models import LessonMaterial, User
 from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService
 from app.domain.lesson_ai import KIND_TITLES_RU, MATERIAL_KINDS, objective_codes_in
-from app.lesson_ai import images, order_tools
+from app.lesson_ai import images, order_tools, pptx_templates
 from app.lesson_ai.context import strip_codes_deep
 
 GET_MATERIAL = "get_material"
@@ -79,16 +79,38 @@ INDEX_PROPERTY = {
     "minimum": 1,
     "description": "Номер пункта в блоке, считая с единицы, как в оглавлении.",
 }
-ITEM_PROPERTY = {
-    "type": ["object", "string"],
-    "description": (
+
+
+def _item_description() -> str:
+    """Форма слайда в описании инструмента — как в этой установке собирается
+    презентация. Выбирается один раз при старте: с библиотекой шаблонов слайд
+    — сценарий, без неё — прежние восемь типов."""
+    tail = (
+        " Ключ картинки — только из find_image; пункт из строк — строка."
+        " Текст — на языке комплекта. Кодов целей обучения в тексте нет."
+    )
+    if pptx_templates.available():
+        return (
+            "Новый пункт той же формы, что остальные пункты этого блока (посмотри блок"
+            " через get_block): слайд — объект-сценарий с полями template (ключ из"
+            " каталога шаблонов в системном промпте), fill (по записи на слот шаблона:"
+            " slot, text, items, image), remove, add, animation, notes — что писать в"
+            " каждое, сказано в описаниях полей слайда. Старые слайды комплекта бывают"
+            " прежней формы (layout, title, lines, image, notes) — новую пиши в форме"
+            " соседей по блоку." + tail
+        )
+    return (
         "Новый пункт той же формы, что остальные пункты этого блока (посмотри блок"
         " через get_block): слайд — объект со всеми полями слайда (layout, title, lines,"
         " left_title, right_title, right_lines, fact, answer, image, animation, visual,"
         " notes — какое когда заполнять, сказано в описании слайда; чужие типу поля"
-        " пустые); ключ картинки — только из find_image; пункт из строк — строка."
-        " Текст — на языке комплекта. Кодов целей обучения в тексте нет."
-    ),
+        " пустые)." + tail
+    )
+
+
+ITEM_PROPERTY = {
+    "type": ["object", "string"],
+    "description": _item_description(),
 }
 
 

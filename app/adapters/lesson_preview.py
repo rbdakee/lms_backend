@@ -42,6 +42,20 @@ MAX_ROW_EM = 24.0
 BORDER = {"single": "solid", "dashed": "dashed", "dotted": "dotted", "double": "double"}
 JC = {"center": "center", "right": "right", "end": "right", "both": "justify"}
 
+# Автонумерация списков: тип из `buAutoNum` шаблона — то, что в PowerPoint
+# увидит учитель (у вопроса с вариантами — буквы A. B. C., у шагов — 1. 2. 3.)
+NUMERALS = {
+    "arabicPeriod": lambda n: f"{n}.",
+    "alphaUcPeriod": lambda n: f"{chr(64 + n)}.",
+    "alphaLcPeriod": lambda n: f"{chr(96 + n)}.",
+}
+
+
+def _auto_num(kind: str | None, number: int) -> str:
+    if kind in ("alphaUcPeriod", "alphaLcPeriod") and not 1 <= number <= 26:
+        kind = "arabicPeriod"  # буквы кончились — дальше нумеруем цифрами
+    return NUMERALS.get(kind, NUMERALS["arabicPeriod"])(number)
+
 STYLE = """
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -343,11 +357,15 @@ def _frame(frame, width: int) -> str:
             css.append(f"margin-bottom:{_cqw(paragraph.space_after, width)}")
         ppr = paragraph._p.pPr
         marker = ""
-        if ppr is not None and ppr.find(qn("a:buAutoNum")) is not None:
-            count += 1
-            marker = f"{count}. "
-        elif ppr is not None and ppr.find(qn("a:buChar")) is not None:
-            marker = "\u2022 "
+        if ppr is not None:
+            auto = ppr.find(qn("a:buAutoNum"))
+            bullet = ppr.find(qn("a:buChar"))
+            if auto is not None:
+                count += 1
+                marker = f"{_auto_num(auto.get('type'), count)} "
+            elif bullet is not None:
+                # Маркер — содержимое файла, в HTML идёт экранированным
+                marker = f"{escape(bullet.get('char') or '\u2022')} "
         runs = []
         for run in paragraph.runs:
             font = run.font

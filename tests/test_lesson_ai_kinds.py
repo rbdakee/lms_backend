@@ -238,7 +238,10 @@ def test_kind_specs_follow_generation_order():
 def test_sample_is_valid_and_has_no_code(kind):
     """Образец — настоящий ответ модели: не ляжет в схему он — значит, схема
     разошлась с тем, что модель умеет писать."""
-    SPEC[kind].draft.model_validate(sample(kind))
+    # Образец презентации — старой формы слайдов: с библиотекой шаблонов модель
+    # пишет сценарий колоды, но старые уроки в базе живут, и проверка ответа
+    # (`validation_draft`) обязана принимать обе формы
+    (SPEC[kind].validation_draft or SPEC[kind].draft).model_validate(sample(kind))
 
     assert objective_codes_in(sample(kind)) == []
 

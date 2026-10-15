@@ -267,6 +267,12 @@ class Settings(BaseSettings):
     # страниц покрывает одну тему урока с запасом.
     lesson_ai_attach_max_pdf_pages: int = 20
 
+    # Библиотека шаблонов презентации (PPTX_TEMPLATES_SPEC, раздел 1):
+    # `library.pptx` + `catalog.toml`. Пусто — каталог рядом с кодом
+    # (`app/lesson_ai/pptx_templates/`). Библиотеки нет — вид `presentation`
+    # работает по-старому, восемью типами слайдов (предупреждение при старте).
+    pptx_templates_dir: str = ""
+
     @property
     def lesson_ai_on(self) -> bool:
         """Есть ли «Жоспар» в этой установке — по той же логике, что у ассистента:
@@ -376,6 +382,16 @@ def check_providers(cfg: Settings) -> None:
     check_platform_origins(cfg)
     check_platform_verify_urls(cfg)
     check_zai(cfg)
+    check_pptx_templates(cfg)
+
+
+def check_pptx_templates(cfg: Settings) -> None:
+    """Библиотека шаблонов презентации проверяется при старте. Локальный
+    импорт: модуль библиотеки сам читает настройки, и верхнеуровневый
+    импорт зациклил бы `app.config`."""
+    from app.lesson_ai import pptx_templates
+
+    pptx_templates.check_start()
 
 
 def check_zai(cfg: Settings) -> None:
