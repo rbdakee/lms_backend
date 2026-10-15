@@ -140,22 +140,19 @@ class SubjectSpec:
     # иностранных языков в приказе — на изучаемом языке в обеих редакциях.
     # None — цели на языке редакции (русская по-русски, казахская по-казахски)
     objectives_language: str | None = None
-    # Ключ картинки из каталога презентаций (`lesson_ai/images`): значок на чипе
-    # предмета. Тот же набор, что в слайдах, чтобы стиль был один.
-    icon: str = ""
 
 
 def _subject(code: str, title: str, name_ru: str, name_kz: str,
              grades: tuple[int, ...],
              instruction: tuple[str, str] | None = None,
-             objectives_language: str | None = None, *, icon: str,
+             objectives_language: str | None = None, *,
              title_kz: str | None = None) -> SubjectSpec:
     """Запись реестра. Казахское название для показа не задано — значит
     по-казахски предмет звучит как в приказе, и это самая частая ситуация."""
     return SubjectSpec(code=code, title=title, title_kz=title_kz or name_kz,
                        name_ru=name_ru, name_kz=name_kz,
                        grades=grades, instruction=instruction,
-                       objectives_language=objectives_language, icon=icon)
+                       objectives_language=objectives_language)
 
 
 # Скобка языка обучения в шапке приложения. «С казахским» не лежит внутри
@@ -171,22 +168,22 @@ _INSTR_NOT_RU = (r"с\s+нерусским\s+языком\s+обучения",
 _SUBJECTS: dict[str, SubjectSpec] = {
     spec.code: spec
     for spec in (
-        _subject("math", "Математика", "Математика", "Математика", (1, 2, 3, 4), icon="numbers"),
-        _subject("music", "Музыка", "Музыка", "Музыка", (1, 2, 3, 4), icon="music_notes"),
+        _subject("math", "Математика", "Математика", "Математика", (1, 2, 3, 4)),
+        _subject("music", "Музыка", "Музыка", "Музыка", (1, 2, 3, 4)),
         _subject("labor", "Трудовое обучение", "Трудовое обучение",
-                 "Еңбекке баулу", (1, 2, 3, 4), icon="hammer"),
+                 "Еңбекке баулу", (1, 2, 3, 4)),
         _subject("art", "Изобразительное искусство", "Изобразительное искусство",
-                 "Бейнелеу өнері", (1, 2, 3, 4), icon="palette"),
+                 "Бейнелеу өнері", (1, 2, 3, 4)),
         # «Художественный труд» 3-4 сюда не входит: приложение 32 приказа № 399
         # исключено приказом № 323 от 05.11.2024 (действует с 01.09.2025)
         _subject("physical_culture", "Физическая культура", "Физическая культура",
-                 "Дене шынықтыру", (1, 2, 3, 4), icon="soccer"),
+                 "Дене шынықтыру", (1, 2, 3, 4)),
         _subject("world_around", "Познание мира", "Познание мира",
-                 "Дүниетану", (1, 2, 3, 4), icon="globe"),
+                 "Дүниетану", (1, 2, 3, 4)),
         _subject("natural_science", "Естествознание", "Естествознание",
-                 "Жаратылыстану", (1, 2, 3, 4), icon="microscope"),
+                 "Жаратылыстану", (1, 2, 3, 4)),
         _subject("digital_literacy", "Цифровая грамотность",
-                 "Цифровая грамотность", "Цифрлық сауаттылық", (1, 2, 3, 4), icon="laptop"),
+                 "Цифровая грамотность", "Цифрлық сауаттылық", (1, 2, 3, 4)),
         # Языковые предметы. Вариант программы по языку обучения — это отдельный
         # предмет со своим кодом, а не поле: схема базы одна на все предметы,
         # а цели у вариантов разные («Казахский язык» для школ с русским
@@ -197,38 +194,37 @@ _SUBJECTS: dict[str, SubjectSpec] = {
         # скобка про язык обучения там не нужна (решение владельца 16.10.2026).
         # Скобки в `name_ru`/`name_kz` не появляются — это названия приказа.
         _subject("literacy_ru", "Обучение грамоте",
-                 "Обучение грамоте", "Обучение грамоте", (1,), _INSTR_RU, icon="abc",
+                 "Обучение грамоте", "Обучение грамоте", (1,), _INSTR_RU,
                  title_kz="Сауат ашу"),
         _subject("native_language_kz", "Ана тілі",
-                 "Ана тілі", "Ана тілі", (1,), _INSTR_KZ, icon="notebook"),
+                 "Ана тілі", "Ана тілі", (1,), _INSTR_KZ),
         _subject("kazakh_lang_l1", "Казахский язык (Т1)",
-                 "Казахский язык", "Қазақ тілі", (2, 3, 4), _INSTR_KZ, icon="blue_book",
+                 "Казахский язык", "Қазақ тілі", (2, 3, 4), _INSTR_KZ,
                  title_kz="Қазақ тілі (Т1)"),
         _subject("kazakh_lang_l2", "Казахский язык (Т2)",
-                 "Казахский язык", "Қазақ тілі", (1, 2, 3, 4), _INSTR_NOT_KZ, icon="blue_book",
+                 "Казахский язык", "Қазақ тілі", (1, 2, 3, 4), _INSTR_NOT_KZ,
                  title_kz="Қазақ тілі (Т2)"),
         # Литературное чтение — два разных предмета: русская программа и
         # казахская. Для показа скобок не нужно вовсе: русскую программу
         # в казахском интерфейсе тоже называют «Литературное чтение»,
         # казахскую — «Әдебиеттік оқу» в обоих языках
         _subject("literary_reading_kz", "Әдебиеттік оқу",
-                 "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_KZ,
-                 icon="open_book"),
+                 "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_KZ),
         _subject("russian_lang_l1", "Русский язык (Я1)",
-                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_RU, icon="orange_book",
+                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_RU,
                  title_kz="Орыс тілі (Я1)"),
         _subject("russian_lang_l2", "Русский язык (Я2)",
-                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_NOT_RU, icon="orange_book",
+                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_NOT_RU,
                  title_kz="Орыс тілі (Я2)"),
         _subject("literary_reading_ru", "Литературное чтение",
                  "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_RU,
-                 icon="open_book", title_kz="Литературное чтение"),
+                 title_kz="Литературное чтение"),
         _subject("english", "Английский язык", "Английский язык", "Ағылшын тілі", (3, 4),
-                 objectives_language="en", icon="speech_bubble"),
+                 objectives_language="en"),
         _subject("german", "Немецкий язык", "Немецкий язык", "Неміс тілі", (3, 4),
-                 objectives_language="de", icon="earth"),
+                 objectives_language="de"),
         _subject("french", "Французский язык", "Французский язык", "Француз тілі", (3, 4),
-                 objectives_language="fr", icon="speaking_head"),
+                 objectives_language="fr"),
     )
 }
 
@@ -242,11 +238,6 @@ def objectives_language(code: str, edition: str) -> str:
     spec = _SUBJECTS.get(code)
     return spec.objectives_language if spec and spec.objectives_language else edition
 
-
-def subject_icon(code: str) -> str:
-    """Ключ картинки предмета в каталоге презентаций; кода нет в реестре — пусто."""
-    spec = _SUBJECTS.get(code)
-    return spec.icon if spec else ""
 
 
 def subject_title_kz(code: str, fallback: str) -> str:

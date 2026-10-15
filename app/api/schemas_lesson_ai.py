@@ -493,8 +493,6 @@ class LessonSubjectOut(BaseModel):
     grade_from: int
     grade_to: int
     langs: list[Literal["ru", "kz"]]
-    # Путь картинки предмета от базового адреса API (`GET /lesson_ai/images/{key}`)
-    icon_url: str
 
 
 class LessonSubjectsOut(BaseModel):

@@ -39,7 +39,7 @@ from collections.abc import Iterator
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.ai.openai_chat import AiUnavailableError
-from app.adapters.curriculum.parser import subject_icon, subject_title_kz
+from app.adapters.curriculum.parser import subject_title_kz
 from app.adapters.db.lesson_ai_repos import (
     LessonAttachmentRepo,
     LessonChatRepo,
@@ -776,7 +776,6 @@ class LessonChatService:
                     "grade_from": grade_from,
                     "grade_to": grade_to,
                     "langs": langs,
-                    "icon_url": f"/lesson_ai/images/{subject_icon(code)}",
                 }
                 for code, title, grade_from, grade_to, langs in self.repo.published_subjects()
             ]
