@@ -40,8 +40,16 @@ from app.api.schemas_lesson_ai import (
     LessonChatConfirmIn,
     LessonChatConfirmOut,
     LessonChatFeedOut,
+    LessonChatGroupIn,
+    LessonChatGroupOut,
+    LessonChatGroupPatchIn,
+    LessonChatGroupsOut,
+    LessonChatGroupsReorderIn,
+    LessonChatListItemOut,
     LessonChatOrderPatchIn,
     LessonChatOut,
+    LessonChatPatchIn,
+    LessonChatReorderIn,
     LessonChatSayIn,
     LessonChatsPageOut,
     LessonChatTurnOut,
@@ -234,6 +242,13 @@ def restore_block(
 Chats = Annotated[LessonChatService, Depends(deps.get_lesson_chat_service)]
 
 
+@router.post("/kits/{kit_id}/chat")
+def open_kit_chat(kit_id: int, user: CurrentUser, svc: Chats) -> LessonChatOut:
+    """Чат этого урока для рабочего места: есть — отдаём (из архива возвращаем),
+    нет — заводим в режиме правки. Идемпотентна."""
+    return LessonChatOut(**svc.open_for_kit(user, kit_id))
+
+
 @router.post("/chats", status_code=201)
 def create_chat(user: CurrentUser, svc: Chats) -> LessonChatOut:
     return LessonChatOut(**svc.create(user))
@@ -241,10 +256,57 @@ def create_chat(user: CurrentUser, svc: Chats) -> LessonChatOut:
 
 @router.get("/chats")
 def chats(
-    user: CurrentUser, params: Annotated[PageParams, Depends()], svc: Chats
+    user: CurrentUser,
+    params: Annotated[PageParams, Depends()],
+    svc: Chats,
+    archived: bool = False,
 ) -> LessonChatsPageOut:
-    data = svc.chats(user, offset=params.offset, limit=params.per_page)
+    data = svc.chats(user, offset=params.offset, limit=params.per_page, archived=archived)
     return LessonChatsPageOut(**page_out(data["items"], data["total"], params))
+
+
+@router.post("/chats/reorder", status_code=204)
+def reorder_chats(body: LessonChatReorderIn, user: CurrentUser, svc: Chats) -> Response:
+    svc.reorder_chats(user, body.section, body.group_id, body.chat_ids)
+    return Response(status_code=204)
+
+
+@router.get("/chat_groups")
+def chat_groups(user: CurrentUser, svc: Chats) -> LessonChatGroupsOut:
+    return LessonChatGroupsOut(**svc.groups(user))
+
+
+@router.post("/chat_groups", status_code=201)
+def create_chat_group(body: LessonChatGroupIn, user: CurrentUser, svc: Chats) -> LessonChatGroupOut:
+    return LessonChatGroupOut(**svc.create_group(user, body.name))
+
+
+@router.post("/chat_groups/reorder", status_code=204)
+def reorder_chat_groups(body: LessonChatGroupsReorderIn, user: CurrentUser, svc: Chats) -> Response:
+    svc.reorder_groups(user, body.group_ids)
+    return Response(status_code=204)
+
+
+@router.patch("/chat_groups/{group_id}")
+def rename_chat_group(
+    group_id: int, body: LessonChatGroupPatchIn, user: CurrentUser, svc: Chats
+) -> LessonChatGroupOut:
+    return LessonChatGroupOut(**svc.rename_group(user, group_id, body.name))
+
+
+@router.delete("/chat_groups/{group_id}", status_code=204)
+def delete_chat_group(group_id: int, user: CurrentUser, svc: Chats) -> Response:
+    svc.delete_group(user, group_id)
+    return Response(status_code=204)
+
+
+@router.patch("/chats/{chat_id}")
+def patch_chat(
+    chat_id: int, body: LessonChatPatchIn, user: CurrentUser, svc: Chats
+) -> LessonChatListItemOut:
+    return LessonChatListItemOut(
+        **svc.update_chat(user, chat_id, body.model_dump(exclude_unset=True))
+    )
 
 
 @router.get("/chats/{chat_id}")

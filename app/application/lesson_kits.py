@@ -230,6 +230,7 @@ class LessonKitsService:
         ids = [kit.id for kit in kits]
         materials = self.kits.materials_of(ids)
         cards = self.kits.kit_objectives(ids)
+        chat_ids = self.kits.chat_ids(ids)
         items = [
             {
                 "id": kit.id,
@@ -241,6 +242,7 @@ class LessonKitsService:
                 "engagement_level": kit.engagement_level,
                 "difficulty_level": kit.difficulty_level,
                 "status": kit.status,
+                "chat_id": chat_ids.get(kit.id),
                 "created_at": kit.created_at,
                 "updated_at": kit.updated_at,
                 "materials": [
@@ -266,6 +268,7 @@ class LessonKitsService:
             "engagement_level": kit.engagement_level,
             "difficulty_level": kit.difficulty_level,
             "status": kit.status,
+            "chat_id": self.kits.chat_ids([kit.id]).get(kit.id),
             "created_at": kit.created_at,
             "updated_at": kit.updated_at,
             "materials": [

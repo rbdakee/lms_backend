@@ -102,6 +102,9 @@ class LessonKitOut(BaseModel):
     engagement_level: EngagementLevel
     difficulty_level: DifficultyLevel
     status: Literal["generating", "ready", "partial", "failed"]
+    # Чат этого урока (рабочее место открывается с ним); `null` — комплект
+    # заказан напрямую, чата нет: `POST /lesson_ai/kits/{id}/chat` его заведёт
+    chat_id: int | None
     created_at: datetime
     updated_at: datetime
     materials: list[LessonMaterialOut]
@@ -126,6 +129,7 @@ class LessonKitListItemOut(BaseModel):
     engagement_level: EngagementLevel
     difficulty_level: DifficultyLevel
     status: Literal["generating", "ready", "partial", "failed"]
+    chat_id: int | None
     created_at: datetime
     updated_at: datetime
     materials: list[LessonKitListMaterialOut]
@@ -249,9 +253,11 @@ class LessonChatEventOut(BaseModel):
     только у слайдов). По нему экран подсвечивает материал справа.
     `type: "objectives_changed"` — набор целей урока изменён (из чата или кнопкой
     «Изменить цели»): `objectives` — новый набор по порядку. Экран перечитывает
-    комплект: цели, шапка и серверные блоки материалов уже другие."""
+    комплект: цели, шапка и серверные блоки материалов уже другие.
+    `type: "kit_opened"` — чат заведён по готовому комплекту («Открыть в чате»):
+    плашка «Урок открыт для правки», `kit_id` — комплект."""
 
-    type: Literal["kit_status", "block_changed", "objectives_changed"]
+    type: Literal["kit_status", "block_changed", "objectives_changed", "kit_opened"]
     objectives: list[LessonEventObjectiveOut] | None = None
     kit_id: int | None = None
     status: Literal["generating", "ready", "partial", "failed"] | None = None
@@ -327,6 +333,10 @@ class LessonChatListItemOut(BaseModel):
     subject_code: str | None
     grade: int | None
     first_message: str | None
+    pinned: bool
+    group_id: int | None
+    position: int | None
+    archived: bool
     created_at: datetime
     updated_at: datetime
 
@@ -346,6 +356,44 @@ class LessonChatFeedOut(BaseModel):
     mode: Literal["order", "edit"]
     kit: LessonChatKitOut | None
     items: list[LessonChatMessageOut]
+
+
+class LessonChatPatchIn(BaseModel):
+    """Только присланные поля; `group_id: null` — «без группы»."""
+
+    pinned: bool | None = None
+    group_id: int | None = None
+    archived: bool | None = None
+
+
+class LessonChatReorderIn(BaseModel):
+    section: Literal["pinned", "group", "ungrouped"]
+    group_id: int | None = None
+    chat_ids: list[int]
+
+
+class LessonChatGroupOut(BaseModel):
+    id: int
+    name: str
+    position: int
+    chats_count: int
+    created_at: datetime
+
+
+class LessonChatGroupsOut(BaseModel):
+    items: list[LessonChatGroupOut]
+
+
+class LessonChatGroupIn(BaseModel):
+    name: str
+
+
+class LessonChatGroupPatchIn(BaseModel):
+    name: str | None = None
+
+
+class LessonChatGroupsReorderIn(BaseModel):
+    group_ids: list[int]
 
 
 class LessonChatSayIn(BaseModel):
