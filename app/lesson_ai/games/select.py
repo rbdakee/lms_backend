@@ -137,6 +137,10 @@ def _score(mechanic: Mechanic, brief: LessonBrief, level: str) -> int:
         score += 3
     elif level in mechanic.engagement_levels:
         score += 2
+    # Своя механика предмета выше универсальной «any»: карточка, написанная
+    # под предмет, ценнее той, что годится всем
+    if brief.subject_code in mechanic.subjects:
+        score += 2
     # Проверенная методистом — выше черновика
     if mechanic.status == "active":
         score += 1
@@ -147,6 +151,8 @@ def _score(mechanic: Mechanic, brief: LessonBrief, level: str) -> int:
     # Классу, который догоняет программу, не нужны вдобавок сложные правила
     if brief.difficulty_level == "basic":
         score += {"simple": 1, "medium": 0, "complex": -2}[mechanic.rules_complexity]
+    # math_topics в ранжировании не участвует — это данные математических
+    # карточек, а не фильтр: нематематический урок за их отсутствие не штрафуется
     return score
 
 
