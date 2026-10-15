@@ -48,6 +48,7 @@ from app.api.schemas_lesson_ai import (
     LessonKitIn,
     LessonKitObjectivesIn,
     LessonKitOut,
+    LessonKitRegenerateIn,
     LessonKitsPageOut,
     LessonObjectivesOut,
     LessonSubjectsOut,
@@ -127,6 +128,18 @@ def set_kit_objectives(
     # Событие в ленту чата комплекта — как у правки из чата: плашка и обновление экрана
     record_objectives_event(svc.kits.db, kit_id, out["objectives"])
     return LessonKitOut(**out)
+
+
+@router.post("/kits/{kit_id}/regenerate")
+def regenerate_kit(
+    kit_id: int,
+    body: LessonKitRegenerateIn,
+    user: Annotated[User, Depends(deps.get_current_user)],
+    svc: Annotated[LessonKitsService, Depends(deps.get_lesson_kits_service)],
+) -> LessonKitOut:
+    """Кнопка «Пересобрать урок»; тот же сценарий, что у инструмента чата.
+    Комплект уже собирается — 409, суточный лимит исчерпан — 429."""
+    return LessonKitOut(**svc.regenerate(user, kit_id, body.kinds))
 
 
 # -- Материал: файл, блоки, история (сессии L4 и L5) ----------------------

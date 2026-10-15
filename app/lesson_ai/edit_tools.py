@@ -11,6 +11,7 @@
 | `replace_item` | заменить пункт блока-списка |
 | `delete_item` | убрать пункт блока-списка |
 | `set_objectives` | сменить набор целей урока: добавить, убрать, переставить |
+| `regenerate_kit` | собрать материалы заново под текущие цели (все или выбранные виды) |
 | `find_objectives`, `browse_objectives`, `show_objectives` | поиск новых целей, как в сборке |
 
 Своего пути к блокам у инструментов нет: каждая правка идёт через
@@ -22,8 +23,9 @@
 
 Схема вида зафиксирована: блок — поле схемы, поэтому «новый слайд» — это новый
 пункт в списке слайдов нужного этапа, а новый блок целиком завести нельзя.
-Материал целиком заново не перегенерируется: такого механизма в продукте нет,
-переписываются блоки по одному.
+Материал целиком заново собирает `regenerate_kit`: ставит генерацию в очередь,
+старое содержимое остаётся в истории блоков, а блоки по одному переписывает
+`rewrite_block`.
 
 Результат успешной правки несёт `event` — его сервер положит в ленту событием,
 по которому экран подсветит материал справа. Реестр админских действий сюда
@@ -48,6 +50,7 @@ ADD = "add_item"
 REPLACE = "replace_item"
 DELETE = "delete_item"
 SET_OBJECTIVES = "set_objectives"
+REGENERATE = "regenerate_kit"
 # Поиск целей — инструменты сборки заказа, без правок: читают справочник
 SEARCH_TOOLS = (order_tools.SUBJECTS, order_tools.BROWSE, order_tools.SHOW, order_tools.FIND)
 
@@ -182,6 +185,24 @@ SCHEMAS.append(
         ["objective_ids"],
     )
 )
+SCHEMAS.append(
+    _tool(
+        REGENERATE,
+        "Собрать материалы комплекта заново с ТЕКУЩИМИ целями и теми же параметрами урока"
+        " (тема, уровни, пожелания). Без kinds — все материалы; с kinds — только эти виды."
+        " Старое содержимое сохраняется в истории блоков. Идёт в очередь и занимает несколько"
+        " минут; пересборка считается как один комплект из суточного лимита, поэтому запускай"
+        " её только по согласию учителя. Пока комплект собирается, нельзя.",
+        {
+            "kinds": {
+                "type": ["array", "null"],
+                "items": KIND_PROPERTY,
+                "description": "Какие виды пересобрать; null или пусто — все материалы.",
+            }
+        },
+        [],
+    )
+)
 # Описания инструментов поиска — те же, что у сборки заказа: часть кэшируемого начала запроса
 SCHEMAS.extend(s for s in order_tools.SCHEMAS if s["function"]["name"] in SEARCH_TOOLS)
 
@@ -212,13 +233,15 @@ class EditTools:
         if name in SEARCH_TOOLS:
             return order_tools.OrderTools().call(name, args, ctx.search)
         handler = _HANDLERS.get(name)
-        if handler is None and name != SET_OBJECTIVES:
-            names = ", ".join([*_HANDLERS, SET_OBJECTIVES, *SEARCH_TOOLS])
+        if handler is None and name not in (SET_OBJECTIVES, REGENERATE):
+            names = ", ".join([*_HANDLERS, SET_OBJECTIVES, REGENERATE, *SEARCH_TOOLS])
             return _refusal("unknown_tool", f"Инструмента {name} нет. Доступны: {names}.")
         if ctx.kit_id is None:
             return _refusal("no_kit", "У этого чата нет комплекта — править нечего")
         if name == SET_OBJECTIVES:
             return _set_objectives(ctx, args)
+        if name == REGENERATE:
+            return _regenerate(ctx, args)
         material = _material(ctx, args.get("kind"))
         if isinstance(material, dict):
             return material
@@ -332,14 +355,33 @@ def _set_objectives(ctx: EditCtx, args: dict) -> dict:
         "ok": True,
         "objectives": kit["objectives"],
         "hint": (
-            "Блоки «раздел» и «цели обучения» в материалах обновлены. Предложи учителю"
-            " переписать зависимые блоки (цели урока, критерии оценивания, задания про"
-            " убранную или новую цель) и перепиши по его согласию через rewrite_block."
+            "Блоки «раздел» и «цели обучения» в материалах обновлены. Одним сообщением"
+            " скажи, что изменилось, и предложи ровно два пути: «Пересобрать урок под"
+            " новые цели» (рекомендуется) и «Поправить только связанное». Не спрашивай,"
+            " что переписывать первым. Ничего не переписывай и не пересобирай до ответа."
         ),
         "event": {
             "type": "objectives_changed",
             "objectives": [{"id": o["id"], "code": o["code"]} for o in kit["objectives"]],
         },
+    }
+
+
+def _regenerate(ctx: EditCtx, args: dict) -> dict:
+    raw = args.get("kinds")
+    if raw is not None and (not isinstance(raw, list) or any(k not in MATERIAL_KINDS for k in raw)):
+        return _refusal("bad_arguments", "Виды — список из: " + ", ".join(MATERIAL_KINDS))
+    # Отказ лимита (429) и сборка (409) — `AppError`: цикл покажет их модели,
+    # и она объяснит учителю
+    kit = ctx.kits_svc.regenerate(ctx.user, ctx.kit_id, raw or None)
+    return {
+        "ok": True,
+        "kinds": [m["kind"] for m in kit["materials"] if m["status"] == "queued"],
+        "hint": (
+            "Пересборка поставлена в очередь, займёт несколько минут; о готовности"
+            " сообщит лента. Скажи об этом учителю одной-двумя фразами и не правь"
+            " материалы, пока комплект собирается."
+        ),
     }
 
 
