@@ -102,6 +102,23 @@ FIRST_MESSAGE_MAX = 120
 TITLE_OBJECTIVE_MAX = 70
 
 
+def _group_name(name: str) -> str:
+    name = name.strip()
+    if not 1 <= len(name) <= 60:
+        raise FieldError("name", "От 1 до 60 символов")
+    return name
+
+
+def _group_out(group, chats_count: int) -> dict:
+    return {
+        "id": group.id,
+        "name": group.name,
+        "position": group.position,
+        "chats_count": chats_count,
+        "created_at": group.created_at,
+    }
+
+
 class LessonChatService:
     def __init__(
         self,
@@ -135,16 +152,54 @@ class LessonChatService:
     def create(self, user: User) -> dict:
         return self._out(self.repo.create_chat(user.id, now_utc()))
 
+    def open_for_kit(self, user: User, kit_id: int) -> dict:
+        """Чат готового комплекта: существующий (архивный возвращается из архива)
+        или новый — сразу в режиме правки, с целями, темой и уровнями комплекта.
+        Нужен комплектам, заказанным напрямую, и тем, чей чат не нашли."""
+        kit = self.kits.kits.kit(kit_id)
+        if kit is None or kit.user_id != user.id:
+            raise NotFoundError("Комплект не найден")
+        existing = self.repo.chat_by_kit(kit.id)
+        if existing is not None:
+            if existing.archived_at is not None:
+                existing.archived_at = None
+                existing.position = None
+                self.db.flush()
+            return self._out(existing)
+        chat = self.repo.create_chat(user.id, now_utc())
+        cards = self.kits.kits.kit_objectives([kit.id])[kit.id]
+        self.repo.set_chat_objectives(chat.id, [obj.id for obj, _p, _s in cards])
+        chat.status = "confirmed"
+        chat.kit_id = kit.id
+        chat.lang = kit.lang
+        chat.topic = kit.topic
+        chat.kinds = [m.kind for m in self.kits.kits.materials(kit.id)]
+        chat.engagement_level = kit.engagement_level
+        chat.difficulty_level = kit.difficulty_level
+        chat.class_size = kit.class_size
+        chat.notes = kit.notes or None
+        self.repo.add_message(
+            chat.id,
+            role="event",
+            content="Урок открыт для правки",
+            event={"type": "kit_opened", "kit_id": kit.id},
+        )
+        self.db.flush()
+        return self._out(chat)
+
     def chat(self, user: User, chat_id: int) -> dict:
         return self._out(self._own(user, chat_id))
 
-    def chats(self, user: User, *, offset: int, limit: int) -> dict:
+    def chats(self, user: User, *, offset: int, limit: int, archived: bool = False) -> dict:
         """История разговоров учителя — только свои, свежие по активности сверху.
 
         Страница собирается тремя запросами при любом её размере (чаты, первые
         реплики, цели), а не `_out` на каждый чат: тот тянет ленту целиком.
         """
-        chats, total = self.repo.user_chats(user.id, offset=offset, limit=limit)
+        chats, total = self.repo.user_chats(user.id, offset=offset, limit=limit, archived=archived)
+        return {"items": self._list_items(chats), "total": total}
+
+    def _list_items(self, chats: list[LessonAiChat]) -> list[dict]:
         firsts = self.repo.first_user_messages([chat.id for chat in chats])
         chosen = self.repo.chat_objective_ids([chat.id for chat in chats])
         objectives = self.repo.objectives_by_ids(
@@ -170,11 +225,112 @@ class LessonChatService:
                     "subject_code": row[2].code if row is not None else None,
                     "grade": row[0].grade if row is not None else None,
                     "first_message": first[:FIRST_MESSAGE_MAX] if first else None,
+                    "pinned": chat.pinned_at is not None,
+                    "group_id": chat.group_id,
+                    "position": chat.position,
+                    "archived": chat.archived_at is not None,
                     "created_at": chat.created_at,
                     "updated_at": chat.updated_at,
                 }
             )
-        return {"items": items, "total": total}
+        return items
+
+    # -- сайдбар: закрепление, группы, порядок, архив -----------------------
+
+    def update_chat(self, user: User, chat_id: int, fields: dict) -> dict:
+        """`pinned`, `group_id`, `archived` — только то, что прислано. Архив снимает
+        закрепление; возврат из архива оставляет прежнюю группу, если она жива
+        (удалённая группа уже обнулилась внешним ключом). `updated_at` не двигаем:
+        иначе перенос менял бы порядок «по свежести»."""
+        chat = self._own(user, chat_id)
+        if "group_id" in fields:
+            gid = fields["group_id"]
+            if gid is not None:
+                self._own_group(user, gid)
+            if gid != chat.group_id:
+                chat.group_id = gid
+                chat.position = self.repo.top_position(
+                    user.id, section="group" if gid else "ungrouped", group_id=gid
+                )
+        if fields.get("archived") is True and chat.archived_at is None:
+            chat.archived_at = now_utc()
+            chat.pinned_at = None
+            chat.position = None
+        elif fields.get("archived") is False and chat.archived_at is not None:
+            chat.archived_at = None
+            chat.position = None
+        if chat.archived_at is None and "pinned" in fields:
+            if fields["pinned"] and chat.pinned_at is None:
+                chat.position = self.repo.top_position(user.id, section="pinned")
+                chat.pinned_at = now_utc()
+            elif not fields["pinned"] and chat.pinned_at is not None:
+                chat.pinned_at = None
+                chat.position = self.repo.top_position(
+                    user.id,
+                    section="group" if chat.group_id else "ungrouped",
+                    group_id=chat.group_id,
+                )
+        self.db.flush()
+        return self._list_items([chat])[0]
+
+    def reorder_chats(
+        self, user: User, section: str, group_id: int | None, chat_ids: list[int]
+    ) -> None:
+        """Новый порядок секции целиком. Заодно и перенос: чаты из списка
+        оказываются в этой секции (закреплённые / группа / без группы), так что
+        перетаскивание в другую секцию — один запрос. Архивные не двигаются."""
+        if section == "group":
+            if group_id is None:
+                raise FieldError("group_id", "Укажите группу")
+            self._own_group(user, group_id)
+        elif group_id is not None:
+            raise FieldError("group_id", "Группа нужна только для секции group")
+        if len(set(chat_ids)) != len(chat_ids):
+            raise FieldError("chat_ids", "Чаты в списке не должны повторяться")
+        found = self.repo.own_chats(user.id, chat_ids)
+        if len(found) != len(chat_ids) or any(c.archived_at is not None for c in found.values()):
+            raise NotFoundError("Чат не найден")
+        moment = now_utc()
+        for position, chat_id in enumerate(chat_ids, start=1):
+            chat = found[chat_id]
+            chat.position = position
+            if section == "pinned":
+                chat.pinned_at = chat.pinned_at or moment
+            else:
+                chat.pinned_at = None
+                chat.group_id = group_id
+        self.db.flush()
+
+    def groups(self, user: User) -> dict:
+        counts = self.repo.group_counts(user.id)
+        return {"items": [_group_out(g, counts.get(g.id, 0)) for g in self.repo.groups(user.id)]}
+
+    def create_group(self, user: User, name: str) -> dict:
+        return _group_out(self.repo.create_group(user.id, _group_name(name)), 0)
+
+    def rename_group(self, user: User, group_id: int, name: str | None) -> dict:
+        group = self._own_group(user, group_id)
+        if name is not None:
+            group.name = _group_name(name)
+            self.db.flush()
+        return _group_out(group, self.repo.group_counts(user.id).get(group.id, 0))
+
+    def delete_group(self, user: User, group_id: int) -> None:
+        self.repo.delete_group(self._own_group(user, group_id))
+
+    def reorder_groups(self, user: User, group_ids: list[int]) -> None:
+        mine = {g.id: g for g in self.repo.groups(user.id)}
+        if len(set(group_ids)) != len(group_ids) or not set(group_ids) <= mine.keys():
+            raise NotFoundError("Группа не найдена")
+        for position, group_id in enumerate(group_ids, start=1):
+            mine[group_id].position = position
+        self.db.flush()
+
+    def _own_group(self, user: User, group_id: int):
+        group = self.repo.group(group_id)
+        if group is None or group.user_id != user.id:
+            raise NotFoundError("Группа не найдена")
+        return group
 
     # -- ход ----------------------------------------------------------------
 
@@ -215,6 +371,11 @@ class LessonChatService:
         editing = _mode(chat) == "edit"
         history = self._history(chat.id)
         self.repo.add_message(chat.id, role="user", content=text)
+        if chat.archived_at is not None:
+            # Написали в архивный чат — значит он снова рабочий: возвращаем сами,
+            # учителю не нужен отказ «сначала верните из архива»
+            chat.archived_at = None
+            chat.position = None
         if editing:
             # Заказ подтверждён и записан в комплект: разбирать в реплике нечего
             extract_in = extract_out = 0

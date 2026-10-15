@@ -24,6 +24,7 @@ from app.adapters.db.models import (
     LearningObjective,
     LessonAiAccess,
     LessonAiChat,
+    LessonAiChatGroup,
     LessonAiChatMessage,
     LessonAiChatObjective,
     LessonAiJob,
@@ -65,6 +66,16 @@ class LessonKitRepo:
         if any(objective_id not in found for objective_id in objective_ids):
             return None
         return [found[objective_id] for objective_id in objective_ids]
+
+    def chat_ids(self, kit_ids: list[int]) -> dict[int, int]:
+        """Чат каждого комплекта (связь `lesson_ai_chat.kit_id` уникальна);
+        комплекта без чата в словаре нет — прямой заказ."""
+        if not kit_ids:
+            return {}
+        rows = self.db.execute(
+            select(LessonAiChat.kit_id, LessonAiChat.id).where(LessonAiChat.kit_id.in_(kit_ids))
+        )
+        return {kit_id: chat_id for kit_id, chat_id in rows}
 
     def kit_objectives(
         self, kit_ids: list[int]
@@ -696,6 +707,9 @@ class LessonChatRepo:
     def chat(self, chat_id: int) -> LessonAiChat | None:
         return self.db.get(LessonAiChat, chat_id)
 
+    def chat_by_kit(self, kit_id: int) -> LessonAiChat | None:
+        return self.db.scalar(select(LessonAiChat).where(LessonAiChat.kit_id == kit_id))
+
     def lock_chat(self, chat_id: int) -> LessonAiChat | None:
         """Чат под замком строки: два «Готовить» подряд не заводят два комплекта."""
         return self.db.execute(
@@ -752,22 +766,111 @@ class LessonChatRepo:
         return row
 
     def user_chats(
-        self, user_id: int, *, offset: int, limit: int
+        self, user_id: int, *, offset: int, limit: int, archived: bool = False
     ) -> tuple[list[LessonAiChat], int]:
-        """Чаты учителя для истории — свежие по последней активности сверху:
-        `updated_at` двигают ход, правка заказа и подтверждение."""
-        where = LessonAiChat.user_id == user_id
+        """Чаты учителя в порядке сайдбара: закреплённые, затем чаты групп (группы
+        по их порядку), затем без группы. Внутри секции — расставленные учителем
+        по `position`; не двигавшиеся (`position` пуст) идут выше них, по свежести
+        (`updated_at` двигают ход, правка заказа и подтверждение), чтобы новый чат
+        появлялся сверху, а не терялся под расставленными. Архив — по времени
+        архивации, свежие сверху."""
+        archived_where = (
+            LessonAiChat.archived_at.is_not(None)
+            if archived
+            else LessonAiChat.archived_at.is_(None)
+        )
+        where = (LessonAiChat.user_id == user_id, archived_where)
         total = self.db.execute(
-            select(func.count()).select_from(LessonAiChat).where(where)
+            select(func.count()).select_from(LessonAiChat).where(*where)
         ).scalar_one()
-        rows = self.db.execute(
-            select(LessonAiChat)
-            .where(where)
-            .order_by(LessonAiChat.updated_at.desc(), LessonAiChat.id.desc())
-            .offset(offset)
-            .limit(limit)
-        ).scalars()
+        query = select(LessonAiChat).where(*where)
+        if archived:
+            query = query.order_by(LessonAiChat.archived_at.desc(), LessonAiChat.id.desc())
+        else:
+            group = aliased(LessonAiChatGroup)
+            pinned = LessonAiChat.pinned_at.is_not(None)
+            query = query.outerjoin(group, group.id == LessonAiChat.group_id).order_by(
+                pinned.desc(),
+                # Закреплённые лежат в одной секции, как бы ни стояла группа
+                case((pinned, 0), else_=case((LessonAiChat.group_id.is_(None), 1), else_=0)),
+                case((pinned, 0), else_=func.coalesce(group.position, 0)),
+                case((pinned, 0), else_=func.coalesce(LessonAiChat.group_id, 0)),
+                LessonAiChat.position.asc().nulls_first(),
+                LessonAiChat.updated_at.desc(),
+                LessonAiChat.id.desc(),
+            )
+        rows = self.db.execute(query.offset(offset).limit(limit)).scalars()
         return list(rows), total
+
+    def top_position(self, user_id: int, *, section: str, group_id: int | None = None) -> int:
+        """Позиция «выше всех» в секции: чат, которого коснулись меню, встаёт наверх."""
+        where = [LessonAiChat.user_id == user_id, LessonAiChat.archived_at.is_(None)]
+        if section == "pinned":
+            where.append(LessonAiChat.pinned_at.is_not(None))
+        else:
+            where.append(LessonAiChat.pinned_at.is_(None))
+            where.append(
+                LessonAiChat.group_id == group_id
+                if group_id is not None
+                else LessonAiChat.group_id.is_(None)
+            )
+        low = self.db.execute(select(func.min(LessonAiChat.position)).where(*where)).scalar()
+        return (low if low is not None else 1) - 1
+
+    def own_chats(self, user_id: int, chat_ids: list[int]) -> dict[int, LessonAiChat]:
+        rows = self.db.execute(
+            select(LessonAiChat).where(
+                LessonAiChat.user_id == user_id, LessonAiChat.id.in_(chat_ids)
+            )
+        ).scalars()
+        return {chat.id: chat for chat in rows}
+
+    # -- группы -----------------------------------------------------------
+
+    def groups(self, user_id: int) -> list[LessonAiChatGroup]:
+        return list(
+            self.db.execute(
+                select(LessonAiChatGroup)
+                .where(LessonAiChatGroup.user_id == user_id)
+                .order_by(LessonAiChatGroup.position, LessonAiChatGroup.id)
+            ).scalars()
+        )
+
+    def group(self, group_id: int) -> LessonAiChatGroup | None:
+        return self.db.get(LessonAiChatGroup, group_id)
+
+    def create_group(self, user_id: int, name: str) -> LessonAiChatGroup:
+        last = self.db.execute(
+            select(func.max(LessonAiChatGroup.position)).where(LessonAiChatGroup.user_id == user_id)
+        ).scalar()
+        row = LessonAiChatGroup(user_id=user_id, name=name, position=(last or 0) + 1)
+        self.db.add(row)
+        self.db.flush()
+        return row
+
+    def group_counts(self, user_id: int) -> dict[int, int]:
+        """Живые (не архивные) чаты по группам — для строки группы."""
+        rows = self.db.execute(
+            select(LessonAiChat.group_id, func.count())
+            .where(
+                LessonAiChat.user_id == user_id,
+                LessonAiChat.group_id.is_not(None),
+                LessonAiChat.archived_at.is_(None),
+            )
+            .group_by(LessonAiChat.group_id)
+        )
+        return {group_id: n for group_id, n in rows}
+
+    def delete_group(self, group: LessonAiChatGroup) -> None:
+        # Чаты группы возвращаются в «без группы» явно, а не только внешним
+        # ключом: сессия не держит устаревших `group_id`
+        self.db.execute(
+            update(LessonAiChat)
+            .where(LessonAiChat.group_id == group.id)
+            .values(group_id=None, position=None)
+        )
+        self.db.delete(group)
+        self.db.flush()
 
     def first_user_messages(self, chat_ids: list[int]) -> dict[int, str]:
         """Первая реплика учителя в каждом чате — одним запросом на страницу."""

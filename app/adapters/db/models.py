@@ -1158,6 +1158,24 @@ class LessonAiJob(Base):
     )
 
 
+class LessonAiChatGroup(Base):
+    """Личная группа чатов сайдбара — например, по предмету. Удаление группы
+    не удаляет чаты: они возвращаются в «без группы» (`ON DELETE SET NULL`)."""
+
+    __tablename__ = "lesson_ai_chat_group"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
+    name: Mapped[str] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("char_length(name) BETWEEN 1 AND 60", name="name"),
+        Index("ix_lesson_ai_chat_group_user_id_position", "user_id", "position"),
+    )
+
+
 class LessonAiChat(Base):
     """Чат сбора заказа — вход в «Жоспар» (TEACHER_AI_BRIEF, раздел 1).
 
@@ -1194,11 +1212,22 @@ class LessonAiChat(Base):
     kit_id: Mapped[int | None] = mapped_column(
         ForeignKey("lesson_kit.id", ondelete="SET NULL"), unique=True
     )
+    # Сайдбар (решение владельца 15.10.2026): закрепление, группа, порядок
+    # внутри своей секции и архив. `position` пуст у чата, которого учитель
+    # ещё не двигал: такие идут выше расставленных, по свежести.
+    pinned_at: Mapped[datetime | None] = mapped_column()
+    group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lesson_ai_chat_group.id", ondelete="SET NULL")
+    )
+    position: Mapped[int | None] = mapped_column(Integer)
+    archived_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (
         CheckConstraint(_in("status", CHAT_STATUSES), name="status"),
+        Index("ix_lesson_ai_chat_user_id_archived_at", "user_id", "archived_at"),
+        Index("ix_lesson_ai_chat_group_id", "group_id"),
         CheckConstraint("lang IN ('ru', 'kz')", name="lang"),
         CheckConstraint(_in("engagement_level", ENGAGEMENT_LEVELS), name="engagement_level"),
         CheckConstraint(_in("difficulty_level", DIFFICULTY_LEVELS), name="difficulty_level"),

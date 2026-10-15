@@ -225,6 +225,7 @@ def test_order_answers_with_the_contract_shape(client, sms, scene):
         "engagement_level": "active",
         "difficulty_level": "standard",
         "status": "generating",
+        "chat_id": None,
         "created_at": body["created_at"],
         "updated_at": body["updated_at"],
         "materials": [
@@ -718,6 +719,7 @@ def test_kit_list_shows_only_own_kits_newest_first(client, client2, sms, scene):
         "engagement_level",
         "difficulty_level",
         "status",
+        "chat_id",
         "created_at",
         "updated_at",
         "materials",

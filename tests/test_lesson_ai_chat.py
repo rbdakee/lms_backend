@@ -1572,6 +1572,10 @@ def test_chat_list_row_fields(client, sms, ai, scene):
         "subject_code": None,
         "grade": None,
         "first_message": None,
+        "pinned": False,
+        "group_id": None,
+        "position": None,
+        "archived": False,
         "created_at": empty["created_at"],
         "updated_at": empty["updated_at"],
     }
