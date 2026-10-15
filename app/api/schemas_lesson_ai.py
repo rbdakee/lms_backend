@@ -222,23 +222,65 @@ class LessonChatOrderOut(BaseModel):
     ready: bool
 
 
+class LessonChatEventOut(BaseModel):
+    """Событие ленты. `type: "kit_status"` — комплект собирается / готов /
+    собран не целиком / не собрался (`status`, `failed_kinds` у неполного);
+    `type: "block_changed"` — помощник изменил материал из чата: `action`,
+    `material_id`, `kind`, `block`, `index` (пункт блока с единицы, `null` —
+    блок переписан целиком) и `slide` (сквозной номер слайда презентации,
+    только у слайдов). По нему экран подсвечивает материал справа."""
+
+    type: Literal["kit_status", "block_changed"]
+    kit_id: int | None = None
+    status: Literal["generating", "ready", "partial", "failed"] | None = None
+    failed_kinds: list[MaterialKind] | None = None
+    action: Literal["rewritten", "item_added", "item_replaced", "item_deleted"] | None = None
+    material_id: int | None = None
+    kind: MaterialKind | None = None
+    block: str | None = None
+    index: int | None = None
+    slide: int | None = None
+
+
 class LessonChatMessageOut(BaseModel):
-    """Строка ленты. `role: "tool"` — поиск по программе: в `tool_result.items`
-    найденные цели формы `LessonChatObjectiveOut`, отказ — в `tool_result.error`."""
+    """Строка ленты. `role: "tool"` — вызов инструмента: поиск по программе
+    (в `tool_result.items` найденные цели формы `LessonChatObjectiveOut`, отказ —
+    в `tool_result.error`) или правка материала. `role: "event"` — событие
+    (`event`), `content` у него — запасная подпись словами."""
 
     id: int
-    role: Literal["user", "assistant", "tool"]
+    role: Literal["user", "assistant", "tool", "event"]
     content: str
     tool_name: str | None
     tool_args: dict[str, Any] | None
     tool_result: dict[str, Any] | None
+    event: LessonChatEventOut | None
     created_at: datetime
 
 
+class LessonChatKitOut(BaseModel):
+    """Комплект чата без содержимого — для правой панели: статусы материалов
+    и параметры урока. Содержимое — ручки `/lesson_ai/kits/{id}` и блоков."""
+
+    id: int
+    status: Literal["generating", "ready", "partial", "failed"]
+    topic: str
+    grade: int
+    lang: Literal["ru", "kz"]
+    engagement_level: EngagementLevel
+    difficulty_level: DifficultyLevel
+    materials: list[LessonKitListMaterialOut]
+
+
 class LessonChatOut(BaseModel):
+    """`mode: "order"` — заказ собирается (`status: "collecting"`), `"edit"` —
+    комплект заказан (`status: "confirmed"`), чат правит материалы; `kit` — он же."""
+
     id: int
     status: Literal["collecting", "confirmed"]
+    mode: Literal["order", "edit"]
     kit_id: int | None
+    kit: LessonChatKitOut | None
     order: LessonChatOrderOut
     items: list[LessonChatMessageOut]
     created_at: datetime
@@ -252,7 +294,10 @@ class LessonChatListItemOut(BaseModel):
 
     id: int
     status: Literal["collecting", "confirmed"]
+    mode: Literal["order", "edit"]
     kit_id: int | None
+    kit_status: Literal["generating", "ready", "partial", "failed"] | None
+    title: str | None
     topic: str | None
     subject_code: str | None
     grade: int | None
@@ -266,6 +311,16 @@ class LessonChatsPageOut(BaseModel):
     total: int
     page: int
     per_page: int
+
+
+class LessonChatFeedOut(BaseModel):
+    """`GET /lesson_ai/chats/{id}/messages?after_id=` — хвост ленты и комплект:
+    опрос, пока комплект собирается."""
+
+    status: Literal["collecting", "confirmed"]
+    mode: Literal["order", "edit"]
+    kit: LessonChatKitOut | None
+    items: list[LessonChatMessageOut]
 
 
 class LessonChatSayIn(BaseModel):

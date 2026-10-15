@@ -6790,7 +6790,9 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
 {
   "id": 1,
   "status": "collecting",
+  "mode": "order",
   "kit_id": null,
+  "kit": null,
   "order": {
     "subject_code": null,
     "grade": null,
@@ -6843,7 +6845,10 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
     {
       "id": 7,
       "status": "confirmed",
+      "mode": "edit",
       "kit_id": 12,
+      "kit_status": "ready",
+      "title": "Сложение двузначных чисел",
       "topic": "Сложение двузначных чисел",
       "subject_code": "math",
       "grade": 2,
@@ -6854,7 +6859,10 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
     {
       "id": 5,
       "status": "collecting",
+      "mode": "order",
       "kit_id": null,
+      "kit_status": null,
+      "title": null,
       "topic": null,
       "subject_code": null,
       "grade": null,
@@ -6932,7 +6940,7 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
   "order": { "…": "…", "missing": ["subject", "grade", "lang", "objective", "topic"], "ready": false },
   "items": [
     { "id": 1, "role": "user", "content": "завтра 2 класс, складываем двузначные без перехода через десяток",
-      "tool_name": null, "tool_args": null, "tool_result": null, "created_at": "2026-09-23T01:10:09.402000Z" },
+      "tool_name": null, "tool_args": null, "tool_result": null, "event": null, "created_at": "2026-09-23T01:10:09.402000Z" },
     { "id": 2, "role": "tool", "content": "", "tool_name": "find_objectives",
       "tool_args": { "query": "сложение вычитание двузначных чисел без перехода через десяток", "grade": 2 },
       "tool_result": { "items": [ { "id": 1, "code": "2.1.2.6", "text": "выполнять устно сложение и вычитание…", "…": "…" } ] },
@@ -7009,10 +7017,10 @@ data: {"error": {"code": "ai_failed", "message": "Модель не ответи
 { "error": { "code": "rate_limited", "message": "Слишком много сообщений помощнику — подождите немного",
   "details": { "retry_after_sec": 1260 } } }
 
-// 409 — заказ уже отправлен
-{ "error": { "code": "chat_confirmed", "message": "Заказ уже отправлен — для следующего урока начните новый чат",
-  "details": { "kit_id": 1 } } }
 ```
+
+С 15.10.2026 реплика в подтверждённом чате не отбивается: чат переходит в режим правки
+(раздел «Жоспар как рабочее место» ниже).
 
 ## PATCH /lesson_ai/chats/{id}/order
 
@@ -7117,6 +7125,293 @@ data: {"error": {"code": "ai_failed", "message": "Модель не ответи
 { "error": { "code": "validation_error", "message": "Проверьте заполнение полей",
   "details": { "fields": [ { "field": "q", "message": "Введите слова из цели или выберите класс и язык" } ] } } }
 ```
+
+---
+
+# Жоспар как рабочее место: чат после генерации (15.10.2026)
+
+Решение владельца: три панели — слева все чаты, по центру чат, справа материалы этой
+сессии. **Один чат — одна сессия — один комплект.** После «Готовить» чат не закрывается:
+он переходит из режима заказа в режим правки, и «добавь в презентацию слайд про …» или
+«сделай домашку проще» говорятся ему, а не кнопке ИИ на блоке. Кнопка ИИ и ручная
+правка остаются как были; чат ходит в те же сценарии, поэтому проверка схемы, версии
+блока (`generated` / `regenerated` / `edited` / `restored`) и пересборка ключей с ответами
+у всех трёх путей общие. Правка из чата пишет версию с пометкой `edited` (добавить, заменить,
+убрать пункт) или `regenerated` с просьбой учителя (переписать блок).
+
+Что добавилось к уже описанному выше, — перечень:
+
+- у чата — `mode` (`order` | `edit`) и `kit` (комплект без содержимого) — для правой панели;
+- в ленте — строки `role: "event"` с объектом `event`;
+- `GET /lesson_ai/chats/{id}/messages?after_id=` — опрос ленты и статусов материалов;
+- в стриме хода — событие `material_changed`;
+- в строке списка чатов — `mode`, `kit_status`, `title`;
+- `POST …/messages` в подтверждённом чате больше не отвечает `409 chat_confirmed`.
+  `PATCH …/order` и повторный `confirm` по-прежнему отвечают.
+
+## Чат: `mode` и `kit`
+
+```json
+// GET /lesson_ai/chats/{id} — чат после «Готовить», материал уже собран (items сокращены)
+{
+  "id": 7,
+  "status": "confirmed",
+  "mode": "edit",
+  "kit_id": 12,
+  "kit": {
+    "id": 12,
+    "status": "generating",
+    "topic": "Сложение двузначных чисел",
+    "grade": 2,
+    "lang": "ru",
+    "engagement_level": "active",
+    "difficulty_level": "standard",
+    "materials": [
+      { "id": 31, "kind": "lesson_plan", "status": "ready" },
+      { "id": 32, "kind": "presentation", "status": "queued" }
+    ]
+  },
+  "order": { "…": "заказ, как раньше; после подтверждения не меняется" },
+  "items": [ "…" ],
+  "created_at": "2026-10-15T09:10:04.117520Z",
+  "updated_at": "2026-10-15T09:14:40.502113Z"
+}
+```
+
+| Поле | Что это |
+|---|---|
+| `mode` | `order` — заказ собирается (`status: collecting`): центр рисует вопросы и карточку заказа. `edit` — комплект заказан (`status: confirmed`): центр — обычный чат правок, справа материалы |
+| `kit` | `null` в режиме `order`. В режиме `edit` — комплект **без содержимого**: статус и статусы материалов. Содержимое справа экран берёт у `GET /lesson_ai/kits/{id}` и `GET /lesson_ai/materials/{id}/blocks` |
+| `kit.status` | `generating` — ещё собирается; `ready` — всё готово; `partial` — не всё получилось; `failed` — ничего |
+| `kit.materials[].status` | `queued` / `generating` / `ready` / `failed`. Править можно только `ready` |
+
+`POST /lesson_ai/chats/{id}/confirm` отвечает как раньше (`chat` и `kit`); в `chat.items`
+уже лежит событие «комплект готовится».
+
+## Событие ленты: `role: "event"`
+
+```json
+// строки ленты (items), сокращённо
+{ "id": 21, "role": "event", "content": "Комплект готовится — это займёт несколько минут",
+  "tool_name": null, "tool_args": null, "tool_result": null,
+  "event": { "type": "kit_status", "kit_id": 12, "status": "generating", "failed_kinds": [],
+             "action": null, "material_id": null, "kind": null, "block": null, "index": null, "slide": null },
+  "created_at": "2026-10-15T09:14:40.502113Z" }
+
+{ "id": 22, "role": "event", "content": "Комплект готов — материалы справа",
+  "event": { "type": "kit_status", "kit_id": 12, "status": "ready", "failed_kinds": [], "…": null },
+  "created_at": "2026-10-15T09:16:02.118000Z" }
+
+{ "id": 23, "role": "event", "content": "Комплект собран не целиком — не получилось: Презентация",
+  "event": { "type": "kit_status", "kit_id": 12, "status": "partial", "failed_kinds": ["presentation"], "…": null },
+  "created_at": "2026-10-15T09:16:02.118000Z" }
+
+{ "id": 31, "role": "event", "content": "Презентация: добавлен слайд 5",
+  "event": { "type": "block_changed", "action": "item_added", "material_id": 32, "kind": "presentation",
+             "block": "slides_middle", "index": 2, "slide": 5,
+             "kit_id": null, "status": null, "failed_kinds": null },
+  "created_at": "2026-10-15T09:21:40.000000Z" }
+```
+
+У строк других ролей `event` — `null`. Поле `content` у события — **запасная подпись
+словами** (по-русски); экран, которому нужна подпись на языке интерфейса, строит свою по
+объекту `event`. Поля объекта, не относящиеся к типу, — `null`.
+
+**`type: "kit_status"`** — статус комплекта сменился. Пишется: на «Готовить»
+(`generating`; если весь комплект выдан из банка — сразу `ready`), и воркером в момент, когда
+закрыто задание и статус пересчитался (`ready` / `partial` / `failed`). Тот же статус подряд
+два раза не пишется. `failed_kinds` — какие виды не получились (только у `partial`). Это
+сигнал перерисовать правую панель; статусы материалов — в `kit` ответа ленты.
+
+**`type: "block_changed"`** — помощник изменил материал из чата. Это сигнал подсветить
+материал справа и перечитать его блок.
+
+| Поле | Что это |
+|---|---|
+| `action` | `rewritten` — блок переписан целиком (`index: null`); `item_added`, `item_replaced`, `item_deleted` — пункт блока-списка |
+| `material_id`, `kind` | какой материал; `kind` — `lesson_plan`, `presentation`, `tasks`, `homework`, `assessment`, `game` |
+| `block` | имя блока, как в `GET …/materials/{id}/blocks` (`slides_middle`, `stage_middle`, `cards_core`) |
+| `index` | номер пункта в блоке **с единицы**; у `rewritten` — `null`. У `item_deleted` — место, где пункт стоял |
+| `slide` | сквозной номер слайда презентации (титульный — 1, «Сегодня на уроке» — 2); только у слайдов, иначе `null` |
+
+Правка прямо сейчас — ещё и строка `role: "tool"` перед событием: карточка вызова с
+`tool_name` (`add_item`, `rewrite_block`, …). Экрану её показывать не обязательно — достаточно
+события; `tool_result` читает модель.
+
+## GET /lesson_ai/chats/{id}/messages
+
+Хвост ленты после строки `after_id` (по умолчанию 0 — вся лента) и комплект. Для опроса:
+пока комплект собирается, воркер дописывает события, когда экран ничего не отправляет, —
+спрашивать раз в 2–3 секунды, пока `kit.status = "generating"`.
+
+```json
+// GET /lesson_ai/chats/7/messages?after_id=21
+// 200
+{
+  "status": "confirmed",
+  "mode": "edit",
+  "kit": {
+    "id": 12, "status": "ready", "topic": "Сложение двузначных чисел", "grade": 2, "lang": "ru",
+    "engagement_level": "active", "difficulty_level": "standard",
+    "materials": [
+      { "id": 31, "kind": "lesson_plan", "status": "ready" },
+      { "id": 32, "kind": "presentation", "status": "ready" }
+    ]
+  },
+  "items": [
+    { "id": 22, "role": "event", "content": "Комплект готов — материалы справа",
+      "tool_name": null, "tool_args": null, "tool_result": null,
+      "event": { "type": "kit_status", "kit_id": 12, "status": "ready", "failed_kinds": [],
+                 "action": null, "material_id": null, "kind": null, "block": null, "index": null, "slide": null },
+      "created_at": "2026-10-15T09:16:02.118000Z" }
+  ]
+}
+
+// 200 — нового ничего нет
+{ "status": "confirmed", "mode": "edit", "kit": { "…": "…" }, "items": [] }
+
+// 404 — чужой или несуществующий чат
+{ "error": { "code": "not_found", "message": "Чат не найден" } }
+
+// 422 — after_id меньше нуля
+{ "error": { "code": "validation_error", "message": "Проверьте заполнение полей",
+  "details": { "fields": [ { "field": "after_id", "message": "Input should be greater than or equal to 0" } ] } } }
+```
+
+Лента выданная этой ручкой — та же, что внутри `GET /lesson_ai/chats/{id}`, только хвост.
+
+## POST /lesson_ai/chats/{id}/messages — в режиме правки
+
+Тот же запрос и тот же стрим. Отличия режима `edit`:
+
+- заказ из реплики не разбирается — первый кусок приходит быстрее;
+- модель разговора получает инструменты правки (см. ниже), а не поиск по программе;
+- в стриме появляется событие `material_changed`.
+
+```
+event: tool
+data: {"tool_name": "get_block", "tool_args": {"kind": "presentation", "block": "slides_middle"}, "tool_result": {"block": "slides_middle", "content": [ … ]}}
+
+event: tool
+data: {"tool_name": "add_item", "tool_args": {"kind": "presentation", "block": "slides_middle", "item": {"title": "Проверь себя", "lines": ["34 + 25 = ?"], "visual": "…", "notes": "…"}, "position": null},
+       "tool_result": {"ok": true, "block": "slides_middle", "now": {"type": "list", "count": 3, "items": ["Новое", "Реши", "Проверь себя"]}, "event": { … }}}
+
+event: material_changed
+data: {"type": "block_changed", "action": "item_added", "material_id": 32, "kind": "presentation", "block": "slides_middle", "index": 3, "slide": 6}
+
+event: delta
+data: {"text": "Добавил слайд 6 — «Проверь себя»…"}
+
+event: done
+data: {"chat": { …чат целиком, как GET… }, "stopped_at_cap": false}
+```
+
+| Событие | Когда | Что делает экран |
+|---|---|---|
+| `tool` | вызов инструмента отработал | в режиме `edit` — индикатор «правлю материал»; **черновой ответ сбрасывает**, как и в режиме заказа |
+| `material_changed` | инструмент **успешно изменил** блок | подсвечивает материал и перечитывает блок `block` (`GET …/materials/{material_id}/blocks`). Данные — объект `event` ленты без `kit_id`/`status`/`failed_kinds` |
+| `delta`, `done`, `error` | как в режиме заказа | `done` несёт чат целиком, в `items` — карточки вызовов и события этого хода |
+
+`error` в режиме правки: хода не было — реплики и неподтверждённых правок нет. Но
+**перегенерация блока закрывает транзакцию посреди хода** (запрос к модели идёт секунды),
+поэтому блок, переписанный до обрыва, остаётся переписанным, и его событие — в ленте. Перед
+повтором экрану достаточно перечитать чат.
+
+`stopped_at_cap: true` — модель упёрлась в потолок вызовов за ход (в режиме правки 8) и
+честно сказала, что осталось.
+
+Отказы **до** стрима — те же: `404` (чужой чат), `422` (пусто / больше 2000), `429` (больше
+60 реплик в час). Реплика в подтверждённом чате **принимается**: `409 chat_confirmed` на неё
+больше не приходит.
+
+### Что умеет модель в режиме правки
+
+Все инструменты работают над **комплектом этого чата**; номера комплекта в аргументах нет.
+
+| Инструмент | Что делает | Событие |
+|---|---|---|
+| `get_material` `{kind}` | оглавление: блоки, число пунктов, заголовки пунктов | нет |
+| `get_block` `{kind, block}` | блок целиком (коды целей вычищены) | нет |
+| `rewrite_block` `{kind, block, instruction}` | **тот же переписчик, что кнопка ИИ**; одна просьба — один блок | `rewritten` |
+| `add_item` `{kind, block, item, position}` | добавить слайд / задание / шаг; `position` с единицы, `null` — в конец | `item_added` |
+| `replace_item` `{kind, block, index, item}` | заменить пункт | `item_replaced` |
+| `delete_item` `{kind, block, index}` | убрать пункт (в блоке остаётся хотя бы один) | `item_deleted` |
+
+Ограничения, о которых экран может сказать учителю:
+
+- **Форма материала фиксирована.** Нового блока завести нельзя: новый слайд — это пункт в
+  одном из трёх блоков слайдов (`slides_beginning`, `slides_middle`, `slides_end`), новое
+  задание — пункт в карточке или новая карточка в блоке карточек. Блоки «раздел» и «цели
+  обучения» (`editable: false`) не правит никто.
+- **Материал целиком заново не перегенерируется** — такого механизма в продукте нет;
+  «сделай заново» модель выполняет блок за блоком (`rewrite_block`).
+- Править можно только материал со статусом `ready`: пока он собирается, инструмент
+  отвечает `material_not_ready`, и модель просит подождать.
+- Ключи с ответами правке не подлежат; они пересобираются сервером после правки заданий,
+  домашней и проверочной сами.
+
+Отказы инструментов — в `tool_result.error`, читает модель: `bad_arguments`, `no_material`,
+`no_block`, `block_locked`, `not_a_list`, `material_not_ready`, `no_kit`, `validation_error`
+(пункт не по схеме вида: «Не хватает поля: visual»), `block_changed` (блок успели поправить
+руками, пока модель писала), `ai_failed`, `unknown_tool`, `tool_failed`.
+
+Учёт расхода — прежний: ход чата — строка `chat`, переписанный блок — строка `block`
+(с `kit_id` и `kind`); суточный лимит комплектов правки не затрагивает, лимит реплик
+в час (60) — тот же.
+
+## GET /lesson_ai/chats — боковая панель
+
+Тот же список, строка дополнена тем, что нужно сайдбару в стиле ChatGPT:
+
+```json
+// 200
+{
+  "items": [
+    {
+      "id": 7,
+      "status": "confirmed",
+      "mode": "edit",
+      "kit_id": 12,
+      "kit_status": "ready",
+      "title": "Сложение двузначных чисел",
+      "topic": "Сложение двузначных чисел",
+      "subject_code": "math",
+      "grade": 2,
+      "first_message": "завтра 2 класс, складываем двузначные без перехода через десяток",
+      "created_at": "2026-10-15T09:10:04.117520Z",
+      "updated_at": "2026-10-15T09:21:40.000000Z"
+    },
+    {
+      "id": 5,
+      "status": "collecting",
+      "mode": "order",
+      "kit_id": null,
+      "kit_status": null,
+      "title": null,
+      "topic": null,
+      "subject_code": null,
+      "grade": null,
+      "first_message": null,
+      "created_at": "2026-10-15T08:02:11.300000Z",
+      "updated_at": "2026-10-15T08:02:11.300000Z"
+    }
+  ],
+  "total": 2, "page": 1, "per_page": 20
+}
+```
+
+| Поле | Что это |
+|---|---|
+| `mode` | `order` / `edit`, как у чата |
+| `kit_status` | статус комплекта; `null` — комплекта нет. Значок «собирается» в строке сайдбара |
+| `title` | подпись строки: тема из заказа, а пока её нет — первая реплика (до 120 знаков); `null` — чат пустой, подпись («Новый чат») даёт экран |
+| остальное | как раньше |
+
+Порядок — по последней активности: `updated_at` двигают реплика, правка заказа,
+подтверждение, **событие комплекта от воркера** (комплект собрался — чат поднимается
+наверх истории) и правка из чата.
+
+Переименования и удаления чатов нет. Новый чат — `POST /lesson_ai/chats`.
 
 ---
 

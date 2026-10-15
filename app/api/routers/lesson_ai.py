@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.adapters import lesson_files, lesson_preview
 from app.adapters.db.base import get_engine
-from app.adapters.db.lesson_ai_repos import LessonKitRepo
+from app.adapters.db.lesson_ai_repos import LessonKitRepo, LessonMaterialRepo
 from app.adapters.db.models import User
 from app.adapters.docx.common import DocHeader
 from app.api import deps
@@ -35,6 +35,7 @@ from app.api.schemas_lesson_ai import (
     LessonBlockVersionsOut,
     LessonChatConfirmIn,
     LessonChatConfirmOut,
+    LessonChatFeedOut,
     LessonChatOrderPatchIn,
     LessonChatOut,
     LessonChatSayIn,
@@ -231,6 +232,16 @@ def chat(chat_id: int, user: CurrentUser, svc: Chats) -> LessonChatOut:
     return LessonChatOut(**svc.chat(user, chat_id))
 
 
+@router.get("/chats/{chat_id}/messages")
+def chat_feed(
+    chat_id: int,
+    user: CurrentUser,
+    svc: Chats,
+    after_id: Annotated[int, Query(ge=0)] = 0,
+) -> LessonChatFeedOut:
+    return LessonChatFeedOut(**svc.feed(user, chat_id, after_id=after_id))
+
+
 @router.post(
     "/chats/{chat_id}/messages",
     response_class=StreamingResponse,
@@ -240,7 +251,8 @@ def chat(chat_id: int, user: CurrentUser, svc: Chats) -> LessonChatOut:
         200: {
             "model": LessonChatTurnOut,
             "description": (
-                "Ход событиями `text/event-stream`: `delta`, `tool`, `done`, `error`."
+                "Ход событиями `text/event-stream`: `delta`, `tool`, `material_changed`,"
+                " `done`, `error`."
                 " Событие `done` несёт эту форму — чат целиком."
             ),
             "content": {
@@ -284,7 +296,15 @@ def _turn(
             ai,
             kits=LessonKitsService(LessonKitRepo(db), limiter=deps.get_lesson_kits_limiter()),
             limiter=limiter,
+            materials=LessonMaterialsService(
+                LessonMaterialRepo(db),
+                deps.lesson_block_rewriter(ai),
+                db=db,
+                commit=db.commit,
+                model=cfg.lesson_model,
+            ),
             max_tool_calls=cfg.lesson_ai_chat_max_tool_calls,
+            max_edit_tool_calls=cfg.lesson_ai_edit_max_tool_calls,
             history_messages=cfg.lesson_ai_chat_history_messages,
             model=cfg.lesson_model,
         )

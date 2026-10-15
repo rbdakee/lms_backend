@@ -34,7 +34,13 @@ from app.adapters.db.models import (
     User,
 )
 from app.adapters.db.repos import name_or_phone_filter
-from app.domain.lesson_ai import MATERIAL_KINDS, WAITS_FOR, kit_status, usage_cost
+from app.domain.lesson_ai import (
+    KIND_TITLES_RU,
+    MATERIAL_KINDS,
+    WAITS_FOR,
+    kit_status,
+    usage_cost,
+)
 
 
 class LessonKitRepo:
@@ -262,6 +268,8 @@ class LessonAiJobRepo:
         )
         kit.status = kit_status(statuses)
         kit.updated_at = func.now()
+        # Чат, из которого заказан комплект, узнаёт о смене статуса в ленте
+        record_kit_event(self.db, kit)
 
     def _material(self, job: LessonAiJob) -> LessonMaterial:
         return self.db.scalar(
@@ -517,6 +525,57 @@ class LessonMaterialRepo:
         self.db.flush()
 
 
+def kit_event_text(status: str, failed_kinds: list[str]) -> str:
+    if status == "generating":
+        return "Комплект готовится — это займёт несколько минут"
+    if status == "ready":
+        return "Комплект готов — материалы справа"
+    if status == "partial":
+        names = ", ".join(KIND_TITLES_RU[kind] for kind in failed_kinds)
+        return f"Комплект собран не целиком — не получилось: {names}"
+    return "Комплект не собрался — попробуйте заказать его ещё раз"
+
+
+def record_kit_event(db: DbSession, kit: LessonKit) -> None:
+    """Событие «статус комплекта» в ленте чата, из которого комплект заказан.
+
+    Без чата (прямой заказ) — ничего. Повтор того же статуса в ленту не
+    пишется: событие означает смену состояния, а не очередной пересчёт.
+    Зовут и «Готовить» (комплект начал собираться), и воркер, закрывший
+    задание, — поэтому запись здесь, а не у вызывающего.
+    """
+    chat = db.scalar(select(LessonAiChat).where(LessonAiChat.kit_id == kit.id))
+    if chat is None:
+        return
+    last = db.scalar(
+        select(LessonAiChatMessage.event)
+        .where(
+            LessonAiChatMessage.chat_id == chat.id,
+            LessonAiChatMessage.role == "event",
+            LessonAiChatMessage.event["type"].astext == "kit_status",
+        )
+        .order_by(LessonAiChatMessage.id.desc())
+        .limit(1)
+    )
+    if last is not None and last.get("status") == kit.status:
+        return
+    failed = [
+        material.kind
+        for material in db.scalars(select(LessonMaterial).where(LessonMaterial.kit_id == kit.id))
+        if material.status == "failed"
+    ]
+    db.add(
+        LessonAiChatMessage(
+            chat_id=chat.id,
+            role="event",
+            content=kit_event_text(kit.status, failed),
+            event={"type": "kit_status", "kit_id": kit.id, "status": kit.status,
+                   "failed_kinds": failed if kit.status == "partial" else []},
+        )
+    )
+    chat.updated_at = func.now()
+
+
 # Цель вместе со всем, что о ней показывают учителю: программа — язык,
 # предмет — код предмета, раздел и подраздел — названиями
 ObjectiveRow = tuple[LearningObjective, CurriculumProgram, CurriculumSubject, str, str]
@@ -552,11 +611,22 @@ class LessonChatRepo:
             select(LessonAiChat).where(LessonAiChat.id == chat_id).with_for_update()
         ).scalar_one_or_none()
 
-    def messages(self, chat_id: int) -> list[LessonAiChatMessage]:
+    def kit_statuses(self, kit_ids: list[int]) -> dict[int, str]:
+        """Статусы комплектов страницы истории — одним запросом."""
+        if not kit_ids:
+            return {}
+        rows = self.db.execute(
+            select(LessonKit.id, LessonKit.status).where(LessonKit.id.in_(kit_ids))
+        )
+        return {kit_id: status for kit_id, status in rows}
+
+    def messages(self, chat_id: int, *, after_id: int = 0) -> list[LessonAiChatMessage]:
         return list(
             self.db.execute(
                 select(LessonAiChatMessage)
-                .where(LessonAiChatMessage.chat_id == chat_id)
+                .where(
+                    LessonAiChatMessage.chat_id == chat_id, LessonAiChatMessage.id > after_id
+                )
                 .order_by(LessonAiChatMessage.id)
             ).scalars()
         )
