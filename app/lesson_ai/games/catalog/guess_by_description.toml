@@ -1,0 +1,94 @@
+id = "guess_by_description"
+title = "Угадай по описанию"
+family = "deduction"
+status = "draft"
+
+summary = """
+Карточка описания перечисляет три-четыре признака предмета, существа или \
+героя, не называя его; игрок закрывает фишкой карточку-отгадку на своём \
+поле. Описания читает ведущий вслух или дети про себя — отгадку можно \
+закрыть и до конца описания, но рано — значит рискованно."""
+scoring = "Отгадка после первого признака — 2 очка, после второго — 1, после третьего — без очка; очки на простом табло."
+
+subjects = ["world_around", "natural_science", "literary_reading_ru", "literary_reading_kz", "kazakh_lang_l1", "kazakh_lang_l2", "russian_lang_l1", "russian_lang_l2", "english", "german", "french", "digital_literacy"]
+content_shapes = ["classification", "short_answer"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["start", "middle"]
+duration_min = 5
+duration_max = 15
+grouping = ["individual", "pairs"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 2
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "quiet"
+competition = "none"
+teacher_role = "host"
+
+self_check = "answer_key"
+invariants = [
+  "Признаки описания относятся ровно к одной отгадке поля; каждая другая отгадка хотя бы по одному признаку не подходит.",
+  "Признаки идут от редкого к общему: первый уже сужает выбор до половины поля.",
+  "Ключ перечисляет отгадки по номерам, и у каждого описания ровно один номер.",
+  "Подписи отгадок — на языке предмета: на иностранном языке отгадки на изучаемом языке.",
+]
+model_generates = [
+  "6–10 карточек-отгадок с подписями на языке предмета.",
+  "Описания по 3–4 признака к каждой отгадке.",
+  "Ключ «описание — отгадка» и одну фразу сюжета.",
+]
+pitfalls = [
+  "Признак, подходящий к двум отгадкам, ломает однозначность — каждая отгадка проверяется по всем признакам описания.",
+  "Описание длиннее четырёх признаков превращается в чтение, а не игру.",
+  "Отгадки, различимые только специалисту («берёза» и «осина»), на basic не годятся — различие должно быть заметным.",
+]
+in_class_differentiation = "Одно поле — два набора описаний: короткие с явными признаками и длинные с косвенными."
+combines_with = ["odd_one_out", "show_and_guess", "sort_into_baskets"]
+station_ready = true
+lang_sensitive = false
+
+props = ["counters"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "none"
+replayability = "replayable"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "quiz_4_options"
+
+[lang_notes]
+ru = "Описания — на языке предмета: на языках изучаемом, на мире и естествознании — языке обучения."
+kz = "Описания сочиняются по-казахски, не переводятся: признак держит своё окончание, а не словарный перевод."
+
+[difficulty_scaling]
+basic = "Отгадки крупно подписаны, признаки явные (цвет, размер, место)."
+standard = "Признаки косвенные («живёт в норе, любит мёд»), отгадок 8–10."
+advanced = "Описание-загадка с отрицаниями («не зверь, но живёт в норе»); финал — «составь описание для соседа»."
+
+[[print_items]]
+name = "Поле с карточками-отгадками"
+per = "per_student"
+count = "по числу детей"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Карточки описаний"
+per = "per_class"
+count = "8–12"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Ключ"
+per = "per_class"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false

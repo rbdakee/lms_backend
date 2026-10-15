@@ -24,7 +24,7 @@ from app.lesson_ai.games.mechanic import (
     Mechanic,
     load_catalog,
 )
-from app.lesson_ai.games.select import FRAME, pick, references
+from app.lesson_ai.games.select import FRAME, _fits, pick, references
 
 # Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
 # а сама проверка доступа — в `test_lesson_ai_access.py`
@@ -74,14 +74,14 @@ def cards() -> tuple[Mechanic, ...]:
 # -- настоящий каталог --------------------------------------------------------
 
 
-def test_catalog_has_24_cards_named_by_their_files(cards):
+def test_catalog_cards_are_named_by_their_files(cards):
     """Слаг — вечный ключ: он пишется в материал и в статистику. Файл
     и `id` совпадают, повторов нет."""
     files = sorted(path.stem for path in CATALOG_DIR.glob("*.toml"))
 
-    assert len(cards) == 24
+    assert len(cards) == 38
     assert [card.id for card in cards] == files
-    assert len({card.id for card in cards}) == 24
+    assert len({card.id for card in cards}) == 38
 
 
 def test_combines_with_points_to_existing_cards(cards):
@@ -197,12 +197,12 @@ def test_adding_and_removing_a_file_is_all_it_takes(folder):
     (folder / "shape_hunt.toml").write_text(text, encoding="utf-8")
 
     added = {card.id: card for card in load_catalog(folder)}
-    assert len(added) == 25
+    assert len(added) == 39
     assert added["shape_hunt"].title == "Охота за фигурами"
 
     (folder / "shape_hunt.toml").unlink()
     ids = {card.id for card in load_catalog(folder)}
-    assert len(ids) == 24
+    assert len(ids) == 38
     assert "shape_hunt" not in ids
 
 
@@ -285,15 +285,21 @@ def test_retired_is_never_picked(cards):
         card.model_copy(update={"status": "retired"}) if card.id in retired else card
         for card in cards
     ]
-    usual = set()
     for grade in (1, 2, 3, 4):
         for level in LEVELS:
             for seed in SEEDS:
                 order = brief(grade=grade, engagement_level=level)
-                usual |= {card.id for card in pick(cards, order, seed)}
                 assert not {card.id for card in pick(patched, order, seed)} & retired
-    # Без отметки они выбираются — значит, отсекла именно она
-    assert usual >= retired
+    # Отсечь могла именно отметка: без неё каждая проходит чей-то фильтр,
+    # а не отсеяна классом или уровнем заранее
+    by_id = {card.id: card for card in cards}
+    for card_id in retired:
+        card = by_id[card_id]
+        assert any(
+            _fits(card, brief(grade=grade, engagement_level=level), level)
+            for grade in (1, 2, 3, 4)
+            for level in LEVELS
+        ), card_id
 
 
 def test_all_retired_gives_nothing(cards):

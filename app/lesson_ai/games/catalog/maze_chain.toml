@@ -9,7 +9,7 @@ summary = """
 и доходит до выхода; путь обводит карандашом. Неверный ответ ведёт в тупик."""
 scoring = "Очко за каждый верный поворот; дошёл до выхода без тупиков — жетон."
 
-subjects = ["any"]
+subjects = ["math"]
 content_shapes = ["short_answer"]
 math_topics = ["arithmetic", "mental_math", "multiplication_table"]
 grade_min = 1

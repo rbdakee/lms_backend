@@ -1,0 +1,91 @@
+id = "sound_bingo"
+title = "Бинго звуков и букв"
+family = "call_and_mark"
+status = "draft"
+
+summary = """
+У каждого игрока карточка 3×3–4×4 с буквами или значками звуков; ведущий \
+называет звук, произносит слово с этим звуком или тянет слово-карточку, \
+игрок закрывает фишкой клетку с нужной буквой. Побеждает первый закрытый \
+ряд, затем «полный дом»."""
+scoring = "Ряд — 1 балл, вся карточка — 3. Партия — 5 минут, за урок — две-три партии."
+
+subjects = ["literacy_ru", "native_language_kz", "kazakh_lang_l1", "kazakh_lang_l2", "russian_lang_l1", "russian_lang_l2", "english", "german", "french"]
+content_shapes = ["short_answer", "classification"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm", "active"]
+level_shift = """
+Ряд против ряда: одна карточка на ряд, ответ хором, счёт на доске — \
+это уже active."""
+lesson_phases = ["start", "middle"]
+duration_min = 5
+duration_max = 10
+grouping = ["individual", "teams"]
+print_unit = "per_student"
+group_size_min = 1
+group_size_max = 1
+rules_complexity = "simple"
+student_reading = "none"
+movement = "seated"
+noise = "quiet"
+competition = "individual"
+teacher_role = "host"
+
+self_check = "teacher_check"
+invariants = [
+  "Каждая названная ведущим буква есть хотя бы на одной карточке игрока.",
+  "Буква в клетке однозначно отвечает заданию ведущего: назвал звук — закрываешь её букву, а не похожую.",
+  "На карточке игрока нет двух клеток с одной буквой.",
+  "Похожие буквы (а — ә, о — ө) не сидят в одном ряду карточки на basic.",
+]
+model_generates = [
+  "Раскладку букв или значков звуков по карточкам игроков (не меньше 6 разных).",
+  "Список вызовов: звук, слово с ним, слово-ловушка.",
+  "Название игры и одну фразу сюжета.",
+]
+pitfalls = [
+  "Звук, для которого нет буквы на карточке, — клетку не закрыть: вызовы сверяются с раскладкой.",
+  "Слова-ловушки со звуком «на грани» (звонкий — глухой) хороши для advanced и невозможны на basic.",
+  "Ведущий показывает букву написанной — теряется работа со звуком; ведущий только произносит.",
+]
+in_class_differentiation = "Разным детям — карточки с разным набором букв при общем вызове: снаружи одинаковые."
+combines_with = ["build_a_word", "word_lotto", "math_lotto"]
+station_ready = true
+lang_sensitive = true
+
+props = ["counters"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "quiz_4_options"
+
+[lang_notes]
+ru = "Буквы — алфавита предмета: на иностранном языке латиница изучаемого языка, звуки произносятся как в нём."
+kz = """
+Специфические буквы казахского алфавита (ә, ғ, қ, ң, ө, ұ, ү, һ, і) — \
+полноценные клетки, крупно. Пары а — ә, о — ө, у — ұ/ү — главные ловушки; \
+на basic их разводить по разным рядам карточки."""
+
+[difficulty_scaling]
+basic = "Гласные и 4–6 согласных, ведущий называет звук и слово с ним."
+standard = "Весь алфавит, ведущий называет только слово — букву ищет сам игрок."
+advanced = "Ловушки: слово со звуком-парой (а — ә) и «лишние» вызовы без буквы на карточке; финал — «назови слово на выпавшую букву»."
+
+[[print_items]]
+name = "Карточки игроков с буквами"
+per = "per_student"
+count = "по числу детей, не меньше 6 разных"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Список вызовов для ведущего"
+per = "per_class"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false

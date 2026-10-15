@@ -1,0 +1,88 @@
+id = "build_a_word"
+title = "Собери слово из букв"
+family = "letter_build"
+status = "draft"
+
+summary = """
+Буквы слова рассыпаны по полосе вперемешку с чужими; задача — собрать слово \
+(или несколько слов темы) за отведённое время. Пара работает тихо: карточки \
+крупные, лишние буквы — ловушки на невнимательность."""
+scoring = "Очков нет: слово собрано и сверено с ключом — задание решено; пара, собравшая все слова первой, — жетон."
+
+subjects = ["literacy_ru", "native_language_kz", "kazakh_lang_l1", "kazakh_lang_l2", "russian_lang_l1", "russian_lang_l2", "english", "german", "french"]
+content_shapes = ["ordering"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm"]
+level_shift = ""
+lesson_phases = ["start", "middle"]
+duration_min = 5
+duration_max = 10
+grouping = ["individual", "pairs"]
+print_unit = "per_pair"
+group_size_min = 1
+group_size_max = 2
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "quiet"
+competition = "none"
+teacher_role = "observer"
+
+self_check = "answer_key"
+invariants = [
+  "Букв набора хватает на все слова задания, и каждая лишняя буква не вписывается ни в одно слово.",
+  "У каждого слова ровно один набор букв: два слова из одних букв («нос — сон») в одном наборе не встречаются.",
+  "Слово-ответ есть в ключе и относится к теме урока.",
+  "На advanced подсказкой служит толкование или картинка-схема, подписанные словом целиком.",
+]
+model_generates = [
+  "Слова темы урока на изучаемом языке и рассыпанные буквы к ним с ловушками.",
+  "Ключ с собранными словами и подсказки к ним.",
+  "Название набора и одну фразу сюжета.",
+]
+pitfalls = [
+  "Буквы, вырезанные по одной, теряются к следующему уроку — буквы на полосе, резать по линиям.",
+  "Для 1 класса больше двух слов и шести букв на слово — игра превращается в перебор.",
+  "Слова, переведённые с другого языка, вместо слов языка урока — собранное слово чужое.",
+]
+in_class_differentiation = "Два конверта: у одного слова короче и без лишних букв, у другого длиннее и с ловушками; рамка конверта одна."
+combines_with = ["decode_word", "sound_bingo", "word_chain"]
+station_ready = true
+lang_sensitive = true
+
+props = ["scissors", "envelopes"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "none"
+
+[lang_notes]
+ru = "Слова — на языке предмета: на грамоте и русском — русские, на иностранном — слова изучаемого языка."
+kz = """
+Буквы ә, ғ, қ, ң, ө, ұ, ү, һ, і — обязательные буквы набора и не заменяются \
+похожими: «қалам» без своей «қ» — другое слово. На ана тілі и Т1 на advanced \
+держать сингармонизм: собранное слово проверяется и по ряду гласных."""
+
+[difficulty_scaling]
+basic = "Одно слово из 3–4 букв, без лишних букв."
+standard = "Два-три слова из 5–6 букв и одна-две ловушки."
+advanced = "Слова из рассыпанных слогов, лишние буквы-ловушки; финал — «составь из собранных слов предложение»."
+
+[[print_items]]
+name = "Полосы с рассыпанными буквами"
+per = "per_pair"
+count = "1–2"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Ключ с собранными словами"
+per = "per_pair"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false

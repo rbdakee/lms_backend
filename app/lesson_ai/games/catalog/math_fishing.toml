@@ -9,7 +9,7 @@ summary = """
 отпускает обратно в пруд. Игра по кругу 5–7 минут."""
 scoring = "Рыбка — 1 очко; уловы пересчитываются вслух в конце. При счёте по рядам — командный улов на табло-«ведре»."
 
-subjects = ["any"]
+subjects = ["math"]
 content_shapes = ["short_answer", "open_response"]
 math_topics = ["counting", "number_composition", "arithmetic", "mental_math"]
 grade_min = 1

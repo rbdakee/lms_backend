@@ -9,7 +9,7 @@ summary = """
 забирает обе. Третий участник — судья с ключом."""
 scoring = "Побеждает тот, у кого за 7–10 минут больше взятых карт; роль судьи переходит по кругу между партиями."
 
-subjects = ["any"]
+subjects = ["math"]
 content_shapes = ["short_answer"]
 math_topics = ["number_composition", "arithmetic", "multiplication_table", "mental_math"]
 grade_min = 1

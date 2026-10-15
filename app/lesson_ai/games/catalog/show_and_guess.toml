@@ -1,0 +1,77 @@
+id = "show_and_guess"
+title = "Покажи и угадай"
+family = "pantomime"
+status = "draft"
+
+summary = """
+Ребёнок тянет карточку со словом и показывает его классу без слов — \
+пантомимой или жестом; угадавший называет слово целиком и становится \
+ведущим. Вариант строгий: показывающий описывает слово, не называя его, — \
+двумя-тремя признаками."""
+scoring = "Угадавшая команда — 1 очко; слово называется вслух целиком и повторяется всеми — очко засчитано."
+
+subjects = ["literacy_ru", "native_language_kz", "kazakh_lang_l1", "kazakh_lang_l2", "russian_lang_l1", "russian_lang_l2", "literary_reading_ru", "literary_reading_kz", "world_around", "natural_science", "physical_culture", "english", "german", "french"]
+content_shapes = ["open_response"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["active"]
+level_shift = ""
+lesson_phases = ["middle", "end"]
+duration_min = 5
+duration_max = 15
+grouping = ["whole_class", "teams"]
+print_unit = "per_class"
+group_size_min = 1
+group_size_max = 30
+rules_complexity = "simple"
+student_reading = "short"
+movement = "at_board"
+noise = "loud"
+competition = "team"
+teacher_role = "host"
+
+self_check = "teacher_check"
+invariants = [
+  "Слова на карточках — из темы урока и показываемые без реквизита: ни предметов, ни картинок.",
+  "В варианте с описанием описывающему запрещены само слово и однокоренные — список запрещённых напечатан на его карточке.",
+  "Ответ называется на языке предмета целиком: на иностранном языке угадывают и повторяют слово на изучаемом языке.",
+]
+model_generates = [
+  "Список из 15–20 слов темы урока для карточек на языке предмета.",
+  "Списки запрещённых слов для варианта с описанием.",
+  "Подписи ролей и одну фразу сюжета.",
+]
+pitfalls = [
+  "Слова, которые не показать без предмета («мягкий», «вчера»), ломают круг — карточки только с показываемыми словами.",
+  "Угадавший кричит обрывок («ну это когда...») — очко только за слово целиком.",
+  "Один показывающий у доски, остальные ждут — угадывают все команды разом, показывает по очереди от каждой.",
+]
+in_class_differentiation = "Слабым — карточки из основного списка, сильным — из «звёздного»: слова труднее, очко двойное."
+combines_with = ["guess_by_description", "true_false_signals", "word_lotto"]
+station_ready = false
+lang_sensitive = false
+
+props = []
+server_assets = ["tokens", "diploma"]
+prep_effort = "low"
+replayability = "replayable"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "none"
+
+[lang_notes]
+ru = "Слова — на языке предмета: на языках изучаемого языка, на мире и физкультуре — языка обучения."
+kz = "Слова — казахские, не перевод; названия движений физкультуры и животных мира — местные, из речи детей."
+
+[difficulty_scaling]
+basic = "Показ пантомимой, слова-предметы и движения из темы."
+standard = "Чередование: пантомима и описание двумя признаками без называния."
+advanced = "Только описание с запрещёнными словами; финал — команда придумывает карточку для соперников."
+
+[[print_items]]
+name = "Карточки слов"
+per = "per_class"
+count = "15–20"
+layout = "card_grid"
+cut = "grid"
+double_sided = false

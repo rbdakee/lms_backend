@@ -1,0 +1,99 @@
+id = "sort_into_baskets"
+title = "Сортировка по корзинам"
+family = "sort"
+status = "draft"
+
+summary = """
+Карточки-слова раскладываются по корзинам-категориям: живое и неживое, \
+одежда и посуда, инструменты и устройства, гласные и согласные. Корзин \
+две-четыре, карточек больше, чем кажется нужным: часть — ловушки на границе \
+категорий."""
+scoring = "Верная корзина — 1 очко за карточку; граничные карточки стоят двух, ошибка на них заметнее."
+
+subjects = ["literacy_ru", "native_language_kz", "kazakh_lang_l1", "kazakh_lang_l2", "russian_lang_l1", "russian_lang_l2", "literary_reading_ru", "literary_reading_kz", "world_around", "natural_science", "digital_literacy", "music"]
+content_shapes = ["classification"]
+grade_min = 1
+grade_max = 4
+engagement_levels = ["calm", "active"]
+level_shift = """
+Две команды у доски: половины доски — корзины, карточки на магнитах, разбор \
+вслух и счёт на доске — это уже active."""
+lesson_phases = ["middle", "end"]
+duration_min = 7
+duration_max = 15
+grouping = ["individual", "pairs", "teams"]
+print_unit = "per_pair"
+group_size_min = 1
+group_size_max = 6
+rules_complexity = "simple"
+student_reading = "short"
+movement = "seated"
+noise = "voiced"
+competition = "individual"
+teacher_role = "facilitator"
+
+self_check = "answer_key"
+invariants = [
+  "У каждой карточки ровно одна верная корзина, и её место есть в ключе.",
+  "Корзины названы словами темы урока, а не «прочее»: безымянной корзины нет.",
+  "Граничные карточки однозначно отнесены в ключе с пояснением одной строкой.",
+  "Карточек хватает на все корзины: ни одна корзина не остаётся пустой.",
+]
+model_generates = [
+  "Названия 2–4 корзин под цель урока.",
+  "15–25 карточек-слов на языке предмета с распределением по корзинам.",
+  "Граничные карточки-ловушки и ключ с пояснениями.",
+]
+pitfalls = [
+  "Пересекающиеся категории («домашние животные» и «животные») делают разбор спором — категории взаимно исключающие.",
+  "Карточек под сто на пару — режут и теряют; 15–25 на пару за раз.",
+  "Слово без контекста («ключ», «перо»), честное в двух корзинах сразу, для basic не берётся.",
+]
+in_class_differentiation = "Слабой паре — карточки с явной категорией, сильной — граничные; ключ общий."
+combines_with = ["odd_one_out", "guess_by_description", "true_false_signals"]
+station_ready = true
+lang_sensitive = true
+
+props = ["envelopes", "glue"]
+server_assets = ["tokens", "diploma"]
+prep_effort = "medium"
+replayability = "replayable"
+
+source = "Дополнение каталога под предметы, 16.10.2026"
+export_shape = "matching"
+
+[lang_notes]
+ru = "Корзины и карточки — на языке предмета: на языках изучаемом, на остальных — языке обучения."
+kz = """
+Корзины подписаны казахскими словами темы, не переводом. На advanced — \
+корзина на сингармонизм: разложить слова твёрдого и мягкого ряда или \
+словоформы с окончаниями -дар/-дер/-тар/-тер."""
+
+[difficulty_scaling]
+basic = "Две корзины с явными категориями, 12–15 карточек без ловушек."
+standard = "Три корзины и две-три граничные карточки."
+advanced = "Четыре корзины, карточки без подписи — по описанию; финал — «придумай карточку-ловушку для соседей»."
+
+[[print_items]]
+name = "Лист с корзинами"
+per = "per_pair"
+count = "1"
+layout = "a4_sheet"
+cut = "none"
+double_sided = false
+
+[[print_items]]
+name = "Карточки-слова"
+per = "per_pair"
+count = "15–25"
+layout = "card_grid"
+cut = "grid"
+double_sided = false
+
+[[print_items]]
+name = "Ключ с распределением и пояснениями"
+per = "per_pair"
+count = "1"
+layout = "strip"
+cut = "none"
+double_sided = false
