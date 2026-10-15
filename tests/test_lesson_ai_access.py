@@ -17,7 +17,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session as OrmSession
 
 from app.adapters.db.base import get_engine
-from app.adapters.db.models import Enrollment, LessonAiAccess, LessonAiUsage, LessonKit
+from app.adapters.db.models import (
+    Enrollment,
+    LessonAiAccess,
+    LessonAiUsage,
+    LessonKit,
+    LessonKitObjective,
+)
 from app.application import lesson_ai_access
 from app.application.lesson_ai_access import today_kz
 from app.config import get_settings
@@ -551,9 +557,9 @@ def test_revoke_never_granted_is_404(client2, sms):
 
 
 def make_kit(user_id_: int, objective_id: int) -> LessonKit:
-    return seed(
-        LessonKit(user_id=user_id_, objective_id=objective_id, topic="Урок", grade=2, lang="ru")
-    )
+    kit = seed(LessonKit(user_id=user_id_, topic="Урок", grade=2, lang="ru"))
+    seed(LessonKitObjective(kit_id=kit.id, position=1, objective_id=objective_id))
+    return kit
 
 
 def spend(user_id_: int, *, tokens_in: int, tokens_out: int, cost: str | None, **kw):

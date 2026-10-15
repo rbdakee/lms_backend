@@ -936,18 +936,17 @@ def _in(column: str, values: tuple[str, ...]) -> str:
 class LessonKit(Base):
     """Комплект к одному уроку: заказ учителя и сводный статус его материалов.
 
-    `grade` и `lang` берутся из цели обучения, а не из запроса: язык документов
-    равен языку обучения, и цель из редакции приказа на этом языке знает его
-    сама (раздел 1). Хранятся рядом с целью ради списка уроков учителя.
+    `grade` и `lang` берутся из целей обучения, а не из запроса: язык документов
+    равен языку обучения, и цели из редакции приказа на этом языке знают его
+    сами (раздел 1). Цели одной программы и одного класса проверяет сервер.
+    Хранятся рядом с целями ради списка уроков учителя.
     """
 
     __tablename__ = "lesson_kit"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
-    # Без каскада нарочно: по цели уже собран документ, и повторный импорт
-    # программы не должен выдернуть её из-под комплекта (раздел 3).
-    objective_id: Mapped[int] = mapped_column(ForeignKey("learning_objective.id"), index=True)
+    # Цели урока — в `lesson_kit_objective` по порядку учителя.
     topic: Mapped[str] = mapped_column(Text)
     grade: Mapped[int] = mapped_column(Integer)
     lang: Mapped[str] = mapped_column(Text)
@@ -976,6 +975,29 @@ class LessonKit(Base):
         CheckConstraint(_in("difficulty_level", DIFFICULTY_LEVELS), name="difficulty_level"),
         # Свои уроки учитель видит списком, свежие сверху
         Index("ix_lesson_kit_user_id_id", "user_id", "id"),
+    )
+
+
+class LessonKitObjective(Base):
+    """Цель урока: комплект ведёт одна или несколько целей, порядок задаёт учитель.
+
+    Внешний ключ на цель без каскада нарочно: по ней уже собран документ,
+    и повторный импорт программы не должен выдернуть её из-под комплекта (раздел 3).
+    """
+
+    __tablename__ = "lesson_kit_objective"
+
+    kit_id: Mapped[int] = mapped_column(
+        ForeignKey("lesson_kit.id", ondelete="CASCADE"), primary_key=True
+    )
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    objective_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("learning_objective.id"), index=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("kit_id", "objective_id"),
+        CheckConstraint("position >= 1", name="position"),
     )
 
 
@@ -1150,10 +1172,13 @@ class LessonAiChat(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
     status: Mapped[str] = mapped_column(Text, default="collecting", server_default="collecting")
-    # Без каскада, как у комплекта: повторный импорт программы не должен
-    # выдернуть цель из-под заказа, который учитель уже видит
-    objective_id: Mapped[int | None] = mapped_column(ForeignKey("learning_objective.id"))
+    # Цели — в `lesson_ai_chat_objective` по порядку учителя.
     lang: Mapped[str | None] = mapped_column(Text)
+    # Учитель подтвердил, что целей больше трёх и столько и нужно: помощник
+    # переспрашивает один раз (решение владельца 15.10.2026), флаг — чтобы не повторять
+    many_objectives_confirmed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
     topic: Mapped[str | None] = mapped_column(Text)
     # Что учитель сказал в разговоре о двух уровнях, списке материалов
     # и классе. Пусто — не говорил; карточка заказа тогда предлагает середину
@@ -1176,6 +1201,24 @@ class LessonAiChat(Base):
         CheckConstraint(_in("difficulty_level", DIFFICULTY_LEVELS), name="difficulty_level"),
         CheckConstraint("class_size BETWEEN 1 AND 60", name="class_size"),
         Index("ix_lesson_ai_chat_user_id_id", "user_id", "id"),
+    )
+
+
+class LessonAiChatObjective(Base):
+    """Цели заказа чата по порядку учителя. Без каскада на цель, как у комплекта:
+    повторный импорт программы не должен выдернуть цель из-под заказа."""
+
+    __tablename__ = "lesson_ai_chat_objective"
+
+    chat_id: Mapped[int] = mapped_column(
+        ForeignKey("lesson_ai_chat.id", ondelete="CASCADE"), primary_key=True
+    )
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    objective_id: Mapped[int] = mapped_column(ForeignKey("learning_objective.id"))
+
+    __table_args__ = (
+        UniqueConstraint("chat_id", "objective_id"),
+        CheckConstraint("position >= 1", name="position"),
     )
 
 
@@ -1294,9 +1337,11 @@ class LessonMaterialBank(Base):
     __tablename__ = "lesson_material_bank"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    # Без каскада, как у комплекта: повторный импорт программы не должен
-    # выдёргивать цель из-под готовых материалов
-    objective_id: Mapped[int] = mapped_column(ForeignKey("learning_objective.id"))
+    # Ключ набора целей: id через запятую по возрастанию («12,45»). Порядок
+    # в ключ не входит — банк выдаёт на совпадение набора, а порядок целей
+    # в документе при выдаче ставится по комплекту учителя. Сами цели с порядком
+    # автора варианта — в `lesson_material_bank_objective`.
+    objective_key: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(Text)
     lang: Mapped[str] = mapped_column(Text)
     engagement_level: Mapped[str] = mapped_column(Text)
@@ -1318,11 +1363,26 @@ class LessonMaterialBank(Base):
         CheckConstraint(_in("difficulty_level", DIFFICULTY_LEVELS), name="difficulty_level"),
         Index(
             "ix_lesson_material_bank_key",
-            "objective_id",
+            "objective_key",
             "kind",
             "lang",
             "engagement_level",
             "difficulty_level",
             "id",
         ),
+    )
+
+
+class LessonMaterialBankObjective(Base):
+    """Цели варианта банка. Без каскада на цель: повторный импорт программы
+    не должен выдёргивать цель из-под готовых материалов."""
+
+    __tablename__ = "lesson_material_bank_objective"
+
+    bank_id: Mapped[int] = mapped_column(
+        ForeignKey("lesson_material_bank.id", ondelete="CASCADE"), primary_key=True
+    )
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    objective_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("learning_objective.id"), index=True
     )

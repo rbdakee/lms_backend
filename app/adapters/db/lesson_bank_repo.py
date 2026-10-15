@@ -10,7 +10,13 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.db.lesson_ai_repos import save_blocks
-from app.adapters.db.models import LessonKit, LessonMaterial, LessonMaterialBank
+from app.adapters.db.models import (
+    LessonKit,
+    LessonMaterial,
+    LessonMaterialBank,
+    LessonMaterialBankObjective,
+)
+from app.domain.lesson_ai import objective_key
 
 
 class LessonBankRepo:
@@ -21,7 +27,7 @@ class LessonBankRepo:
         self,
         user_id: int,
         *,
-        objective_id: int,
+        objective_ids: list[int],
         kind: str,
         lang: str,
         engagement_level: str,
@@ -30,7 +36,8 @@ class LessonBankRepo:
     ) -> LessonMaterialBank | None:
         """Самый старый вариант на ключ, которого у учителя ещё нет.
 
-        У одной цели бывает несколько уроков: учитель, ведущий второй урок
+        Набор целей должен совпасть целиком, порядок не важен. У одного набора
+        бывает несколько уроков: учитель, ведущий второй урок
         по той же цели, иначе получил бы тот же документ второй раз. Самый
         старый — чтобы выдача была предсказуемой и её можно было проверить.
         `plan_bank_id` пустой — вариант, который делали без плана урока.
@@ -49,7 +56,7 @@ class LessonBankRepo:
         return self.db.scalar(
             select(LessonMaterialBank)
             .where(
-                LessonMaterialBank.objective_id == objective_id,
+                LessonMaterialBank.objective_key == objective_key(objective_ids),
                 LessonMaterialBank.kind == kind,
                 LessonMaterialBank.lang == lang,
                 LessonMaterialBank.engagement_level == engagement_level,
@@ -61,13 +68,23 @@ class LessonBankRepo:
             .limit(1)
         )
 
-    def issue(self, kit_id: int, variant: LessonMaterialBank, *, user_id: int) -> None:
+    def issue(
+        self,
+        kit_id: int,
+        variant: LessonMaterialBank,
+        *,
+        user_id: int,
+        objectives: list[dict],
+    ) -> None:
         """Материал комплекта — сразу готовым, из варианта банка, без задания.
 
         Блоки и первые версии пишутся так же, как при генерации: дальше
         учитель правит выданное точно так же, как сгенерированное.
         """
         content = document(variant)
+        # Цели те же, а порядок — учителя, получившего материал, а не автора варианта
+        if "learning_objectives" in content:
+            content["learning_objectives"] = objectives
         material = LessonMaterial(
             kit_id=kit_id,
             kind=variant.kind,
@@ -98,7 +115,7 @@ class LessonBankRepo:
         content: dict,
         mechanics: tuple[str, ...],
         model: str | None,
-        objective_id: int,
+        objective_ids: list[int],
         kind: str,
         lang: str,
         engagement_level: str,
@@ -112,7 +129,7 @@ class LessonBankRepo:
         в порядке формы.
         """
         row = LessonMaterialBank(
-            objective_id=objective_id,
+            objective_key=objective_key(objective_ids),
             kind=kind,
             lang=lang,
             engagement_level=engagement_level,
@@ -124,6 +141,11 @@ class LessonBankRepo:
             model=model,
         )
         self.db.add(row)
+        self.db.flush()
+        self.db.add_all(
+            LessonMaterialBankObjective(bank_id=row.id, position=position, objective_id=oid)
+            for position, oid in enumerate(objective_ids, start=1)
+        )
         self.db.flush()
         return row.id
 

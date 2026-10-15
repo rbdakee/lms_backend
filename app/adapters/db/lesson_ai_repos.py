@@ -25,9 +25,11 @@ from app.adapters.db.models import (
     LessonAiAccess,
     LessonAiChat,
     LessonAiChatMessage,
+    LessonAiChatObjective,
     LessonAiJob,
     LessonAiUsage,
     LessonKit,
+    LessonKitObjective,
     LessonMaterial,
     LessonMaterialBlock,
     LessonMaterialVersion,
@@ -47,22 +49,54 @@ class LessonKitRepo:
     def __init__(self, db: DbSession):
         self.db = db
 
-    def objective_card(
-        self, objective_id: int
-    ) -> tuple[LearningObjective, CurriculumProgram, CurriculumSubject] | None:
-        """Цель вместе с программой и предметом: по программе решается,
-        открыта ли генерация, по ней же — язык комплекта."""
-        row = self.db.execute(
+    def objective_cards(
+        self, objective_ids: list[int]
+    ) -> list[tuple[LearningObjective, CurriculumProgram, CurriculumSubject]] | None:
+        """Цели вместе с программой и предметом — в порядке `objective_ids`.
+        По программе решается, открыта ли генерация, по ней же — язык комплекта.
+        None — хотя бы одной цели в справочнике нет."""
+        rows = self.db.execute(
             select(LearningObjective, CurriculumProgram, CurriculumSubject)
             .join(CurriculumProgram, CurriculumProgram.id == LearningObjective.program_id)
             .join(CurriculumSubject, CurriculumSubject.id == CurriculumProgram.subject_id)
-            .where(LearningObjective.id == objective_id)
-        ).first()
-        return tuple(row) if row is not None else None
+            .where(LearningObjective.id.in_(objective_ids))
+        ).all()
+        found = {row[0].id: tuple(row) for row in rows}
+        if any(objective_id not in found for objective_id in objective_ids):
+            return None
+        return [found[objective_id] for objective_id in objective_ids]
 
-    def create_kit(self, **fields) -> LessonKit:
+    def kit_objectives(
+        self, kit_ids: list[int]
+    ) -> dict[int, list[tuple[LearningObjective, CurriculumProgram, CurriculumSubject]]]:
+        """Цели комплектов по порядку учителя — одним запросом на любую страницу."""
+        found: dict[int, list] = {kit_id: [] for kit_id in kit_ids}
+        if kit_ids:
+            rows = self.db.execute(
+                select(
+                    LessonKitObjective.kit_id,
+                    LearningObjective,
+                    CurriculumProgram,
+                    CurriculumSubject,
+                )
+                .join(LearningObjective, LearningObjective.id == LessonKitObjective.objective_id)
+                .join(CurriculumProgram, CurriculumProgram.id == LearningObjective.program_id)
+                .join(CurriculumSubject, CurriculumSubject.id == CurriculumProgram.subject_id)
+                .where(LessonKitObjective.kit_id.in_(kit_ids))
+                .order_by(LessonKitObjective.kit_id, LessonKitObjective.position)
+            ).all()
+            for kit_id, *card in rows:
+                found[kit_id].append(tuple(card))
+        return found
+
+    def create_kit(self, *, objective_ids: list[int], **fields) -> LessonKit:
         kit = LessonKit(**fields)
         self.db.add(kit)
+        self.db.flush()
+        self.db.add_all(
+            LessonKitObjective(kit_id=kit.id, position=position, objective_id=objective_id)
+            for position, objective_id in enumerate(objective_ids, start=1)
+        )
         self.db.flush()
         return kit
 
@@ -83,37 +117,42 @@ class LessonKitRepo:
 
     def user_kits(
         self, user_id: int, *, q: str | None, offset: int, limit: int
-    ) -> tuple[list[tuple[LessonKit, LearningObjective, CurriculumSubject]], int]:
+    ) -> tuple[list[LessonKit], int]:
         """Комплекты учителя для «Моих уроков» — новые сверху.
 
         Комплект из банка — такая же строка `lesson_kit` с `user_id` получателя
         (банк отдаёт материалы, а не комплекты), поэтому выбор по `user_id`
         находит и его. Порядок и отбор идут по `ix_lesson_kit_user_id_id`.
-        `q` ищет по теме, коду и тексту цели без учёта регистра.
+        `q` ищет по теме, коду и тексту любой из целей без учёта регистра.
         """
         where = [LessonKit.user_id == user_id]
         if q:
             # Спецсимволы LIKE экранируются: «50%» ищется как есть
             like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-            where.append(
-                or_(
-                    LessonKit.topic.ilike(like, escape="\\"),
-                    LearningObjective.code.ilike(like, escape="\\"),
-                    LearningObjective.text.ilike(like, escape="\\"),
+            by_objective = (
+                select(LessonKitObjective.kit_id)
+                .join(LearningObjective, LearningObjective.id == LessonKitObjective.objective_id)
+                .where(
+                    LessonKitObjective.kit_id == LessonKit.id,
+                    or_(
+                        LearningObjective.code.ilike(like, escape="\\"),
+                        LearningObjective.text.ilike(like, escape="\\"),
+                    ),
                 )
+                .exists()
             )
-        base = (
-            select(LessonKit, LearningObjective, CurriculumSubject)
-            .join(LearningObjective, LearningObjective.id == LessonKit.objective_id)
-            .join(CurriculumProgram, CurriculumProgram.id == LearningObjective.program_id)
-            .join(CurriculumSubject, CurriculumSubject.id == CurriculumProgram.subject_id)
-            .where(*where)
-        )
+            where.append(or_(LessonKit.topic.ilike(like, escape="\\"), by_objective))
         total = self.db.execute(
-            select(func.count()).select_from(base.with_only_columns(LessonKit.id).subquery())
+            select(func.count()).select_from(LessonKit).where(*where)
         ).scalar_one()
-        rows = self.db.execute(base.order_by(LessonKit.id.desc()).offset(offset).limit(limit)).all()
-        return [tuple(row) for row in rows], total
+        rows = self.db.scalars(
+            select(LessonKit)
+            .where(*where)
+            .order_by(LessonKit.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list(rows), total
 
     def materials_of(self, kit_ids: list[int]) -> dict[int, list[LessonMaterial]]:
         """Материалы страницы комплектов одним запросом, в порядке видов из брифа."""
@@ -611,6 +650,30 @@ class LessonChatRepo:
             select(LessonAiChat).where(LessonAiChat.id == chat_id).with_for_update()
         ).scalar_one_or_none()
 
+    def chat_objective_ids(self, chat_ids: list[int]) -> dict[int, list[int]]:
+        """Цели заказов по порядку учителя — одним запросом на любое число чатов."""
+        found: dict[int, list[int]] = {chat_id: [] for chat_id in chat_ids}
+        if chat_ids:
+            rows = self.db.execute(
+                select(LessonAiChatObjective.chat_id, LessonAiChatObjective.objective_id)
+                .where(LessonAiChatObjective.chat_id.in_(chat_ids))
+                .order_by(LessonAiChatObjective.chat_id, LessonAiChatObjective.position)
+            )
+            for chat_id, objective_id in rows:
+                found[chat_id].append(objective_id)
+        return found
+
+    def set_chat_objectives(self, chat_id: int, objective_ids: list[int]) -> None:
+        """Список целей заказа заменяется целиком: учитель правит набор, а не строку."""
+        self.db.execute(
+            delete(LessonAiChatObjective).where(LessonAiChatObjective.chat_id == chat_id)
+        )
+        self.db.add_all(
+            LessonAiChatObjective(chat_id=chat_id, position=position, objective_id=objective_id)
+            for position, objective_id in enumerate(objective_ids, start=1)
+        )
+        self.db.flush()
+
     def kit_statuses(self, kit_ids: list[int]) -> dict[int, str]:
         """Статусы комплектов страницы истории — одним запросом."""
         if not kit_ids:
@@ -757,6 +820,23 @@ class LessonChatRepo:
             .order_by(CurriculumSubject.order_index, CurriculumSubject.id)
         ).all()
         return [(code, title, lo, hi, sorted(langs)) for code, title, lo, hi, langs in rows]
+
+    def published_grades(self) -> dict[str, dict[str, list[int]]]:
+        """Классы, в которых у предмета есть цели, — по редакциям: код предмета →
+        язык редакции → классы. «Какого класса нет» модель читает отсюда, а не
+        гадает по пустому поиску."""
+        rows = self.db.execute(
+            select(CurriculumSubject.code, CurriculumProgram.lang, LearningObjective.grade)
+            .join(CurriculumProgram, CurriculumProgram.subject_id == CurriculumSubject.id)
+            .join(LearningObjective, LearningObjective.program_id == CurriculumProgram.id)
+            .where(CurriculumProgram.status == "published")
+            .group_by(CurriculumSubject.code, CurriculumProgram.lang, LearningObjective.grade)
+            .order_by(CurriculumSubject.code, CurriculumProgram.lang, LearningObjective.grade)
+        ).all()
+        found: dict[str, dict[str, list[int]]] = {}
+        for code, lang, grade in rows:
+            found.setdefault(code, {}).setdefault(lang, []).append(grade)
+        return found
 
     def subject_known(self, subject_code: str) -> bool:
         """Есть ли такой предмет в справочнике — чтобы опечатку модели в коде

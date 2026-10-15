@@ -341,11 +341,11 @@ class FakeRepo:
     def __init__(self, db):
         pass
 
-    def objective_card(self, objective_id):
-        objective = SimpleNamespace(code=CODE, text=f"{OBJECTIVE} {CODE}", marker="")
+    def kit_objectives(self, kit_ids):
+        objective = SimpleNamespace(code=CODE, text=f"{OBJECTIVE} {CODE}", marker="", id=1)
         program = SimpleNamespace(status="published")
         subject = SimpleNamespace(title="Математика", code="math")
-        return objective, program, subject
+        return {kit_id: [(objective, program, subject)] for kit_id in kit_ids}
 
     def ready_blocks(self, kit_id, kinds):
         FakeRepo.plan_calls.append(kinds)
@@ -371,7 +371,6 @@ def prepared_for(monkeypatch):
     def prepared(kind, engagement="active", difficulty="standard"):
         kit = SimpleNamespace(
             id=17,
-            objective_id=1,
             lang="ru",
             grade=2,
             topic=f"Сложение {CODE} двузначных чисел",

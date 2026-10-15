@@ -242,7 +242,13 @@ def test_ai_loop_names_no_tool_of_either_product():
 
 def test_order_chat_has_exactly_two_tools():
     names = {item["function"]["name"] for item in OrderTools().schemas()}
-    assert names == {"find_objectives", "get_objective"}
+    assert names == {
+        "list_subjects",
+        "browse_objectives",
+        "show_objectives",
+        "find_objectives",
+        "get_objective",
+    }
     assert names.isdisjoint(registry.all_tools())
 
 

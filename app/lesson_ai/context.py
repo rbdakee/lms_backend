@@ -67,7 +67,8 @@ class LessonBrief:
     subject: str
     section: str
     subsection: str
-    objective: str
+    # Тексты всех целей урока по порядку учителя, коды вырезаны
+    objectives: tuple[str, ...]
     topic: str
     class_size: int | None
     notes: str
@@ -107,13 +108,19 @@ def prepare(
     пожеланий она обезличенная и ложится в банк. Перегенерация блока
     и ключи с ответами зовут без него — они личные и в банк не идут.
     """
-    objective, program, subject = LessonKitRepo(db).objective_card(kit.objective_id)
+    cards = LessonKitRepo(db).kit_objectives([kit.id])[kit.id]
+    _first, program, subject = cards[0]
+    objective_ids = tuple(card[0].id for card in cards)
     if program.status != "published":
         raise JobError("program_not_published", retryable=False)
-    section, subsection = objective_sections(db, objective)
+    # Цели одной программы, но разделов у них может быть несколько: в документ
+    # идут все, без повторов, в порядке целей
+    sections = [objective_sections(db, card[0]) for card in cards]
+    section = "; ".join(dict.fromkeys(title for title, _ in sections))
+    subsection = "; ".join(dict.fromkeys(sub for _, sub in sections if sub))
     impersonal = bank and bankable(kit.notes)
     if impersonal:
-        slot, plan = _bank_slot(db, kit, objective.id, with_plan=with_plan)
+        slot, plan = _bank_slot(db, kit, objective_ids, with_plan=with_plan)
     else:
         slot, plan = None, (_plan(db, kit.id) if with_plan else None)
     brief = LessonBrief(
@@ -124,7 +131,7 @@ def prepare(
         subsection=subsection,
         # Коды вырезаются из всего, что пишет человек или приказ: учитель мог
         # вписать код в тему, а в тексте цели он мог остаться от склейки ячеек
-        objective=strip_objective_codes(objective.text),
+        objectives=tuple(strip_objective_codes(card[0].text) for card in cards),
         # Тема и число детей — личное учителя: в банковую генерацию не идут,
         # их учитель правит поверх выданного (раздел 7)
         topic="" if impersonal else strip_objective_codes(kit.topic),
@@ -138,13 +145,16 @@ def prepare(
     return Prepared(
         brief=brief,
         section={"title": section, "subsection": subsection},
-        objectives=[{"code": objective.code, "text": objective.text, "marker": objective.marker}],
+        objectives=[
+            {"code": card[0].code, "text": card[0].text, "marker": card[0].marker}
+            for card in cards
+        ],
         bank=slot,
     )
 
 
 def _bank_slot(
-    db: DbSession, kit: LessonKit, objective_id: int, *, with_plan: bool
+    db: DbSession, kit: LessonKit, objective_ids: tuple[int, ...], *, with_plan: bool
 ) -> tuple[BankSlot | None, dict | None]:
     """Слот банка и план урока для обезличенной генерации.
 
@@ -169,7 +179,7 @@ def _bank_slot(
             plan_bank_id = variant.id
             plan = _model_blocks(document(variant).items())
     slot = BankSlot(
-        objective_id=objective_id,
+        objective_ids=objective_ids,
         kind="",
         lang=kit.lang,
         engagement_level=kit.engagement_level,
@@ -223,7 +233,13 @@ def describe(brief: LessonBrief, *, levels: bool = True) -> str:
     ]
     if brief.subsection:
         lines.append(f"Подраздел: {brief.subsection}")
-    lines.append(f"Цель обучения по программе: {brief.objective}")
+    if len(brief.objectives) == 1:
+        lines.append(f"Цель обучения по программе: {brief.objectives[0]}")
+    else:
+        # Урок идёт по нескольким целям сразу: материал обязан покрыть каждую
+        lines.append("Цели обучения по программе (урок идёт по всем сразу, материал должен"
+                     " покрыть каждую):")
+        lines += [f"{number}. {text}" for number, text in enumerate(brief.objectives, start=1)]
     # Темы нет у обезличенной генерации для банка: материал пишется по цели
     if brief.topic:
         lines.append(f"Тема урока: {brief.topic}")

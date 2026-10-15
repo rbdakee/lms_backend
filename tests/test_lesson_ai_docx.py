@@ -173,7 +173,7 @@ def test_file_is_a_docx_attachment_named_by_topic(client, sms, ai, scene):
     assert fallback.isascii()
     encoded = re.search(r"filename\*=UTF-8''(\S+)", disposition).group(1)
     assert encoded.isascii()
-    assert unquote(encoded) == f"ҚМЖ — {TOPIC}.docx"
+    assert unquote(encoded) == f"Краткосрочный план — {TOPIC}.docx"
     # Байты — настоящий документ Word, а не что-то с правильным заголовком
     opened(resp)
 
@@ -191,7 +191,7 @@ def test_file_name_drops_characters_forbidden_in_file_names(client, sms, ai, sce
     disposition = resp.headers["content-disposition"]
     encoded = re.search(r"filename\*=UTF-8''(\S+)", disposition).group(1)
     name = unquote(encoded)
-    assert name == "ҚМЖ — Сложениевычитание что это Разряды 10  2023.docx"
+    assert name == "Краткосрочный план — Сложениевычитание что это Разряды 10  2023.docx"
     assert not set('/\\:*?"<>|') & set(name)
     # В документе тема — как её написал учитель: чистится только имя файла
     assert head_value(opened(resp), "topic") == [topic]

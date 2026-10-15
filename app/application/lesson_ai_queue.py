@@ -38,7 +38,7 @@ class BankSlot:
     """Куда в банке ляжет материал, сгенерированный обезличенно: ключ
     банка и вариант плана, по которому он построен (пусто — без плана)."""
 
-    objective_id: int
+    objective_ids: tuple[int, ...]
     kind: str
     lang: str
     engagement_level: str

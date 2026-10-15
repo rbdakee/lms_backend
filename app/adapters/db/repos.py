@@ -44,7 +44,7 @@ from app.adapters.db.models import (
     LearningObjective,
     Lesson,
     LessonFile,
-    LessonKit,
+    LessonKitObjective,
     LessonProgress,
     Module,
     Notification,
@@ -3836,9 +3836,8 @@ class CurriculumRepo:
         """
         return (
             self.db.scalar(
-                select(func.count())
-                .select_from(LessonKit)
-                .join(LearningObjective, LearningObjective.id == LessonKit.objective_id)
+                select(func.count(func.distinct(LessonKitObjective.kit_id)))
+                .join(LearningObjective, LearningObjective.id == LessonKitObjective.objective_id)
                 .where(LearningObjective.program_id == program_id)
             )
             or 0
