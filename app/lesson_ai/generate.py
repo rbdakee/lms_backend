@@ -48,6 +48,11 @@ class KindSpec:
     # Строительные блоки под заказ — у игры: (текст для модели, слаги
     # механик). Второй аргумент — зерно отбора, номер комплекта
     references: Callable[[LessonBrief, int], tuple[str, tuple[str, ...]]] | None = None
+    # Схема провайдеру, если проверка принимает шире, чем пишет модель:
+    # слайд презентации двух форм, а новый ответ — всегда одной
+    schema_draft: type[BaseModel] | None = None
+    # Что принимает проверка ответа и правок, когда шире схемы провайдера
+    validation_draft: type[BaseModel] | None = None
 
 
 @dataclass(frozen=True)
@@ -62,8 +67,10 @@ class SchemaGenerator:
         self.ai = ai
         self.model = model
         self.spec = spec
-        # Схема не меняется от урока к уроку — собирается один раз
-        self.schema = strict_schema(spec.draft)
+        # Схема не меняется от урока к уроку — собирается один раз.
+        # Провайдеру — одна форма (`schema_draft`), проверке — обе (`validation_draft`)
+        self.schema = strict_schema(spec.schema_draft or spec.draft)
+        self._check = spec.validation_draft or spec.draft
 
     def prepare(self, db: DbSession, kit: LessonKit) -> KindPrepared:
         # Генерация всего материала — обезличенная, если комплект идёт через
@@ -107,7 +114,7 @@ class SchemaGenerator:
 
     def _checked(self, text: str, tokens: dict) -> dict:
         try:
-            draft = self.spec.draft.model_validate_json(text)
+            draft = self._check.model_validate_json(text)
         except ValidationError as exc:
             # В лог — где и что не так, но не само содержимое: в нём тема урока
             # и пожелания учителя

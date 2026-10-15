@@ -184,7 +184,10 @@ def _item(index: int, value: Any) -> str:
 def _slide(first: int, index: int, value: Any) -> str:
     """Слайд в оглавлении: номер, тип, заголовок, ключ картинки — «слайд 5
     [question] «Where is my bag?» img:bag». Слайд без типа сохранён до появления
-    типов — он image_text, тип не показывается."""
+    типов — он image_text, тип не показывается. Слайд-сценарий — шаблон вместо
+    типа, главный текст — первый заполненный текстовый слот."""
+    if isinstance(value, dict) and value.get("template"):
+        return _scenario_slide(first + index, value)
     kind = ""
     image = ""
     if isinstance(value, dict):
@@ -192,6 +195,18 @@ def _slide(first: int, index: int, value: Any) -> str:
         if value.get("image"):
             image = f" img:{value['image']}"
     return f"слайд {first + index}{kind} «{_short(preview(value))}»{image}"
+
+
+def _scenario_slide(number: int, value: dict) -> str:
+    fills = [f for f in value.get("fill") or [] if isinstance(f, dict)]
+    text = next((f["text"] for f in fills if f.get("text")), "")
+    if not text:
+        text = next((f["items"][0] for f in fills if f.get("items")), "")
+    image = next((f["image"] for f in fills if f.get("image")), "")
+    head = f" [{value['template']}]"
+    body = f" «{_short(preview(text))}»" if text else ""
+    pic = f" img:{image}" if image else ""
+    return f"слайд {number}{head}{body}{pic}"
 
 
 def _short(text: str) -> str:

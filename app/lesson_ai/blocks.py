@@ -48,17 +48,28 @@ class BlockRewriter:
     def __init__(self, ai: AiPort, specs: tuple[KindSpec, ...] = SPECS):
         self.ai = ai
         self.specs = {spec.kind: spec for spec in specs}
-        # Схемы блоков не меняются от урока к уроку — собираются один раз
+        # Схемы блоков не меняются от урока к уроку — собираются один раз.
+        # Проверка (`_models`) принимает шире схемы провайдера (`_schemas`):
+        # слайд презентации бывает двух форм, и старые материалы правятся
+        # в своей форме, а модель отвечает в форме этой установки
         self._models: dict[tuple[str, str], type[BaseModel]] = {}
         self._schemas: dict[tuple[str, str], dict] = {}
         for spec in specs:
-            for name, field in spec.draft.model_fields.items():
+            validation = spec.validation_draft or spec.draft
+            provider = spec.schema_draft or spec.draft
+            for name, field in validation.model_fields.items():
                 model = create_model(
-                    f"{spec.draft.__name__}_{name}",
+                    f"{validation.__name__}_{name}",
                     __config__=ConfigDict(extra="forbid"),
                     **{name: (field.annotation, field)},
                 )
                 self._models[spec.kind, name] = model
+            for name, field in provider.model_fields.items():
+                model = create_model(
+                    f"{provider.__name__}_{name}",
+                    __config__=ConfigDict(extra="forbid"),
+                    **{name: (field.annotation, field)},
+                )
                 self._schemas[spec.kind, name] = strict_schema(model)
 
     def is_server_block(self, kind: str, block: str) -> bool:

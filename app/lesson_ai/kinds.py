@@ -25,6 +25,7 @@ from app.lesson_ai.schemas.homework import HomeworkDraft
 from app.lesson_ai.schemas.lesson_plan import SERVER_BLOCKS as PLAN_SERVER_BLOCKS
 from app.lesson_ai.schemas.lesson_plan import LessonPlanDraft
 from app.lesson_ai.schemas.presentation import PresentationDraft
+from app.lesson_ai.schemas.presentation_deck import PresentationDeckDraft, any_form_draft
 from app.lesson_ai.schemas.tasks import TasksDraft
 
 LESSON_PLAN = KindSpec(
@@ -37,15 +38,37 @@ LESSON_PLAN = KindSpec(
     with_plan=False,
 )
 
-PRESENTATION = KindSpec(
-    kind="presentation",
-    draft=PresentationDraft,
-    system=presentation_prompt.SYSTEM,
-    user_message=presentation_prompt.user_message,
-    server_blocks=SERVER_BLOCKS,
-    # Уровни доходят до слайдов через план, а не напрямую (раздел 4.3)
-    levels=False,
-)
+
+def _presentation_spec() -> KindSpec:
+    """Слайды по шаблонам, когда библиотека есть, и по прежним восьми типам,
+    когда её нет (PPTX_TEMPLATES_SPEC, раздел 3). Проверка ответа в обоих
+    случаях принимает обе формы слайда: старые материалы живут в базе вечно.
+    """
+    common = dict(
+        kind="presentation",
+        user_message=presentation_prompt.user_message,
+        server_blocks=SERVER_BLOCKS,
+        # Уровни доходят до слайдов через план, а не напрямую (раздел 4.3)
+        levels=False,
+        validation_draft=any_form_draft(),
+    )
+    from app.lesson_ai import pptx_templates
+
+    if pptx_templates.available():
+        catalog = pptx_templates.load(pptx_templates.root())
+        return KindSpec(
+            draft=PresentationDeckDraft,
+            system=presentation_prompt.deck_system(pptx_templates.index(catalog)),
+            **common,
+        )
+    return KindSpec(
+        draft=PresentationDraft,
+        system=presentation_prompt.SYSTEM,
+        **common,
+    )
+
+
+PRESENTATION = _presentation_spec()
 
 TASKS = KindSpec(
     kind="tasks",

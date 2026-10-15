@@ -109,20 +109,31 @@ class Ctx:
 
 
 def render_presentation(content: dict, header: DocHeader) -> bytes:
-    labels = LABELS[header.lang]
     deck = Presentation()
     deck.slide_width, deck.slide_height = WIDTH, HEIGHT
-    blank = deck.slide_layouts[6]
 
-    # Титульный — из комплекта, а не от модели: тема и класс у всех материалов
-    # одни. Цель обучения с кодом — в заметках, она для учителя, не для детей
+    build_server_slides(deck, content, header)
+    for block, stage in STAGES:
+        for item in content.get(block) or []:
+            build_slide_in(deck, item, header.lang, stage)
+
+    out = BytesIO()
+    deck.save(out)
+    return out.getvalue()
+
+
+def build_server_slides(deck, content: dict, header: DocHeader) -> None:
+    """Титульный и «Сегодня на уроке» — серверные слайды, общие для обеих
+    сборок: тема, класс и цели урока берутся из комплекта, а не от модели.
+    Цель обучения с кодом — в заметках титульного: она для учителя."""
+    labels = LABELS[header.lang]
     title = {
         "layout": "title",
         "title": header.topic,
         "lines": [f"{header.grade} {labels['grade']}"],
         "animation": "none",
     }
-    slide = _build(deck, blank, title, header.lang, "goals")
+    slide = _draw(_empty_slide(deck), title, header.lang, "goals")
     objectives = [
         f"{item['code']}{item.get('marker', '')} {item['text']}"
         for item in content.get("learning_objectives") or []
@@ -133,23 +144,33 @@ def render_presentation(content: dict, header: DocHeader) -> bytes:
     goals = content.get("goals") or []
     if goals:
         agenda = {"layout": "agenda", "title": labels["goals"], "lines": goals}
-        _build(deck, blank, agenda, header.lang, "goals")
-
-    for block, stage in STAGES:
-        for item in content.get(block) or []:
-            slide = _build(deck, blank, item, header.lang, stage)
-            notes = [item.get("notes", "")]
-            if item.get("visual"):
-                notes.append(f"{labels['show']}: {item['visual']}")
-            _notes(slide, [line for line in notes if line])
-
-    out = BytesIO()
-    deck.save(out)
-    return out.getvalue()
+        _draw(_empty_slide(deck), agenda, header.lang, "goals")
 
 
-def _build(deck, blank, item: dict, lang: str, stage: str):
-    slide = deck.slides.add_slide(blank)
+def build_slide_in(deck, item: dict, lang: str, stage: str):
+    """Слайд прежней формы в готовой колоде — колода из шаблонов начинается
+    с тех же серверных слайдов и держит старые слайды, когда материал
+    смешанный после правки."""
+    slide = _empty_slide(deck)
+    _draw(slide, item, lang, stage)
+    notes = [item.get("notes", "")]
+    if item.get("visual"):
+        notes.append(f"{LABELS[lang]['show']}: {item['visual']}")
+    _notes(slide, [line for line in notes if line])
+    return slide
+
+
+def _empty_slide(deck):
+    """Слайд на самом пустом макете колоды; скопированные с макета
+    заполнители убираются — свои плашки слайд рисует сам."""
+    layout = min(deck.slide_layouts, key=lambda item: len(item.placeholders))
+    slide = deck.slides.add_slide(layout)
+    for shape in list(slide.shapes):
+        shape._element.getparent().remove(shape._element)
+    return slide
+
+
+def _draw(slide, item: dict, lang: str, stage: str):
     accent, tint = STAGE_COLORS[stage]
     ctx = Ctx(slide, lang, LABELS[lang], stage, accent, tint)
     layout = item.get("layout") or "image_text"

@@ -7,6 +7,7 @@
 сообщении перед репликой учителя (`state_message`), а не здесь.
 """
 
+from app.lesson_ai import pptx_templates
 from app.lesson_ai.kit_map import kinds_catalog, kit_outline
 from app.lesson_ai.prompts.order_chat import (
     DIFFICULTY_LABELS,
@@ -21,6 +22,20 @@ RELATED = ("Поправить только связанное", "Тек бай�
 CONTINUE = ("Продолжай", "Жалғастыр")
 # Буквы, которых нет в русском: по ним язык разговора определяется без модели
 KZ_LETTERS = frozenset("әғқңөұүһі")
+
+
+def templates_block() -> str:
+    """Каталог шаблонов презентации — постоянная часть промпта (спека,
+    раздел 3): помощник собирает новые слайды из тех же шаблонов, что и
+    генерация. Пусто, когда библиотеки нет: слайды в установке прежние."""
+    if not pptx_templates.available():
+        return ""
+    catalog = pptx_templates.index(pptx_templates.load(pptx_templates.root()))
+    return (
+        "\nКаталог шаблонов презентации (поле template слайда, слоты заполняются"
+        " в fill):\n" + catalog + "\nСтарые слайды могут быть прежней формы (layout,"
+        " title, lines, image, notes): при правке сохраняй форму соседей по блоку.\n"
+    )
 
 SYSTEM = """\
 Ты — «Жоспар», помощник учителя начальной школы Казахстана. Материалы \
@@ -108,7 +123,8 @@ find_objectives, browse_objectives, show_objectives (учитель отмеча
 Устройство материалов комплекта (из схем видов; имена блоков — точные):
 """ + kinds_catalog() + """
 Серверные блоки (раздел, цели обучения с кодами) и ключи с ответами сам не правишь.
-"""
+""" + templates_block()
+
 
 # Что модель читает, упёршись в потолок вызовов за ход
 CAP_MESSAGE = (
