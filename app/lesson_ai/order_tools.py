@@ -341,9 +341,9 @@ def _empty_hint(
 
 def list_subjects(ctx: OrderCtx) -> dict:
     grades = ctx.repo.published_grades()
-    items = []
+    subjects = []
     for code, title, _lo, _hi, langs in ctx.repo.published_subjects():
-        items.append(
+        subjects.append(
             {
                 "code": code,
                 "title": title,
@@ -352,7 +352,8 @@ def list_subjects(ctx: OrderCtx) -> dict:
                 "objectives_language": {ed: objectives_language(code, ed) for ed in langs},
             }
         )
-    return {"items": items}
+    # Ключ не `items`: так отвечает поиск целей, и по форме ответ приняли бы за карточки
+    return {"subjects": subjects}
 
 
 def browse_objectives(ctx: OrderCtx, args: dict) -> dict:
