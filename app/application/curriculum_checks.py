@@ -16,6 +16,11 @@ from dataclasses import dataclass
 # и жёсткое \d потеряло бы половину подраздела.
 CODE_RE = re.compile(r"\b\d{1,2}\.\d+\.\d+\.\d{1,2}\b")
 
+# Обрубок кода в тексте: «3.1.4. использовать…» — в приказе у цели потеряна последняя
+# цифра кода, и парсер приклеил её к предыдущей цели. Живые случаи 12.10.2026: «3.1.4.»
+# в литературном чтении (рус.) и «1.1. 5.» в «Ана тілі» (каз.).
+CODE_STUB_RE = re.compile(r"(?<![\d.])\d\s*\.\s*\d\s*\.\s*\d\s*\.(?=\s*[^\d\s])")
+
 # Формулировка цели короче этого — почти наверняка обрубок ячейки, а не цель.
 MIN_TEXT_LEN = 15
 
@@ -128,6 +133,20 @@ def check_program(program: dict, lang: str) -> list[Issue]:
                     message=(
                         f"[{lang}] внутри формулировки встретился чужой код: "
                         f"{', '.join(foreign)}"
+                    ),
+                )
+            )
+
+        stub = CODE_STUB_RE.search(text)
+        if stub:
+            issues.append(
+                Issue(
+                    kind="broken_code_in_text",
+                    severity=SEVERITY_ERROR,
+                    objective_code=code,
+                    message=(
+                        f"[{lang}] в формулировке обрубок кода «{stub.group(0).strip()}» — "
+                        f"в приказе потеряна цифра, и под ней слиплись две цели"
                     ),
                 )
             )

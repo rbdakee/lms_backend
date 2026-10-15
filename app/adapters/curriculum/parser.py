@@ -61,10 +61,14 @@ _RULES: dict[str, Rules] = {
         "note_prefix": re.compile(r"^(Примечание|Сноска)\b", re.I),
         "order_date_text": re.compile(r"от\s+\d{1,2}\s+\S+\s+\d{4}\s+года\s*№\s*\S+"),
         # шапка таблицы целей: «1 класс» ... «4 класс»
-        "grade_header": re.compile(r"(\d)\s*-?\s*класс", re.I),
-        # «Подраздел», но у физкультуры — «Направление», у языков — «Ключевые навыки»
+        "grade_header": re.compile(r"(\d)\s*[-–—]?\s*класс", re.I),
+        # «Подраздел», но у физкультуры — «Направление», у языков — «Ключевые навыки»,
+        # у однолетних программ первого класса — «Основные навыки»
         "subsection_header": re.compile(
-            r"Подраздел|Направление|Ключевые\s+навык", re.I),
+            r"Подраздел|Направление|Ключевые\s+навык|Основные\s+навык", re.I),
+        # глава приказа о варианте программы с сокращённой нагрузкой: цели в нём
+        # те же, и разбор взял бы каждую дважды
+        "reduced_load": re.compile(r"с\s+сокращением\s+учебной\s+нагрузки", re.I),
         # «1 четверть»
         "quarter_row": re.compile(r"^(\d)\s*-?\s*четверт", re.I),
         # «1) 1 класс:» перед таблицей долгосрочного плана
@@ -72,13 +76,14 @@ _RULES: dict[str, Rules] = {
         "ltp_goals_header": re.compile(r"Цели\s+обучения", re.I),
     },
     "kz": {
-        "appendix_label": re.compile(r"(\d+(?:\s*-\s*\d+)?)\s*-\s*қосымша", re.I),
+        "appendix_label": re.compile(r"(\d+(?:\s*-\s*\d+)?)\s*-?\s*қосымша", re.I),
         "heading_split": re.compile(r"(?=\d+\s*-\s*(?:тарау|параграф)\s*\.)"),
         "note_prefix": re.compile(r"^Ескерту\b", re.I),
         "order_date_text": re.compile(r"\d{4}\s+жылғы\s+\d{1,2}\s+\S+\s*№\s*\S+"),
-        "grade_header": re.compile(r"(\d)\s*-?\s*сынып", re.I),
+        "grade_header": re.compile(r"(\d)\s*[-–—]?\s*сынып", re.I),
         "subsection_header": re.compile(
-            r"Бөлімше|Бағыт|Кілттік\s+дағды", re.I),
+            r"Бөлімше|Бағыт|Кілттік\s+дағды|Негізгі\s+дағды", re.I),
+        "reduced_load": re.compile(r"төмендетілген\s+оқу\s+жүктемесімен", re.I),
         "quarter_row": re.compile(r"^(\d)\s*-?\s*тоқсан", re.I),
         "ltp_grade": re.compile(r"(\d)\s*-?\s*сынып\s*:?\s*$", re.I),
         "ltp_goals_header": re.compile(r"Оқу\s+мақсаттар", re.I),
@@ -115,12 +120,28 @@ class SubjectSpec:
     name_ru: str
     name_kz: str
     grades: tuple[int, ...]
+    # Язык обучения, если у предмета несколько программ по нему: «Казахский язык»
+    # в школах с казахским и с неказахским языком обучения — разные приложения
+    # с разными целями. Пара регулярок (русская редакция, казахская) для скобки
+    # в шапке приложения; None — у предмета программа одна.
+    instruction: tuple[str, str] | None = None
 
 
 def _subject(code: str, title: str, name_ru: str, name_kz: str,
-             grades: tuple[int, ...]) -> SubjectSpec:
+             grades: tuple[int, ...],
+             instruction: tuple[str, str] | None = None) -> SubjectSpec:
     return SubjectSpec(code=code, title=title, name_ru=name_ru, name_kz=name_kz,
-                       grades=grades)
+                       grades=grades, instruction=instruction)
+
+
+# Скобка языка обучения в шапке приложения. «С казахским» не лежит внутри
+# «с неказахским», поэтому пары друг друга не перекрывают.
+_INSTR_KZ = (r"с\s+казахским\s+языком\s+обучения", r"оқыту\s+қазақ\s+тілінде\s*\)")
+_INSTR_NOT_KZ = (r"с\s+неказахским\s+языком\s+обучения",
+                 r"оқыту\s+қазақ\s+тілінде\s+емес")
+_INSTR_RU = (r"с\s+русским\s+языком\s+обучения", r"оқыту\s+орыс\s+тілінде\s*\)")
+_INSTR_NOT_RU = (r"с\s+нерусским\s+языком\s+обучения",
+                 r"оқыту\s+орыс\s+тілінде\s+емес")
 
 
 _SUBJECTS: dict[str, SubjectSpec] = {
@@ -142,6 +163,31 @@ _SUBJECTS: dict[str, SubjectSpec] = {
                  "Жаратылыстану", (1, 2, 3, 4)),
         _subject("digital_literacy", "Цифровая грамотность",
                  "Цифровая грамотность", "Цифрлық сауаттылық", (1, 2, 3, 4)),
+        # Языковые предметы. Вариант программы по языку обучения — это отдельный
+        # предмет со своим кодом, а не поле: схема базы одна на все предметы,
+        # а цели у вариантов разные («Казахский язык» для школ с русским
+        # обучением — язык как второй, с уровнями А1–А2, и вовсе другой набор
+        # целей, чем «Қазақ тілі» для своих). Суффикс _l1 — язык обучения совпадает
+        # с изучаемым, _l2 — изучаемый язык не родной для школы.
+        _subject("literacy_ru", "Обучение грамоте (русский язык обучения)",
+                 "Обучение грамоте", "Обучение грамоте", (1,), _INSTR_RU),
+        _subject("native_language_kz", "Ана тілі (казахский язык обучения)",
+                 "Ана тілі", "Ана тілі", (1,), _INSTR_KZ),
+        _subject("kazakh_lang_l1", "Казахский язык (казахский язык обучения)",
+                 "Казахский язык", "Қазақ тілі", (2, 3, 4), _INSTR_KZ),
+        _subject("kazakh_lang_l2", "Казахский язык (неказахский язык обучения)",
+                 "Казахский язык", "Қазақ тілі", (1, 2, 3, 4), _INSTR_NOT_KZ),
+        _subject("literary_reading_kz", "Әдебиеттік оқу (казахский язык обучения)",
+                 "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_KZ),
+        _subject("russian_lang_l1", "Русский язык (русский язык обучения)",
+                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_RU),
+        _subject("russian_lang_l2", "Русский язык (нерусский язык обучения)",
+                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_NOT_RU),
+        _subject("literary_reading_ru", "Литературное чтение (русский язык обучения)",
+                 "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_RU),
+        _subject("english", "Английский язык", "Английский язык", "Ағылшын тілі", (3, 4)),
+        _subject("german", "Немецкий язык", "Немецкий язык", "Неміс тілі", (3, 4)),
+        _subject("french", "Французский язык", "Французский язык", "Француз тілі", (3, 4)),
     )
 }
 
@@ -165,15 +211,23 @@ def _appendix_patterns(
                   else rf"\b{lo}\s*-?\s*сыны")
     return re.compile(title, re.I), re.compile(grades, re.I)
 
+
+def _instruction_pattern(spec: SubjectSpec, lang: str) -> re.Pattern[str] | None:
+    if spec.instruction is None:
+        return None
+    return re.compile(spec.instruction[0 if lang == "ru" else 1], re.I)
+
 LANGUAGES: tuple[str, ...] = tuple(_RULES)
 
 # Код цели: класс.раздел.подраздел.номер. Пробелы вокруг точек реальны —
 # в казахской редакции встречается «3.1.2. 1». Звёздочки после кода — пометка
 # документа («реализуется частично»), частью кода не являются.
 # Отрицательный просмотр назад отсекает хвосты вроде «12.1.1.1» и дат,
-# просмотр вперёд — пятизначные конструкции.
+# просмотр вперёд — всё длиннее пяти чисел. Пятое число допустимо: так записаны
+# две половины цели 3.5.1.2 русского языка («3.5.1.2.1» и «3.5.1.2.2»).
 RE_CODE = re.compile(
-    r"(?<![\d.])(\d)\s*\.\s*(\d)\s*\.\s*(\d)\s*\.\s*(\d{1,2})(?!\s*\.\s*\d)\s*(\*{1,2})?"
+    r"(?<![\d.])(\d)\s*\.\s*(\d)\s*\.\s*(\d)\s*\.\s*(\d{1,2})"
+    r"(?:\.(\d))?(?!\s*\.\s*\d)\s*(\*{1,2})?"
 )
 
 # Каждое приложение начинается одинаково: выровненная вправо таблица-«шапка»
@@ -368,12 +422,15 @@ def _find_appendix(
 ) -> list[tuple[int, int, str]]:
     """Фрагменты приложений, чья «шапка» совпала с искомой программой."""
     title, grades = _appendix_patterns(spec, lang)
+    instruction = _instruction_pattern(spec, lang)
     hits = []
     for start, end in _split_appendices(html_text):
         frag = html_text[start:end]
         # заголовок ищем в первых килобайтах: дальше идёт тело программы,
         # где название предмета встречается десятки раз
         head = _strip_tags(frag[:2500])
+        if instruction is not None and not instruction.search(head):
+            continue
         if title.search(head) and grades.search(head):
             hits.append((start, end, frag))
     return hits
@@ -383,6 +440,17 @@ def _find_appendix(
 # Разбор
 # --------------------------------------------------------------------------
 
+def _cut_reduced_load(frag: str, rules: Rules) -> str:
+    """Приложение языкового предмета кончается главой «… (с сокращением учебной
+    нагрузки)»: те же цели и тот же долгосрочный план, урезанный по часам. Берём
+    программу с полной нагрузкой — её цели не дублируются, а сокращённый вариант
+    остаётся в приказе, но в справочник не идёт."""
+    for m in re.finditer(r"<h3[^>]*>(.*?)</h3>", frag, re.S):
+        if rules["reduced_load"].search(_strip_tags(m.group(1))):
+            return frag[:m.start()]
+    return frag
+
+
 def _parse_code(m: re.Match[str]) -> tuple[str, int, int, int, int, str]:
     """Совпадение RE_CODE → (код, класс, раздел, подраздел, номер, пометка).
 
@@ -390,8 +458,11 @@ def _parse_code(m: re.Match[str]) -> tuple[str, int, int, int, int, str]:
     бывают пробелы, а ключ связи с долгосрочным планом должен быть один.
     """
     g, s, ss, n = (int(m.group(i)) for i in range(1, 5))
-    marker = m.group(5) or ""
-    return f"{g}.{s}.{ss}.{n}", g, s, ss, n, marker
+    marker = m.group(6) or ""
+    # у русского языка 3 класса цель 3.5.1.2 разбита на «3.5.1.2.1» и «3.5.1.2.2»:
+    # пятое число — часть цели, и без него обе слились бы в одну строку
+    part = f".{m.group(5)}" if m.group(5) else ""
+    return f"{g}.{s}.{ss}.{n}{part}", g, s, ss, n, marker
 
 
 def _split_goals(text: str) -> list[dict[str, Any]]:
@@ -419,6 +490,26 @@ def _tidy_goal(s: str) -> str:
     s = re.sub(r"^[\s;:,.\-–—]+", "", s)
     s = re.sub(r"[\s;]+$", "", s)
     return s
+
+
+# «Раздел (виды речевой деятельности) – письмо», «Бөлім (…) – оқылым»
+_UNNUMBERED_SECTION = re.compile(r"^(Раздел|Бөлім)\s*\([^)]*\)\s*[–—-]\s*(.+)$", re.I | re.S)
+
+
+def _header_title(table: Table, r: int, rules: Rules) -> str:
+    """Название раздела из шапки без классов: «Подраздел | Аудирование».
+    «Цели обучения» в шапке названием не считается."""
+    seen: set[int] = set()
+    parts = []
+    for c in range(table.width):
+        cell = table.at(r, c)
+        if cell is None or id(cell) in seen:
+            continue
+        seen.add(id(cell))
+        if cell.value and not rules["subsection_header"].search(cell.value) \
+                and not rules["ltp_goals_header"].search(cell.value):
+            parts.append(cell.value)
+    return " ".join(parts)
 
 
 def _parse_goals_table(
@@ -463,15 +554,29 @@ def _parse_goals_table(
     # мультзаголовок шапки бывает в две строки («Подраздел | Цели обучения»
     # поверх «Подраздел | 1 класс | …») — обе гасим без аномалий
     header_rows = 0
+    # Название раздела без номера («Раздел (виды речевой деятельности) – письмо»,
+    # «Тыңдалым мен айтылым») стоит строкой выше целей. Номер раздела у него
+    # возьмём из кода первой цели под ним.
+    pending_title = ""
     for r in range(table.height):
-        if table.spans_full_row(r):
+        # «3) жазылым:» в казахской редакции разбито на две ячейки, поэтому
+        # строка не «во всю ширину»; узнаём её по виду и по отсутствию кодов
+        if table.spans_full_row(r) or (
+                not RE_CODE.search(table.row_text(r)) and _section_match(table.row_text(r))):
             txt = table.row_text(r)
             m = _section_match(txt)
             if m:
                 no = int(m.group(1))
                 cur_section = no
                 sections.setdefault(no, {"title": "", "subsections": {}})
-                sections[no]["title"] = _clean(m.group(2))
+                sections[no]["title"] = _clean(m.group(2)).rstrip(":").strip()
+            elif _UNNUMBERED_SECTION.match(txt):
+                pending_title = _clean(_UNNUMBERED_SECTION.match(txt).group(2)).rstrip(": ")
+            elif txt and not col_grade and not rules["subsection_header"].search(txt) \
+                    and not RE_CODE.search(txt) and not txt.endswith(":"):
+                # таблица без классовой шапки (программа одного класса): голая
+                # строка во всю ширину — название раздела
+                pending_title = txt.rstrip(": ")
             elif txt and not rules["subsection_header"].search(txt) and not txt.endswith(":"):
                 # строки вида «Обучающиеся должны знать:» — заголовки блоков,
                 # а не данные; с ними аномалия была бы на каждой программе
@@ -481,7 +586,9 @@ def _parse_goals_table(
             continue
 
         head = table.row_text(r)
-        if rules["subsection_header"].search(head) and rules["grade_header"].search(head):
+        has_sub = rules["subsection_header"].search(head)
+        if rules["grade_header"].search(head) and not RE_CODE.search(head) and (
+                has_sub or not col_grade):
             col_grade = {}
             for c in range(table.width):
                 cell = table.at(r, c)
@@ -492,9 +599,13 @@ def _parse_goals_table(
                     col_grade[c] = int(m.group(1))
             header_rows += 1
             continue
-        if rules["subsection_header"].search(head) and header_rows == 0 and not col_grade:
-            # верхняя строка мультзаголовка — «Подраздел | Цели обучения»
+        if has_sub and not RE_CODE.search(head):
+            # шапка без классов — «Подраздел | Цели обучения», в языковых предметах
+            # она повторяется над каждым разделом, а иногда несёт его название
             header_rows += 1
+            rest = _header_title(table, r, rules)
+            if rest:
+                pending_title = rest
             continue
 
         # колонки классов — те, что шапка пронумеровала; остальные — подписи.
@@ -525,7 +636,8 @@ def _parse_goals_table(
                 _register_sub(int(msub.group(1)), int(msub.group(2)),
                               _clean(msub.group(3)))
                 continue
-            msec = re.match(r"^(\d+)\s*\.\s*([^\d].*)$", label, re.S)
+            # «1) The use of…» у английского — та же подпись, что «1. Phonological…»
+            msec = re.match(r"^(\d+)\s*[.)]\s*([^\d].*)$", label, re.S)
             if msec and len(label_cols) > 1:
                 no = int(msec.group(1))
                 row_sec_no = no
@@ -553,11 +665,25 @@ def _parse_goals_table(
                     f"таблица целей, строка {r}, колонка {c}: кода не видно: "
                     f"{cell.value[:120]!r}")
                 continue
+            if pending_title:
+                sec = sections.setdefault(found[0]["section_no"], {"title": "", "subsections": {}})
+                sec["title"] = sec["title"] or pending_title
+                pending_title = ""
+            # ячейка растянута на несколько классов, если верстальщик склеил колонки:
+            # совпасть с кодом должна любая из занятых ею колонок
+            spanned = {col_grade.get(cc) for cc in range(c, c + cell.colspan)}
+            # текст до первого кода молча терялся: «3.1.4. использовать…» (в приказе
+            # у кода пропала последняя цифра) выглядел как ячейка без цели
+            lead = cell.value[:RE_CODE.search(cell.value).start()].strip()
+            if len(lead) >= 15:
+                anomalies.append(
+                    f"таблица целей, строка {r}, колонка {c}: текст до первого кода "
+                    f"не попал в цель: {lead[:100]!r}")
             for gl in found:
                 gl["images"] = list(cell.images)
                 gl["column_grade"] = col_grade.get(c)
                 gl["row"] = r
-                if gl["column_grade"] is not None and gl["column_grade"] != gl["grade"]:
+                if gl["column_grade"] is not None and gl["grade"] not in spanned:
                     anomalies.append(
                         f"цель {gl['code']}: класс по коду {gl['grade']}, "
                         f"а колонка таблицы — {gl['column_grade']} класс")
@@ -575,6 +701,28 @@ def _parse_goals_table(
             if sec_no is not None:
                 _register_sub(sec_no, sub_no, title)
     return sections, goals
+
+
+def _is_goals_table(table: Table, rules: Rules) -> bool:
+    """Шапка таблицы целей. Три вида: «Подраздел» + «1 класс» в одной строке;
+    «1 класс» в строке без кодов (у немецкого шапка называет не подраздел, а
+    компетенцию); «Подраздел» + «Цели обучения» без классов вовсе — у программ
+    одного класса и у русского языка, где классы стоят колонками без подписи.
+    Последний вид совпадает по словам с шапкой долгосрочного плана, поэтому
+    таблица с «N четверть» в него не входит."""
+    has_quarters = any(rules["quarter_row"].match(table.row_text(r))
+                       for r in range(table.height))
+    for r in range(min(table.height, 6)):
+        txt = table.row_text(r)
+        sub = rules["subsection_header"].search(txt)
+        grade = rules["grade_header"].search(txt)
+        if sub and grade:
+            return True
+        if grade and not RE_CODE.search(txt) and not has_quarters:
+            return True
+        if sub and rules["ltp_goals_header"].search(txt) and not has_quarters:
+            return True
+    return False
 
 
 def _parse_ltp_table(
@@ -652,6 +800,44 @@ def _parse_ltp_table(
     return rows
 
 
+def _parse_ltp_by_skill(
+    table: Table, rules: Rules, grade_hint: int | None, anomalies: list[str]
+) -> list[dict[str, Any]]:
+    """Долгосрочный план, где цели стоят в колонках по видам речевой деятельности:
+    «Тема | Аудирование и говорение | Чтение | Письмо». Подраздела и раздела плана
+    в такой таблице нет, поэтому поля остаются пустыми, а не додумываются."""
+    rows: list[dict[str, Any]] = []
+    quarter: int | None = None
+    seen: set[int] = set()
+    for r in range(table.height):
+        if table.spans_full_row(r):
+            m = rules["quarter_row"].match(table.row_text(r))
+            if m:
+                quarter = int(m.group(1))
+            continue
+        if quarter is None:
+            continue  # шапка над первой четвертью
+        found = []
+        for c in range(1, table.width):
+            cell = table.at(r, c)
+            if cell is None or id(cell) in seen or not cell.value:
+                continue
+            seen.add(id(cell))
+            found.extend(_split_goals(cell.value))
+        if not found:
+            continue
+        rows.append({
+            "grade": grade_hint,
+            "quarter": quarter,
+            "cross_cutting_themes": _cell_value(table, r, 0),
+            "ltp_section": "",
+            "subsection_label": "",
+            "goals": found,
+            "images": [],
+        })
+    return rows
+
+
 def _cell_value(table: Table, r: int, c: int) -> str:
     cell = table.at(r, c)
     return cell.value if cell is not None else ""
@@ -714,6 +900,7 @@ def parse_curriculum(
     if len(hits) > 1:
         log.warning("подходящих приложений %d, беру первое", len(hits))
     start, end, frag = hits[0]
+    frag = _cut_reduced_load(frag, rules)
 
     anomalies: list[str] = []
     tp = TableParser()
@@ -742,14 +929,7 @@ def parse_curriculum(
     goals_tables: list[Table] = []
     ltp_tables = []
     for i, t in enumerate(tp.tables):
-        # шапка таблицы целей: «Подраздел» + «1 класс»
-        header_seen = False
-        for r in range(min(t.height, 6)):
-            txt = t.row_text(r)
-            if rules["subsection_header"].search(txt) and rules["grade_header"].search(txt):
-                header_seen = True
-                break
-        if header_seen:
+        if _is_goals_table(t, rules):
             goals_tables.append(t)
             continue
         if any(rules["ltp_goals_header"].search(t.row_text(r)) for r in range(min(t.height, 4))):
@@ -768,6 +948,10 @@ def parse_curriculum(
         )
         if has_codes and not looks_like_ltp:
             goals_tables.append(t)
+        elif has_codes:
+            # план без колонки «Цели обучения»: цели разнесены по колонкам видов
+            # речевой деятельности (аудирование | чтение | письмо)
+            ltp_tables.append((i, t))
 
     if not goals_tables:
         raise CurriculumParseError("таблица «Система целей обучения» не найдена")
@@ -790,7 +974,10 @@ def parse_curriculum(
         if grade is None:
             # если абзац-подпись не распознан, класс возьмём из кодов целей
             anomalies.append(f"таблица долгосрочного плана #{i}: класс перед таблицей не распознан")
-        rows = _parse_ltp_table(t, rules, grade, anomalies)
+        has_goals_header = any(
+            rules["ltp_goals_header"].search(t.row_text(r)) for r in range(min(t.height, 4)))
+        parse_ltp = _parse_ltp_table if has_goals_header else _parse_ltp_by_skill
+        rows = parse_ltp(t, rules, grade, anomalies)
         for row in rows:
             if grade is None and row["goals"]:
                 row["grade"] = row["goals"][0]["grade"]
