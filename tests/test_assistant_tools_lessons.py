@@ -1,7 +1,7 @@
 """Уроки, тесты и задания глазами ассистента.
 
-Проверяется то, что стоит между моделью и сценарием: удаляющее не выполняется,
-а предлагается; предложение считает числа и называет площадки; курс, по которому
+Проверяется то, что стоит между моделью и сценарием: у удаляющего последствия
+считаются числами и называют площадки; курс, по которому
 уже учатся, отбивает правку отказом, который доезжает до модели, а не пятисоткой.
 """
 
@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session as OrmSession
 from app.adapters.db.base import get_engine
 from app.adapters.db.models import Lesson, Question, Quiz, QuizAttempt, Task
 from app.adapters.db.repos import now_utc
-from app.application.ports import AiToolCall
 from app.assistant import registry
-from app.assistant.loop import AssistantLoop
 from app.assistant.registry import ToolCtx, ToolError
 from tests.conftest import (
+    as_model_sees,
+    execute,
     login_admin,
     make_course,
     make_lesson,
@@ -27,28 +27,15 @@ from tests.conftest import (
     make_submission,
     make_task,
     make_user,
+    plan,
+    refusal,
     seed,
 )
 
 
 def called(client, sms, tool_ctx) -> ToolCtx:
-    """Админ, его чат и контекст вызова: опасному действию нужен чат, иначе
-    подтверждать его негде."""
-    admin = login_admin(client, sms).json()["id"]
-    thread = client.post("/admin/assistant/threads", json={}).json()
-    return tool_ctx(admin, thread["id"])
-
-
-def execute(client, result):
-    """Нажатие кнопки «Выполнить» — единственный способ исполнить `confirm`."""
-    return client.post(f"/admin/assistant/proposals/{result['proposal_id']}/execute")
-
-
-def as_model_sees(ctx: ToolCtx, name: str, **args) -> dict:
-    """Результат вызова глазами модели: отказ сценария — обычный результат,
-    а не упавший ход (`AssistantLoop._one`)."""
-    call = AiToolCall(id="call_1", name=name, arguments=args)
-    return AssistantLoop(ai=None, max_tool_calls=10)._one(call, ctx).result
+    """Админ и контекст вызова: с этого начинается каждый тест."""
+    return tool_ctx(login_admin(client, sms).json()["id"])
 
 
 def attempted(quiz_id: int, question_ids: list[int], user_id: int) -> QuizAttempt:
@@ -194,20 +181,17 @@ def test_lesson_with_progress_is_hidden_not_deleted(client, sms, tool_ctx):
     teacher = make_user("+77010000011")
     make_progress(teacher.id, lesson.id)
 
-    result = registry.call("lesson_delete", {"lesson_id": lesson.id}, ctx)
+    result = plan("lesson_delete", {"lesson_id": lesson.id}, ctx)
     ctx.db.commit()
 
     what = result["what_happens"]
-    assert result["status"] == "waiting_confirmation"
     assert "Урок про критерии" in what
     assert "p1 (45 000 ₸), p2 (60 000 ₸)" in what
     assert "урок прошли 1" in what
     with OrmSession(get_engine()) as db:
         assert db.get(Lesson, lesson.id) is not None
 
-    resp = execute(client, result)
-    assert resp.status_code == 409
-    assert resp.json()["error"]["code"] == "has_progress"
+    assert refusal(result) == "has_progress"
 
     # Ровно то, что предлагает текст отказа: спрятать
     hidden = registry.call("lesson_update", {"lesson_id": lesson.id, "is_hidden": True}, ctx)
@@ -221,11 +205,11 @@ def test_lesson_without_progress_is_deleted_after_the_button(client, sms, tool_c
     module = make_module(course.id)
     lesson = make_lesson(module.id, title="Черновой урок")
 
-    result = registry.call("lesson_delete", {"lesson_id": lesson.id}, ctx)
+    result = plan("lesson_delete", {"lesson_id": lesson.id}, ctx)
     ctx.db.commit()
     assert "учатся 0" in result["what_happens"]
 
-    assert execute(client, result).status_code == 200
+    execute(result)
     with OrmSession(get_engine()) as db:
         assert db.get(Lesson, lesson.id) is None
 
@@ -269,8 +253,12 @@ def test_quiz_is_created_hidden_and_the_second_final_is_refused(client, sms, too
     assert first["is_hidden"] is True
 
     second = as_model_sees(
-        ctx, "quiz_create", module_id=module.id, title="Ещё один итоговый",
-        pass_score=70, is_final=True,
+        ctx,
+        "quiz_create",
+        module_id=module.id,
+        title="Ещё один итоговый",
+        pass_score=70,
+        is_final=True,
     )
     assert second["error"]["code"] == "final_quiz_exists"
 
@@ -301,7 +289,7 @@ def test_quiz_with_attempts_is_not_deleted(client, sms, tool_ctx):
     teacher = make_user("+77010000012")
     attempted(quiz.id, [question.id], teacher.id)
 
-    result = registry.call("quiz_delete", {"quiz_id": quiz.id}, ctx)
+    result = plan("quiz_delete", {"quiz_id": quiz.id}, ctx)
     ctx.db.commit()
 
     what = result["what_happens"]
@@ -309,9 +297,7 @@ def test_quiz_with_attempts_is_not_deleted(client, sms, tool_ctx):
     assert "p1 (45 000 ₸), p2 (60 000 ₸)" in what
     assert "по тесту 1 попытка" in what
 
-    resp = execute(client, result)
-    assert resp.status_code == 409
-    assert resp.json()["error"]["code"] == "has_attempts"
+    assert refusal(result) == "has_attempts"
 
 
 # -- вопросы теста -------------------------------------------------------
@@ -399,7 +385,7 @@ def test_question_delete_is_proposed_and_counts_attempts(client, sms, tool_ctx):
     teacher = make_user("+77010000014")
     attempted(quiz.id, [question.id], teacher.id)
 
-    result = registry.call("quiz_question_delete", {"question_id": question.id}, ctx)
+    result = plan("quiz_question_delete", {"question_id": question.id}, ctx)
     ctx.db.commit()
 
     what = result["what_happens"]
@@ -409,9 +395,7 @@ def test_question_delete_is_proposed_and_counts_attempts(client, sms, tool_ctx):
     with OrmSession(get_engine()) as db:
         assert db.get(Question, question.id) is not None
 
-    resp = execute(client, result)
-    assert resp.status_code == 409
-    assert resp.json()["error"]["code"] == "has_attempts"
+    assert refusal(result) == "has_attempts"
 
 
 def test_question_without_attempts_is_deleted_after_the_button(client, sms, tool_ctx):
@@ -421,10 +405,10 @@ def test_question_without_attempts_is_deleted_after_the_button(client, sms, tool
     quiz = make_quiz(module.id)
     question = make_question(quiz.id, text="Черновой вопрос")
 
-    result = registry.call("quiz_question_delete", {"question_id": question.id}, ctx)
+    result = plan("quiz_question_delete", {"question_id": question.id}, ctx)
     ctx.db.commit()
 
-    assert execute(client, result).status_code == 200
+    execute(result)
     with OrmSession(get_engine()) as db:
         assert db.get(Question, question.id) is None
 
@@ -480,7 +464,7 @@ def test_task_with_submissions_is_not_deleted(client, sms, tool_ctx):
     teacher = make_user("+77010000015")
     make_submission(teacher.id, task.id)
 
-    result = registry.call("task_delete", {"task_id": task.id}, ctx)
+    result = plan("task_delete", {"task_id": task.id}, ctx)
     ctx.db.commit()
 
     what = result["what_happens"]
@@ -490,6 +474,4 @@ def test_task_with_submissions_is_not_deleted(client, sms, tool_ctx):
     with OrmSession(get_engine()) as db:
         assert db.get(Task, task.id) is not None
 
-    resp = execute(client, result)
-    assert resp.status_code == 409
-    assert resp.json()["error"]["code"] == "has_submissions"
+    assert refusal(result) == "has_submissions"

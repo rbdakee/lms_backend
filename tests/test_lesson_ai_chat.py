@@ -28,7 +28,7 @@ from app.adapters.db.base import get_engine
 from app.adapters.db.lesson_ai_repos import LessonChatRepo
 from app.adapters.db.models import LessonAiChatMessage, LessonAiJob, LessonKit
 from app.api.deps import get_lesson_block_ai, get_lesson_chat_limiter
-from app.application.ports import AiMessage, AiReply, AiToolCall
+from app.application.ports import AiDelta, AiMessage, AiReply, AiToolCall
 from app.config import get_settings
 from app.domain.lesson_ai import DEFAULT_KINDS, MATERIAL_KINDS
 from app.lesson_ai.order_tools import OrderCtx, OrderTools
@@ -41,7 +41,6 @@ from tests.test_admin_curriculum import (
     make_section,
     make_subject,
 )
-from tests.test_assistant_stream import StreamingAi
 from tests.test_lesson_ai_kits import CODE, OBJECTIVE_TEXT, TOPIC, set_program_status
 
 # Доступ к «Жоспару» (L7) в этих тестах открыт: они проверяют продукт,
@@ -409,6 +408,38 @@ def test_brief_scenario_end_to_end(client, sms, ai, scene):
         )
         jobs = db.scalars(select(LessonAiJob).order_by(LessonAiJob.id)).all()
         assert sorted(job.kind for job in jobs) == sorted(kinds)
+
+
+class StreamingAi:
+    """Провайдер, который умеет стрим: тот же сценарий, что у `FakeAi`,
+    но текст отдаётся кусками, как это делает настоящий."""
+
+    def __init__(self):
+        self.replies: list[AiReply] = []
+        self.calls: list[dict] = []
+
+    def says(self, text: str = "Готово", **kw) -> "StreamingAi":
+        self.replies.append(AiReply(text=text, **kw))
+        return self
+
+    def wants(self, name: str, call_id: str = "call_1", **arguments) -> "StreamingAi":
+        self.replies.append(
+            AiReply(text="", tool_calls=(AiToolCall(id=call_id, name=name, arguments=arguments),))
+        )
+        return self
+
+    def complete(self, *, system, messages, tools=None) -> AiReply:
+        self.calls.append({"system": system, "messages": list(messages), "tools": tools})
+        return self.replies.pop(0) if self.replies else AiReply(text="Готово")
+
+    def stream(self, *, system, messages, tools=None):
+        self.calls.append({"system": system, "messages": list(messages), "tools": tools})
+        reply = self.replies.pop(0) if self.replies else AiReply(text="Готово")
+        # Куски по словам: настоящий провайдер режет мельче, но нам важно,
+        # что их больше одного и что они приходят до готового ответа
+        for word in reply.text.split():
+            yield AiDelta(text=word + " ")
+        yield AiDelta(reply=reply)
 
 
 class StreamingChatAi(StreamingAi):

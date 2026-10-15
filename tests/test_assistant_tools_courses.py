@@ -2,8 +2,8 @@
 
 Проверяется не то, что сценарии работают — это дело `test_admin_courses.py`
 и `test_admin_program.py`, — а то, что между моделью и сценарием стоит:
-опасное не выполняется, а предлагается; предложение называет числа
-и площадки; отказ сценария доезжает до модели ошибкой, а не пятисоткой.
+последствия опасного называют числа и площадки; отказ сценария доезжает
+до вызывающего ошибкой, а не пятисоткой.
 """
 
 import pytest
@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session as OrmSession
 
 from app.adapters.db.base import get_engine
 from app.adapters.db.models import Course, CoursePlatform, Module
-from app.application.ports import AiToolCall
 from app.assistant import registry
-from app.assistant.loop import AssistantLoop
 from app.assistant.registry import ToolCtx, ToolError
 from tests.conftest import (
+    as_model_sees,
+    execute,
     login_admin,
     make_course,
     make_enrollment,
@@ -24,20 +24,14 @@ from tests.conftest import (
     make_progress,
     make_quiz,
     make_user,
+    plan,
+    refusal,
 )
 
 
 def called(client, sms, tool_ctx) -> ToolCtx:
-    """Админ, его чат и контекст вызова: с этого начинается каждый тест —
-    опасному действию нужен чат, иначе подтверждать его негде."""
-    admin = login_admin(client, sms).json()["id"]
-    thread = client.post("/admin/assistant/threads", json={}).json()
-    return tool_ctx(admin, thread["id"])
-
-
-def execute(client, result) -> dict:
-    """Нажатие кнопки «Выполнить» — единственный способ исполнить `confirm`."""
-    return client.post(f"/admin/assistant/proposals/{result['proposal_id']}/execute")
+    """Админ и контекст вызова: с этого начинается каждый тест."""
+    return tool_ctx(login_admin(client, sms).json()["id"])
 
 
 def platforms_of(course_id: int) -> dict[str, int | None]:
@@ -146,14 +140,9 @@ def test_refused_scenario_reaches_the_model_as_an_error(client, sms, tool_ctx):
     ctx = called(client, sms, tool_ctx)
     course = make_course(status="open")
 
-    step = AssistantLoop(ai=None, max_tool_calls=10)._one(
-        AiToolCall(id="call_1", name="course_update", arguments={
-            "course_id": course.id, "category_id": 4242
-        }),
-        ctx,
-    )
+    result = as_model_sees(ctx, "course_update", course_id=course.id, category_id=4242)
 
-    assert step.result["error"]["code"] == "validation_error"
+    assert result["error"]["code"] == "validation_error"
 
 
 # -- статус, публикация и цена -------------------------------------------
@@ -165,18 +154,17 @@ def test_status_change_is_proposed_with_platforms(client, sms, tool_ctx):
     ctx = called(client, sms, tool_ctx)
     course = make_course(title="Оценивание", platforms={"p1": 45000, "p2": 60000})
 
-    result = registry.call("course_status", {"course_id": course.id, "status": "hidden"}, ctx)
+    result = plan("course_status", {"course_id": course.id, "status": "hidden"}, ctx)
     ctx.db.commit()
 
     what = result["what_happens"]
-    assert result["status"] == "waiting_confirmation"
     assert "идёт набор → скрыт" in what
     assert "p1 (45 000 ₸), p2 (60 000 ₸)" in what
     assert "исчезнет из каталога" in what
     with OrmSession(get_engine()) as db:
         assert db.get(Course, course.id).status == "open"
 
-    assert execute(client, result).status_code == 200
+    execute(result)
     with OrmSession(get_engine()) as db:
         assert db.get(Course, course.id).status == "hidden"
 
@@ -188,7 +176,7 @@ def test_status_preview_counts_students(client, sms, tool_ctx):
     teacher = make_user("+77010000001")
     make_enrollment(teacher.id, course.id)
 
-    result = registry.call("course_status", {"course_id": course.id, "status": "closed"}, ctx)
+    result = plan("course_status", {"course_id": course.id, "status": "closed"}, ctx)
     ctx.db.commit()
 
     assert "По курсу учатся 1." in result["what_happens"]
@@ -198,9 +186,7 @@ def test_publish_touches_only_the_named_platform(client, sms, tool_ctx):
     ctx = called(client, sms, tool_ctx)
     course = make_course(title="Оценивание", platforms={"p1": 45000})
 
-    result = registry.call(
-        "course_publish", {"course_id": course.id, "platform": "p2", "price": 60000}, ctx
-    )
+    result = plan("course_publish", {"course_id": course.id, "platform": "p2", "price": 60000}, ctx)
     ctx.db.commit()
 
     what = result["what_happens"]
@@ -209,7 +195,7 @@ def test_publish_touches_only_the_named_platform(client, sms, tool_ctx):
     # До кнопки ничего не произошло
     assert platforms_of(course.id) == {"p1": 45000}
 
-    assert execute(client, result).status_code == 200
+    execute(result)
     assert platforms_of(course.id) == {"p1": 45000, "p2": 60000}
 
 
@@ -217,13 +203,11 @@ def test_price_change_keeps_the_other_platform(client, sms, tool_ctx):
     ctx = called(client, sms, tool_ctx)
     course = make_course(platforms={"p1": 45000, "p2": 60000})
 
-    result = registry.call(
-        "course_publish", {"course_id": course.id, "platform": "p1", "price": 50000}, ctx
-    )
+    result = plan("course_publish", {"course_id": course.id, "platform": "p1", "price": 50000}, ctx)
     ctx.db.commit()
     assert "45 000 ₸ → 50 000 ₸" in result["what_happens"]
 
-    assert execute(client, result).status_code == 200
+    execute(result)
     assert platforms_of(course.id) == {"p1": 50000, "p2": 60000}
 
 
@@ -233,7 +217,7 @@ def test_unpublish_leaves_the_second_platform_and_the_students(client, sms, tool
     teacher = make_user("+77010000002")
     make_enrollment(teacher.id, course.id)
 
-    result = registry.call("course_unpublish", {"course_id": course.id, "platform": "p2"}, ctx)
+    result = plan("course_unpublish", {"course_id": course.id, "platform": "p2"}, ctx)
     ctx.db.commit()
 
     what = result["what_happens"]
@@ -241,7 +225,7 @@ def test_unpublish_leaves_the_second_platform_and_the_students(client, sms, tool
     assert "Останется: p1" in what
     assert "учатся 1" in what
 
-    assert execute(client, result).status_code == 200
+    execute(result)
     assert platforms_of(course.id) == {"p1": 45000}
 
 
@@ -251,13 +235,11 @@ def test_unpublish_where_the_course_is_not_published_says_so(client, sms, tool_c
     ctx = called(client, sms, tool_ctx)
     course = make_course(platforms={"p1": 45000})
 
-    result = registry.call("course_unpublish", {"course_id": course.id, "platform": "p2"}, ctx)
+    result = plan("course_unpublish", {"course_id": course.id, "platform": "p2"}, ctx)
     ctx.db.commit()
     assert "снимать нечего" in result["what_happens"]
 
-    resp = execute(client, result)
-    assert resp.status_code == 409
-    assert resp.json()["error"]["code"] == "not_published"
+    assert refusal(result) == "not_published"
 
 
 # -- версии и копии ------------------------------------------------------
@@ -311,7 +293,7 @@ def test_module_delete_says_what_dies_with_numbers(client, sms, tool_ctx):
     make_lesson(module.id, title="Урок 2")
     make_quiz(module.id, title="Тест модуля")
 
-    result = registry.call("module_delete", {"module_id": module.id}, ctx)
+    result = plan("module_delete", {"module_id": module.id}, ctx)
     ctx.db.commit()
 
     what = result["what_happens"]
@@ -322,7 +304,7 @@ def test_module_delete_says_what_dies_with_numbers(client, sms, tool_ctx):
     with OrmSession(get_engine()) as db:
         assert db.get(Module, module.id) is not None
 
-    assert execute(client, result).status_code == 200
+    execute(result)
     with OrmSession(get_engine()) as db:
         assert db.get(Module, module.id) is None
 
@@ -337,14 +319,12 @@ def test_module_with_someones_progress_is_not_deleted(client, sms, tool_ctx):
     teacher = make_user("+77010000003")
     make_progress(teacher.id, lesson.id)
 
-    result = registry.call("module_delete", {"module_id": module.id}, ctx)
+    result = plan("module_delete", {"module_id": module.id}, ctx)
     ctx.db.commit()
     assert "Не удалится" in result["what_happens"]
     assert "Урок про критерии" in result["what_happens"]
 
-    resp = execute(client, result)
-    assert resp.status_code == 409
-    assert resp.json()["error"]["code"] == "module_in_use"
+    assert refusal(result) == "module_in_use"
 
 
 def test_program_move_carries_a_lesson_to_another_module(client, sms, tool_ctx):

@@ -10,10 +10,8 @@ os.environ["DATABASE_URL"] = os.environ.get(
 # поэтому обе половины гасятся здесь.
 os.environ["AUTH_BOOTSTRAP_PHONE"] = ""
 os.environ["AUTH_BOOTSTRAP_CODE"] = ""
-# Ассистент в тестах включён, а ключ подставной: настоящий клиент провайдера
-# подменяется фикстурой `ai`, и наружу не ходит никто. Без ключа ручки
-# ассистента отвечали бы `assistant_off` — это отдельная проверка, и она
-# гасит ключ сама.
+# Ключ подставной: настоящий клиент провайдера подменяется фикстурой `ai`,
+# и наружу не ходит никто. Без ключа «Жоспар» отвечал бы `lesson_ai_off`.
 os.environ["OPENAI_API_KEY"] = "test-key-not-a-real-one"
 # «Жоспар» в тестах включён, но без фоновых воркеров: TestClient поднимает
 # lifespan приложения, и воркер, запущенный в нём, брал бы задания раньше
@@ -35,6 +33,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session as OrmSession
 
+# Импорт ради побочного действия: декораторы `@tool` наполняют реестр при загрузке
+# пакета. Сервис его больше не грузит (MCP-сервера пока нет), а тестам он нужен.
+import app.assistant.tools  # noqa: F401
 from app.adapters.ai.openai_chat import AiUnavailableError
 from app.adapters.db.base import get_engine
 from app.adapters.db.models import (
@@ -59,8 +60,6 @@ from app.adapters.db.models import (
     User,
 )
 from app.api.deps import (
-    get_ai,
-    get_assistant_limiter,
     get_lesson_block_ai,
     get_lesson_chat_limiter,
     get_lesson_kits_limiter,
@@ -74,8 +73,10 @@ from app.api.deps import (
 )
 from app.application.ports import AiReply, AiToolCall, NotificationCard
 from app.application.ratelimit import SlidingWindowLimiter
-from app.assistant.registry import ToolCtx
+from app.assistant import registry
+from app.assistant.registry import ToolCtx, ToolError
 from app.config import get_settings
+from app.domain.errors import AppError
 from app.domain.platform import DEFAULT_PLATFORM
 from app.main import app
 
@@ -311,25 +312,11 @@ class FakeAi:
 
 @pytest.fixture
 def ai():
-    # Один подставной ИИ на оба клиента: ассистента и перегенерации блока
-    # «Жоспара» — у второго своя модель и свой таймаут, но тест видит один поток вызовов
+    # Подставной ИИ для перегенерации блока «Жоспара»: у неё своя модель и свой таймаут
     fake = FakeAi()
-    app.dependency_overrides[get_ai] = lambda: fake
     app.dependency_overrides[get_lesson_block_ai] = lambda: fake
     yield fake
-    app.dependency_overrides.pop(get_ai, None)
     app.dependency_overrides.pop(get_lesson_block_ai, None)
-
-
-@pytest.fixture(autouse=True)
-def assistant_limiter_clock():
-    """Потолок сообщений ассистенту живёт в памяти процесса: без своего
-    на каждый тест счётчик течёт из одного теста в другой."""
-    clock = FakeClock()
-    limiter = SlidingWindowLimiter(get_settings().assistant_messages_per_hour, 3600, clock)
-    app.dependency_overrides[get_assistant_limiter] = lambda: limiter
-    yield clock
-    app.dependency_overrides.pop(get_assistant_limiter, None)
 
 
 @pytest.fixture(autouse=True)
@@ -368,7 +355,7 @@ def lesson_ai_open():
 
 @pytest.fixture
 def tool_ctx():
-    """Контекст вызова инструмента ассистента мимо HTTP.
+    """Контекст вызова инструмента реестра мимо HTTP.
 
     Реестр не предполагает, что зовёт его наш собственный чат
     (`ASSISTANT_BRIEF`, раздел 15): `ctx` собирается из админа и сессии базы,
@@ -379,26 +366,64 @@ def tool_ctx():
     """
     sessions: list[OrmSession] = []
 
-    def make(
-        admin_id: int,
-        thread_id: int | None = None,
-        grants: dict | None = None,
-        course_id: int | None = None,
-    ) -> ToolCtx:
+    def make(admin_id: int, grants: dict | None = None) -> ToolCtx:
         db = OrmSession(get_engine())
         sessions.append(db)
         return ToolCtx(
             db=db,
             admin=db.get(User, admin_id),
             now=datetime.now(UTC),
-            thread_id=thread_id,
-            course_id=course_id,
             grants=dict(grants or {}),
         )
 
     yield make
     for db in sessions:
         db.close()
+
+
+class Plan(dict):
+    """Опасное действие до исполнения: «что произойдёт» словами и всё нужное,
+    чтобы потом исполнить. Реестр исполняет `confirm` сразу, поэтому тест,
+    который сначала сверяет текст последствий, а потом само действие, берёт
+    текст из `@preview`, а исполнение откладывает до `execute`."""
+
+    def __init__(self, name: str, args: dict, ctx: ToolCtx):
+        spec = registry.get(name)
+        self.name, self.args, self.ctx = name, args, ctx
+        what = spec.preview(ctx, **registry.check_args(spec, args)) if spec.preview else ""
+        super().__init__(what_happens=what)
+
+
+def plan(name: str, args: dict, ctx: ToolCtx) -> Plan:
+    return Plan(name, args, ctx)
+
+
+def execute(planned: Plan) -> dict:
+    result = registry.call(planned.name, planned.args, planned.ctx)
+    planned.ctx.db.commit()
+    return result
+
+
+def refusal(planned: Plan) -> str:
+    """Код, которым действие отказало. Отказом бывает и `ToolError`
+    инструмента, и ошибка сценария под ним."""
+    try:
+        registry.call(planned.name, planned.args, planned.ctx)
+    except (ToolError, AppError) as exc:
+        planned.ctx.db.rollback()
+        return exc.code
+    raise AssertionError(f"{planned.name} должен был отказать, а исполнился")
+
+
+def as_model_sees(ctx: ToolCtx, name: str, **args) -> dict:
+    """Результат вызова глазами вызывающего: отказ инструмента или сценария —
+    обычный результат, а не исключение."""
+    try:
+        return registry.call(name, args, ctx)
+    except ToolError as exc:
+        return exc.as_result()
+    except AppError as exc:
+        return {"error": {"code": exc.code, "message": exc.message}}
 
 
 @pytest.fixture
