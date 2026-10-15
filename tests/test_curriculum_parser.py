@@ -281,6 +281,44 @@ def test_every_registry_code_is_unique_and_variants_are_distinguished():
         seen[key] = spec.code
 
 
+def test_display_names_say_t1_t2_and_ya1_ya2():
+    """Владелец: учителя говорят Т1/Т2 и Я1/Я2, скобка про язык обучения
+    в названии для показа не нужна (16.10.2026). Названия приказа
+    `name_ru`/`name_kz` при этом остаются прежними — по ним ищется приложение."""
+    from app.adapters.curriculum.parser import _SUBJECTS, subject_title_kz
+
+    ru_titles = {
+        "kazakh_lang_l1": "Казахский язык (Т1)",
+        "kazakh_lang_l2": "Казахский язык (Т2)",
+        "russian_lang_l1": "Русский язык (Я1)",
+        "russian_lang_l2": "Русский язык (Я2)",
+        "literary_reading_ru": "Литературное чтение",
+        "literary_reading_kz": "Әдебиеттік оқу",
+        "native_language_kz": "Ана тілі",
+        "literacy_ru": "Обучение грамоте",
+    }
+    kz_titles = {
+        "kazakh_lang_l1": "Қазақ тілі (Т1)",
+        "kazakh_lang_l2": "Қазақ тілі (Т2)",
+        "russian_lang_l1": "Орыс тілі (Я1)",
+        "russian_lang_l2": "Орыс тілі (Я2)",
+        "literary_reading_ru": "Литературное чтение",
+        "literary_reading_kz": "Әдебиеттік оқу",
+        "native_language_kz": "Ана тілі",
+        "literacy_ru": "Сауат ашу",
+    }
+    for code, title in ru_titles.items():
+        assert _SUBJECTS[code].title == title, code
+    for code, title in kz_titles.items():
+        assert subject_title_kz(code, "нет в реестре") == title, code
+    # поиск приложения в приказе не тронут: названия остались приказными
+    assert _SUBJECTS["kazakh_lang_l2"].name_ru == "Казахский язык"
+    assert _SUBJECTS["kazakh_lang_l2"].name_kz == "Қазақ тілі"
+    assert _SUBJECTS["literacy_ru"].name_kz == "Обучение грамоте"
+    # неизвестному коду — fallback, а не пустая строка
+    assert subject_title_kz("astrology", "Небесная механика") == "Небесная механика"
+
+
 def test_broken_code_in_text_is_an_error():
     program = {
         "objectives": [

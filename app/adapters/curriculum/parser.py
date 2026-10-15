@@ -113,10 +113,21 @@ _SECTION_ROWS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
 
 @dataclass(frozen=True)
 class SubjectSpec:
-    """Как найти приложение предмета и как назвать его в разборе."""
+    """Как найти приложение предмета и как назвать его для человека.
+
+    Две пары названий намеренно разделены: `title`/`title_kz` видит учитель,
+    `name_ru`/`name_kz` — формулировка из самого приказа, по которой парсер
+    находит приложение среди ~130. Показать приказу «Казахский язык (Т1)»
+    нельзя: в тексте акта такой скобки нет и приложение не найдётся.
+    """
 
     code: str
+    # Русское название для показа; оно же лежит в базе в curriculum_subject.title
     title: str
+    # Казахское название для показа. По умолчанию совпадает с name_kz —
+    # отдельное значение нужно только тем, кого по-казахски называют иначе
+    title_kz: str
+    # Названия предмета в редакциях приказа — только для поиска приложения
     name_ru: str
     name_kz: str
     grades: tuple[int, ...]
@@ -137,8 +148,12 @@ class SubjectSpec:
 def _subject(code: str, title: str, name_ru: str, name_kz: str,
              grades: tuple[int, ...],
              instruction: tuple[str, str] | None = None,
-             objectives_language: str | None = None, *, icon: str) -> SubjectSpec:
-    return SubjectSpec(code=code, title=title, name_ru=name_ru, name_kz=name_kz,
+             objectives_language: str | None = None, *, icon: str,
+             title_kz: str | None = None) -> SubjectSpec:
+    """Запись реестра. Казахское название для показа не задано — значит
+    по-казахски предмет звучит как в приказе, и это самая частая ситуация."""
+    return SubjectSpec(code=code, title=title, title_kz=title_kz or name_kz,
+                       name_ru=name_ru, name_kz=name_kz,
                        grades=grades, instruction=instruction,
                        objectives_language=objectives_language, icon=icon)
 
@@ -178,22 +193,36 @@ _SUBJECTS: dict[str, SubjectSpec] = {
         # обучением — язык как второй, с уровнями А1–А2, и вовсе другой набор
         # целей, чем «Қазақ тілі» для своих). Суффикс _l1 — язык обучения совпадает
         # с изучаемым, _l2 — изучаемый язык не родной для школы.
-        _subject("literacy_ru", "Обучение грамоте (русский язык обучения)",
-                 "Обучение грамоте", "Обучение грамоте", (1,), _INSTR_RU, icon="abc"),
-        _subject("native_language_kz", "Ана тілі (казахский язык обучения)",
+        # В показе владелец называет варианты по-учительски: Т1/Т2 и Я1/Я2,
+        # скобка про язык обучения там не нужна (решение владельца 16.10.2026).
+        # Скобки в `name_ru`/`name_kz` не появляются — это названия приказа.
+        _subject("literacy_ru", "Обучение грамоте",
+                 "Обучение грамоте", "Обучение грамоте", (1,), _INSTR_RU, icon="abc",
+                 title_kz="Сауат ашу"),
+        _subject("native_language_kz", "Ана тілі",
                  "Ана тілі", "Ана тілі", (1,), _INSTR_KZ, icon="notebook"),
-        _subject("kazakh_lang_l1", "Казахский язык (казахский язык обучения)",
-                 "Казахский язык", "Қазақ тілі", (2, 3, 4), _INSTR_KZ, icon="blue_book"),
-        _subject("kazakh_lang_l2", "Казахский язык (неказахский язык обучения)",
-                 "Казахский язык", "Қазақ тілі", (1, 2, 3, 4), _INSTR_NOT_KZ, icon="blue_book"),
-        _subject("literary_reading_kz", "Әдебиеттік оқу (казахский язык обучения)",
-                 "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_KZ, icon="open_book"),
-        _subject("russian_lang_l1", "Русский язык (русский язык обучения)",
-                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_RU, icon="orange_book"),
-        _subject("russian_lang_l2", "Русский язык (нерусский язык обучения)",
-                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_NOT_RU, icon="orange_book"),
-        _subject("literary_reading_ru", "Литературное чтение (русский язык обучения)",
-                 "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_RU, icon="open_book"),
+        _subject("kazakh_lang_l1", "Казахский язык (Т1)",
+                 "Казахский язык", "Қазақ тілі", (2, 3, 4), _INSTR_KZ, icon="blue_book",
+                 title_kz="Қазақ тілі (Т1)"),
+        _subject("kazakh_lang_l2", "Казахский язык (Т2)",
+                 "Казахский язык", "Қазақ тілі", (1, 2, 3, 4), _INSTR_NOT_KZ, icon="blue_book",
+                 title_kz="Қазақ тілі (Т2)"),
+        # Литературное чтение — два разных предмета: русская программа и
+        # казахская. Для показа скобок не нужно вовсе: русскую программу
+        # в казахском интерфейсе тоже называют «Литературное чтение»,
+        # казахскую — «Әдебиеттік оқу» в обоих языках
+        _subject("literary_reading_kz", "Әдебиеттік оқу",
+                 "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_KZ,
+                 icon="open_book"),
+        _subject("russian_lang_l1", "Русский язык (Я1)",
+                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_RU, icon="orange_book",
+                 title_kz="Орыс тілі (Я1)"),
+        _subject("russian_lang_l2", "Русский язык (Я2)",
+                 "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_NOT_RU, icon="orange_book",
+                 title_kz="Орыс тілі (Я2)"),
+        _subject("literary_reading_ru", "Литературное чтение",
+                 "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_RU,
+                 icon="open_book", title_kz="Литературное чтение"),
         _subject("english", "Английский язык", "Английский язык", "Ағылшын тілі", (3, 4),
                  objectives_language="en", icon="speech_bubble"),
         _subject("german", "Немецкий язык", "Немецкий язык", "Неміс тілі", (3, 4),
@@ -204,15 +233,6 @@ _SUBJECTS: dict[str, SubjectSpec] = {
 }
 
 SUBJECT_CODES: tuple[str, ...] = tuple(_SUBJECTS)
-
-# Скобка языка обучения по-казахски — как в шапках казахских приложений приказа:
-# без неё «Қазақ тілі» для двух вариантов программы выглядели бы одним предметом.
-_KZ_INSTRUCTION = {
-    "_INSTR_KZ": "оқыту қазақ тілінде",
-    "_INSTR_NOT_KZ": "оқыту қазақ тілінде емес",
-    "_INSTR_RU": "оқыту орыс тілінде",
-    "_INSTR_NOT_RU": "оқыту орыс тілінде емес",
-}
 
 
 def objectives_language(code: str, edition: str) -> str:
@@ -231,17 +251,11 @@ def subject_icon(code: str) -> str:
 
 def subject_title_kz(code: str, fallback: str) -> str:
     """Казахское название предмета для учителя. В базе у предмета одно русское
-    название, казахское живёт только в реестре разбора. Кода нет в реестре —
-    отдаём `fallback`, а не пустую строку."""
+    название, казахское живёт только в реестре разбора. Скобки о языке обучения
+    в показе больше нет — учителя говорят Т1/Т2 и Я1/Я2, и варианты так и
+    названы. Кода нет в реестре — отдаём `fallback`, а не пустую строку."""
     spec = _SUBJECTS.get(code)
-    if spec is None:
-        return fallback
-    if spec.instruction is None:
-        return spec.name_kz
-    for name, value in _KZ_INSTRUCTION.items():
-        if spec.instruction is globals()[name]:
-            return f"{spec.name_kz} ({value})"
-    return spec.name_kz
+    return spec.title_kz if spec else fallback
 
 
 def _appendix_patterns(
