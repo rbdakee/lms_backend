@@ -7,7 +7,7 @@ from fastapi import Depends, Request, Response
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.ai.provider import ai_chat
-from app.adapters.db.base import get_db
+from app.adapters.db.base import get_db, get_engine
 from app.adapters.db.lesson_ai_repos import LessonAccessRepo, LessonKitRepo, LessonMaterialRepo
 from app.adapters.db.mcp_repos import McpRepo
 from app.adapters.db.models import Session, User
@@ -62,6 +62,7 @@ from app.application.curriculum_import import CurriculumImportService
 from app.application.files import FilesService
 from app.application.leads import LeadsService
 from app.application.lesson_ai_access import LessonAccessService
+from app.application.lesson_ai_attachments import AttachmentRunner, LessonAttachmentService
 from app.application.lesson_ai_chat import LessonChatService
 from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService
@@ -94,6 +95,7 @@ from app.domain.errors import (
     LessonAiOffError,
     UnauthorizedError,
 )
+from app.domain.lesson_ai import ATTACH_BUDGET
 from app.domain.platform import DEFAULT_PLATFORM
 from app.lesson_ai.blocks import BlockRewriter
 
@@ -799,6 +801,55 @@ def get_lesson_chat_service(
         max_tool_calls=cfg.lesson_ai_chat_max_tool_calls,
         max_edit_tool_calls=cfg.lesson_ai_edit_max_tool_calls,
         history_messages=cfg.lesson_ai_chat_history_messages,
+        model=cfg.lesson_model,
+        attach_budget=ATTACH_BUDGET,
+    )
+
+
+# Клиент разбора вложений — свой, а не `get_lesson_block_ai`: разбор 20-страничного
+# PDF держит не учитель у экрана, а фоновый воркер, и живёт дольше, чем запрос
+# перегенерации блока. Модель та же — `lesson_model`.
+_lesson_attach_ai: AiPort | None = None
+
+
+def get_lesson_attach_ai() -> AiPort:
+    global _lesson_attach_ai
+    if _lesson_attach_ai is None:
+        cfg = get_settings()
+        _lesson_attach_ai = ai_chat(
+            cfg,
+            cfg.lesson_ai_provider,
+            model=cfg.lesson_model,
+            timeout_sec=cfg.lesson_ai_timeout_sec,
+        )
+    return _lesson_attach_ai
+
+
+def get_lesson_attachment_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    ai: Annotated[AiPort, Depends(get_lesson_attach_ai)],
+    storage: Annotated[StoragePort, Depends(get_storage)],
+) -> LessonAttachmentService:
+    cfg = get_settings()
+    return LessonAttachmentService(
+        db,
+        storage,
+        ai,
+        max_files=cfg.lesson_ai_attach_max_files,
+        max_mb=cfg.lesson_ai_attach_max_mb,
+        max_pdf_pages=cfg.lesson_ai_attach_max_pdf_pages,
+        model=cfg.lesson_model,
+    )
+
+
+def attachment_runner(cfg: Settings) -> AttachmentRunner:
+    """Фоновый разбор вложений — то же, что ручка принимает: хранилище
+    и клиент выбираются по конфигурации. Фабрики, а не готовые объекты:
+    воркер живёт в собственном потоке и открывает свои сессии базы."""
+    return AttachmentRunner(
+        lambda: DbSession(get_engine()),
+        get_storage,
+        get_lesson_attach_ai(),
         model=cfg.lesson_model,
     )
 

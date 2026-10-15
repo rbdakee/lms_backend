@@ -64,6 +64,11 @@ def product_routes() -> list[tuple[str, str]]:
     for path, operations in app.openapi()["paths"].items():
         if not path.startswith("/lesson_ai/") or path == "/lesson_ai/access":
             continue
+        # Картинки каталога презентаций публичны нарочно (Fluent Emoji, MIT):
+        # `<img>` не несёт заголовков и живёт на другом домене, проверки входа
+        # и доступа у этой ручки нет — в перебор закрытых она не входит
+        if path.startswith("/lesson_ai/images/"):
+            continue
         concrete = re.sub(r"\{[^}]+\}", "1", path)
         found += [(method.upper(), concrete) for method in sorted(operations)]
     return found

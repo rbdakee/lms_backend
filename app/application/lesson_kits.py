@@ -65,6 +65,7 @@ class LessonKitsService:
         notes: str,
         engagement_level: str = DEFAULT_ENGAGEMENT,
         difficulty_level: str = DEFAULT_DIFFICULTY,
+        personal: bool = False,
     ) -> dict:
         topic = topic.strip()
         if not topic:
@@ -95,6 +96,10 @@ class LessonKitsService:
             notes=notes.strip(),
             engagement_level=engagement_level,
             difficulty_level=difficulty_level,
+            # Урок по файлам учителя — личный: в банк он не идёт (решение
+            # владельца 16.10.2026). Флаг ставит вызывающий — чат знает свои
+            # вложения, прямой заказ personal и не передаёт
+            personal=personal,
         )
         # Порядок видов — из брифа, а не из запроса: план урока идёт первым,
         # остальные материалы получат его на вход (раздел 4.2). Он же нужен

@@ -10,13 +10,14 @@
 заглушка ИИ была бы кодом, который в бою не работает никогда.
 """
 
+import base64
 import json
 import logging
 from collections.abc import Iterator
 
 from openai import OpenAI
 
-from app.application.ports import AiDelta, AiMessage, AiReply, AiToolCall
+from app.application.ports import AiDelta, AiMedia, AiMessage, AiReply, AiToolCall
 from app.config import Settings
 
 log = logging.getLogger(__name__)
@@ -25,6 +26,12 @@ log = logging.getLogger(__name__)
 class AiUnavailableError(Exception):
     """Провайдер не ответил. Наружу уходит общим текстом: в исключении
     провайдера бывает и тело запроса, а в нём — переписка админа."""
+
+
+class MediaUnsupportedError(Exception):
+    """Этот провайдер не умеет читать файлы (`image_url` / `file` content part).
+    Отдельно от «не ответил»: учителю они отвечают разное — первый случай
+    не лечится повторной попыткой, файл надо разбирать на другом провайдере."""
 
 
 class OpenAiChat:
@@ -119,6 +126,38 @@ class OpenAiChat:
             raise AiUnavailableError("Модель не ответила") from None
         return _reply(resp)
 
+    def describe_media(
+        self, *, system: str, media: AiMedia, instruction: str
+    ) -> AiReply:
+        """Один мультимодальный запрос: текст плюс файл целиком.
+
+        Картинка уходит content part'ом `image_url` с `data:`-URI, PDF —
+        part'ом `file` с base64 и именем файла: так Chat Completions отдаёт
+        модели сам документ, а не пересказ. Запрос разовый — разбор вложения
+        делается один раз после загрузки, — поэтому стрима у него нет.
+        """
+        part = (
+            {
+                "type": "image_url",
+                "image_url": {"url": _data_uri(media)},
+            }
+            if media.mime.startswith("image/")
+            else {
+                "type": "file",
+                "file": {"file_data": _data_uri(media), "filename": media.filename},
+            }
+        )
+        payload = [{"role": "system", "content": system}]
+        payload += [
+            {"role": "user", "content": [{"type": "text", "text": instruction}, part]}
+        ]
+        try:
+            resp = self.client.chat.completions.create(model=self.model, messages=payload)
+        except Exception as exc:
+            log.error("%s не ответил: %s: %s", self.label, type(exc).__name__, self._safe(str(exc)))
+            raise AiUnavailableError("Модель не ответила") from None
+        return _reply(resp)
+
     def stream(
         self,
         *,
@@ -208,6 +247,13 @@ class OpenAiChat:
 
     def _safe(self, text: str) -> str:
         return text.replace(self._key, "***") if self._key else text
+
+
+def _data_uri(media: AiMedia) -> str:
+    """Файл в `data:`-URI: провайдер не ходит в чужие хранилища, байты
+    едут в самом запросе."""
+    body = base64.b64encode(media.data).decode("ascii")
+    return f"data:{media.mime};base64,{body}"
 
 
 def _wire(message: AiMessage) -> dict:

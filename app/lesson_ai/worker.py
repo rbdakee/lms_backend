@@ -81,3 +81,19 @@ def start_workers(cfg: Settings) -> Workers:
     workers = Workers(runner, cfg.lesson_ai_workers, cfg.lesson_ai_poll_sec)
     workers.start()
     return workers
+
+
+def start_attachment_workers(cfg: Settings) -> Workers:
+    """Воркер разбора вложений — один, в том же процессе API, по тем же
+    причинам, что и воркеры генерации: отдельного сервиса бриф не разрешает.
+    Один, а не два: выжимка снимается с файла раз в жизни, и поток поколок
+    здесь не стоит; упавшие по таймауту разборы подберёт рестарт.
+
+    Тесты его не поднимают вовсе — вместе с `LESSON_AI_WORKERS=0`, и разбор
+    там зовётся руками, как и `JobRunner.run_next`."""
+    from app.api.deps import attachment_runner
+
+    workers = Workers(attachment_runner(cfg), 1, cfg.lesson_ai_poll_sec)
+    workers.start()
+    log.info("Жоспар: воркер разбора вложений запущен")
+    return workers

@@ -159,6 +159,13 @@ class S3Storage:
             # на середине файла
             body.close()
 
+    def delete(self, key: str) -> None:
+        # Дважды нажатая кнопка не падает: отсутствующего объекта не считать
+        # ошибкой. Прочий отказ хранилища наружу — молчаливая утечка места
+        # хуже подъёмной ошибки
+        with suppress(ClientError):
+            self.client.delete_object(Bucket=self.bucket, Key=key)
+
     def _abort(self, key: str, upload_id: str) -> None:
         # Уборка за неудачной загрузкой не важнее самой неудачи: наружу
         # должна уйти исходная ошибка, а не отказ хранилища на отмене

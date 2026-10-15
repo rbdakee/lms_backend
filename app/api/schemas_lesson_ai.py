@@ -281,11 +281,37 @@ class LessonSuggestionOut(BaseModel):
     text: str
 
 
+class LessonAttachmentOut(BaseModel):
+    """Строка вложения у скрепки. Имя файла — для учителя; выжимки в ответе
+    нет: она материал для модели, экрану хватает статуса. `pages` — только
+    у PDF. `status: "processing"` — файл ещё читается, `"failed"` — не
+    получилось (`error_code`: `attachment_unsupported`, `ai_failed`,
+    `extract_failed`); в обоих случаях файл можно удалить и приложить снова."""
+
+    id: int
+    kind: Literal["image", "pdf", "docx", "pptx"]
+    mime: str
+    filename: str
+    size_bytes: int
+    pages: int | None
+    status: Literal["processing", "ready", "failed"]
+    error_code: str | None
+    created_at: datetime
+
+
+class LessonAttachmentsOut(BaseModel):
+    """Вложения чата — в порядке загрузки. Выжимки файлов модель видит сама,
+    фронту список нужен ради скрепок и статусов."""
+
+    items: list[LessonAttachmentOut]
+
+
 class LessonChatMessageOut(BaseModel):
     """Строка ленты. `role: "tool"` — вызов инструмента: поиск по программе
     (в `tool_result.items` найденные цели формы `LessonChatObjectiveOut`, отказ —
     в `tool_result.error`) или правка материала. `role: "event"` — событие
-    (`event`), `content` у него — запасная подпись словами."""
+    (`event`), `content` у него — запасная подпись словами. У реплики учителя
+    — приложенные к ней файлы (`attachments`), у остальных ролей их не бывает."""
 
     id: int
     role: Literal["user", "assistant", "tool", "event"]
@@ -296,6 +322,7 @@ class LessonChatMessageOut(BaseModel):
     event: LessonChatEventOut | None
     # Быстрые ответы под сообщением помощника: клик отправляет `text` репликой
     suggestions: list[LessonSuggestionOut] | None = None
+    attachments: list[LessonAttachmentOut] = []
     created_at: datetime
 
 
@@ -410,7 +437,12 @@ class LessonChatGroupsReorderIn(BaseModel):
 
 
 class LessonChatSayIn(BaseModel):
+    """Реплика учителя. `attachment_ids` — файлы этого же чата, уже загруженные
+    ручкой вложений и ещё не приложенные ни к одной реплике; каждый получает
+    `message_id` этой реплики."""
+
     text: str
+    attachment_ids: list[int] = Field(default_factory=list, max_length=5)
 
 
 class LessonChatTurnOut(BaseModel):

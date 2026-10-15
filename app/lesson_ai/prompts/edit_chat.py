@@ -8,6 +8,7 @@
 """
 
 from app.lesson_ai.kit_map import kinds_catalog, kit_outline
+from app.lesson_ai.prompts.attachment import materials_block
 from app.lesson_ai.prompts.order_chat import (
     DIFFICULTY_LABELS,
     ENGAGEMENT_LABELS,
@@ -104,6 +105,13 @@ find_objectives, browse_objectives, show_objectives (учитель отмеча
 в КСП рефлексия», «почему в проверочной нет дескриптора на …») — отвечай по \
 оглавлению из состояния, а если выжимки не хватает, дочитай get_block. Не выдумывай \
 и не отвечай «не знаю», пока не посмотрел.
+13. Учитель мог приложить к чату файлы — фото страниц учебника, PDF, документ \
+Word, презентацию. Их выжимки — в блоке «Материалы учителя» служебного сообщения. \
+Правишь материалы с ними в руках: «сделай как в конспекте, который я прислал» — \
+это про блок «Материалы учителя», перечитывать и переспрашивать не надо. Ссылайся \
+на файлы («по странице учебника, которую вы прислали…») и не выдумывай того, \
+чего в них нет. Помечено «файл ещё читается» — скажи, что содержимое появится \
+через минуту.
 
 Устройство материалов комплекта (из схем видов; имена блоков — точные):
 """ + kinds_catalog() + """
@@ -124,9 +132,12 @@ KIT_STATUS_LABELS = {
 }
 
 
-def state_message(kit: dict | None) -> str:
+def state_message(kit: dict | None, *, materials: list[dict], budget: int) -> str:
     """Комплект так, как его видит модель. `kit` — `LessonKitsService`-подобная
-    форма без содержимого: статусы и параметры урока."""
+    форма без содержимого: статусы и параметры урока. `materials` — вложения
+    чата (`kind`, `pages`, выжимка), текст блока собирает `materials_block`
+    под общим бюджетом `budget`. Изменчивое живёт здесь, а не в `SYSTEM`:
+    тот кэшируется."""
     if kit is None:
         return "Комплект сейчас: его нет (материалы к этому чату не привязаны). Править нечего."
     subject = kit.get("subject_title")
@@ -147,6 +158,9 @@ def state_message(kit: dict | None) -> str:
         )
     lines.append("- материалы и их оглавление (полный текст блока — get_block):")
     lines.extend(kit_outline(kit["materials"]))
+    if materials:
+        lines.append("")
+        lines.append(materials_block(materials, budget=budget))
     return "\n".join(lines)
 
 

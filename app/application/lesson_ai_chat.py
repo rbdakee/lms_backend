@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session as DbSession
 from app.adapters.ai.openai_chat import AiUnavailableError
 from app.adapters.curriculum.parser import subject_icon, subject_title_kz
 from app.adapters.db.lesson_ai_repos import (
+    LessonAttachmentRepo,
     LessonChatRepo,
     LessonMaterialRepo,
     LessonUsageRepo,
@@ -49,6 +50,7 @@ from app.adapters.db.lesson_ai_repos import (
 )
 from app.adapters.db.models import LessonAiChat, LessonAiChatMessage, User, now_utc
 from app.application.ai_loop import AiStreamBrokenError, LoopResult, Step, ToolLoop
+from app.application.lesson_ai_attachments import attachment_out
 from app.application.lesson_kits import LessonKitsService, objectives_out
 from app.application.lesson_materials import LessonMaterialsService
 from app.application.ports import AiMessage, AiPort, AiToolCall
@@ -132,6 +134,7 @@ class LessonChatService:
         max_edit_tool_calls: int,
         history_messages: int,
         model: str,
+        attach_budget: int = 8000,
     ):
         self.db = db
         self.ai = ai
@@ -146,6 +149,9 @@ class LessonChatService:
         self.max_tool_calls = max_tool_calls
         self.max_edit_tool_calls = max_edit_tool_calls
         self.history_messages = history_messages
+        # Общий бюджет выжимок вложений на один ход — настройка продукта
+        self.attach_budget = attach_budget
+        self.attachments = LessonAttachmentRepo(db)
 
     # -- чат ----------------------------------------------------------------
 
@@ -334,15 +340,17 @@ class LessonChatService:
 
     # -- ход ----------------------------------------------------------------
 
-    def check_say(self, user: User, chat_id: int, text: str) -> str:
+    def check_say(self, user: User, chat_id: int, text: str, attachment_ids=()) -> str:
         """Проверки, которые обязаны стать обычным HTTP-отказом, — до стрима:
         как только ответ потёк, статус уже отдан."""
-        self._own(user, chat_id)
+        chat = self._own(user, chat_id)
         text = text.strip()
         if not text:
             raise FieldError("text", "Введите сообщение")
         if len(text) > MESSAGE_MAX:
             raise FieldError("text", f"Не длиннее {MESSAGE_MAX} символов")
+        for attachment_id in attachment_ids:
+            self._own_attachment(chat, attachment_id)
         wait = self.limiter.hit(str(user.id))
         if wait:
             raise RateLimitedError(
@@ -351,7 +359,19 @@ class LessonChatService:
             )
         return text
 
-    def say_stream(self, user: User, chat_id: int, text: str) -> Iterator[dict]:
+    def _own_attachment(self, chat: LessonAiChat, attachment_id: int) -> None:
+        """Файл для реплики: из этого чата, этого учителя, ещё не пристёгнутый
+        ни к одной реплике. Чужой id — 404: файл не из этого чата для учителя
+        «не существует», по номерам нельзя перебирать чужие вложения."""
+        row = self.attachments.get(attachment_id)
+        if row is None or row.chat_id != chat.id or row.user_id != chat.user_id:
+            raise NotFoundError("Вложение не найдено")
+        if row.message_id is not None:
+            raise FieldError("attachment_ids", "Файл уже приложен к другому сообщению")
+
+    def say_stream(
+        self, user: User, chat_id: int, text: str, attachment_ids: list[int] | None = None
+    ) -> Iterator[dict]:
         """Ход событиями — той же формы, что у ассистента админки:
 
         - `delta` — кусок ответа по мере генерации;
@@ -367,10 +387,17 @@ class LessonChatService:
         замолчал посреди разговора — **хода не было**, откатывается и реплика,
         и то, что по ней записал разбор.
         """
+        attachment_ids = attachment_ids or []
         chat = self._own(user, chat_id)
         editing = _mode(chat) == "edit"
         history = self._history(chat.id)
-        self.repo.add_message(chat.id, role="user", content=text)
+        message = self.repo.add_message(chat.id, role="user", content=text)
+        if attachment_ids:
+            # Привязка после проверки в `check_say`: файл прикладывается к этой
+            # реплике навсегда — «перестегнуть» нельзя, у ленты он у этой скрепки.
+            # Flush раньше привязки: без него у реплики ещё нет id
+            self.db.flush()
+            self.attachments.bind_message(attachment_ids, message.id)
         if chat.archived_at is not None:
             # Написали в архивный чат — значит он снова рабочий: возвращаем сами,
             # учителю не нужен отказ «сначала верните из архива»
@@ -379,7 +406,11 @@ class LessonChatService:
         if editing:
             # Заказ подтверждён и записан в комплект: разбирать в реплике нечего
             extract_in = extract_out = 0
-            state = edit_prompt.state_message(self._edit_state(chat))
+            state = edit_prompt.state_message(
+                self._edit_state(chat),
+                materials=self._materials(chat),
+                budget=self.attach_budget,
+            )
             loop = ToolLoop(
                 self.ai,
                 self.max_edit_tool_calls,
@@ -397,7 +428,12 @@ class LessonChatService:
             )
         else:
             extract_in, extract_out = self._extract(chat, text)
-            state = prompt.state_message(self._order_out(chat), said=self._said(chat))
+            state = prompt.state_message(
+                self._order_out(chat),
+                said=self._said(chat),
+                materials=self._materials(chat),
+                budget=self.attach_budget,
+            )
             loop = ToolLoop(
                 self.ai, self.max_tool_calls, tools=OrderTools(), cap_message=prompt.CAP_MESSAGE
             )
@@ -669,6 +705,10 @@ class LessonChatService:
             notes=notes or "",
             engagement_level=engagement_level,
             difficulty_level=difficulty_level,
+            # Урок, собранный по файлам учителя, — личный и в банк не идёт
+            # (решение владельца 16.10.2026). Достаточно самого факта вложений:
+            # файл ещё читается — всё равно урок по нему
+            personal=self.attachments.count_in_chat(chat.id) > 0,
         )
         chat.status = "confirmed"
         chat.kit_id = kit["id"]
@@ -871,17 +911,44 @@ class LessonChatService:
             "ready": not missing,
         }
 
+    def _materials(self, chat: LessonAiChat) -> list[dict]:
+        """Вложения чата для служебного сообщения — обеих режимов. Форму для
+        модели собирает `materials_block`; упавшие файлы в разговор не идут —
+        модели нечего про них сказать, а учитель видит отказ у скрепки."""
+        rows = [
+            {"kind": row.kind, "pages": row.pages, "summary": row.summary or ""}
+            for row in self.attachments.ready_for_chat(chat.id)
+        ]
+        processing = [
+            {"kind": row.kind, "pages": row.pages, "processing": True}
+            for row in self.attachments.in_chat(chat.id)
+            if row.status == "processing"
+        ]
+        return rows + processing
+
     def feed(self, user: User, chat_id: int, *, after_id: int) -> dict:
         """Лента после указанной строки — для опроса, пока комплект собирается:
         воркер дописывает события, когда экран ничего не отправляет. Вместе
         с лентой — комплект: статусы материалов нужны экрану в тот же момент."""
         chat = self._own(user, chat_id)
+        rows = self.repo.messages(chat.id, after_id=after_id)
         return {
             "status": chat.status,
             "mode": _mode(chat),
             "kit": self._kit_summary(chat),
-            "items": [_message_out(row) for row in self.repo.messages(chat.id, after_id=after_id)],
+            "items": self._feed_items(rows),
         }
+
+    def _feed_items(self, rows: list[LessonAiChatMessage]) -> list[dict]:
+        """Строки ленты с вложениями реплик — одним запросом на страницу,
+        а не `_message_out` с запросом на каждую реплику."""
+        by_message = self.attachments.by_message(
+            [row.id for row in rows if row.role == "user"]
+        )
+        return [
+            _message_out(row, attachments=[attachment_out(a) for a in by_message.get(row.id, [])])
+            for row in rows
+        ]
 
     def _kit_summary(self, chat: LessonAiChat) -> dict | None:
         """Комплект чата без содержимого: статусы и параметры урока. Содержимое
@@ -939,7 +1006,7 @@ class LessonChatService:
             "kit_id": chat.kit_id,
             "kit": self._kit_summary(chat),
             "order": self._order_out(chat),
-            "items": [_message_out(row) for row in self.repo.messages(chat.id)],
+            "items": self._feed_items(self.repo.messages(chat.id)),
             "created_at": chat.created_at,
             "updated_at": chat.updated_at,
         }
@@ -1048,7 +1115,7 @@ def _joined_notes(before: str | None, new: str) -> str:
     return f"{before}; {new}"[:NOTES_MAX]
 
 
-def _message_out(row: LessonAiChatMessage) -> dict:
+def _message_out(row: LessonAiChatMessage, attachments: list[dict] | None = None) -> dict:
     return {
         "id": row.id,
         "role": row.role,
@@ -1058,5 +1125,7 @@ def _message_out(row: LessonAiChatMessage) -> dict:
         "tool_result": row.tool_result,
         "event": row.event,
         "suggestions": row.suggestions,
+        # Файлы бывают только у реплики учителя; остальные роли получают пусто
+        "attachments": attachments or [],
         "created_at": row.created_at,
     }
