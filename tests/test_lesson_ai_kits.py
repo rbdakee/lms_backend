@@ -674,3 +674,119 @@ def test_reimport_under_kits_is_refused(client, sms, lang):
         resp = client.get(f"/lesson_ai/kits/{kit_id}")
         assert resp.status_code == 200
         assert resp.json()["objective"]["code"] == "1.1.1.1"
+
+
+# -- GET /lesson_ai/kits: «Мои уроки» --------------------------------------------------------
+
+
+def kit_list(client, **params) -> dict:
+    resp = client.get("/lesson_ai/kits", params=params)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_kit_list_is_empty_without_kits(client, sms):
+    login(client, sms)
+
+    assert kit_list(client) == {"items": [], "total": 0, "page": 1, "per_page": 20}
+
+
+def test_kit_list_shows_only_own_kits_newest_first(client, client2, sms, scene):
+    login(client, sms)
+    first = order(client, scene.objective.id, topic="Первый").json()
+    second = order(
+        client, scene.objective.id, topic="Второй", kinds=["lesson_plan", "tasks"]
+    ).json()
+    login(client2, sms, phone=OTHER_PHONE)
+    order(client2, scene.objective.id, topic="Чужой")
+
+    body = kit_list(client)
+
+    assert [row["id"] for row in body["items"]] == [second["id"], first["id"]]
+    assert body["total"] == 2
+    row = body["items"][0]
+    # Форма карточки: комплект без content, notes и class_size
+    assert set(row) == {
+        "id",
+        "objective",
+        "subject_code",
+        "grade",
+        "lang",
+        "topic",
+        "engagement_level",
+        "difficulty_level",
+        "status",
+        "created_at",
+        "updated_at",
+        "materials",
+    }
+    assert row["objective"] == {
+        "id": scene.objective.id,
+        "code": CODE,
+        "text": OBJECTIVE_TEXT,
+        "marker": scene.objective.marker,
+    }
+    assert (row["subject_code"], row["lang"], row["topic"], row["status"]) == (
+        "math",
+        "ru",
+        "Второй",
+        "generating",
+    )
+    assert [(m["kind"], m["status"]) for m in row["materials"]] == [
+        ("lesson_plan", "queued"),
+        ("tasks", "queued"),
+    ]
+    assert all(set(m) == {"id", "kind", "status"} for m in row["materials"])
+    # Карточка и полный комплект говорят одно и то же
+    full = client.get(f"/lesson_ai/kits/{second['id']}").json()
+    assert row["materials"] == [
+        {"id": m["id"], "kind": m["kind"], "status": m["status"]} for m in full["materials"]
+    ]
+
+
+def test_kit_list_pages(client, sms, scene):
+    login(client, sms)
+    ids = [order(client, scene.objective.id).json()["id"] for _ in range(5)][::-1]
+
+    first = kit_list(client, page=1, per_page=2)
+    last = kit_list(client, page=3, per_page=2)
+    past = kit_list(client, page=4, per_page=2)
+
+    assert ([row["id"] for row in first["items"]], first["total"]) == (ids[:2], 5)
+    assert (first["page"], first["per_page"]) == (1, 2)
+    assert [row["id"] for row in last["items"]] == ids[4:]
+    assert (past["items"], past["total"]) == ([], 5)
+    assert client.get("/lesson_ai/kits?per_page=101").status_code == 422
+    assert client.get("/lesson_ai/kits?page=0").status_code == 422
+
+
+def test_kit_list_search_by_topic_and_objective(client, sms, scene):
+    login(client, sms)
+    ids = {
+        topic: order(client, scene.objective.id, topic=topic).json()["id"]
+        for topic in ("Дроби на ферме", "100% точность")
+    }
+
+    def found(q: str) -> list[int]:
+        return [row["id"] for row in kit_list(client, q=q)["items"]]
+
+    assert found("ДРОБИ") == [ids["Дроби на ферме"]]
+    assert found(CODE) == [ids["100% точность"], ids["Дроби на ферме"]]
+    assert found("двузначных") == [ids["100% точность"], ids["Дроби на ферме"]]
+    # Процент в запросе — обычный символ, а не «любая строка»
+    assert found("%") == [ids["100% точность"]]
+    assert found("нет такого") == []
+    assert kit_list(client, q="нет такого")["total"] == 0
+
+
+def test_kit_list_follows_the_status(client, sms, ai, scene):
+    login(client, sms)
+    kit_id = order(client, scene.objective.id).json()["id"]
+    assert kit_list(client)["items"][0]["status"] == "generating"
+
+    ai.returns_json(DRAFT)
+    assert run_next(ai)
+
+    row = kit_list(client)["items"][0]
+    assert (row["id"], row["status"]) == (kit_id, "ready")
+    assert [m["status"] for m in row["materials"]] == ["ready"]

@@ -96,6 +96,37 @@ class LessonKitOut(BaseModel):
     materials: list[LessonMaterialOut]
 
 
+class LessonKitListMaterialOut(BaseModel):
+    id: int
+    kind: MaterialKind
+    status: Literal["queued", "generating", "ready", "failed"]
+
+
+class LessonKitListItemOut(BaseModel):
+    """Карточка комплекта в «Моих уроках»: комплект без `content`, `notes`
+    и `class_size`, материалы — только `id`, `kind`, `status`."""
+
+    id: int
+    objective: LessonObjectiveOut
+    subject_code: str
+    grade: int
+    lang: Literal["ru", "kz"]
+    topic: str
+    engagement_level: EngagementLevel
+    difficulty_level: DifficultyLevel
+    status: Literal["generating", "ready", "partial", "failed"]
+    created_at: datetime
+    updated_at: datetime
+    materials: list[LessonKitListMaterialOut]
+
+
+class LessonKitsPageOut(BaseModel):
+    items: list[LessonKitListItemOut]
+    total: int
+    page: int
+    per_page: int
+
+
 # -- Блоки материала и их история (сессия L4) --------------------------------
 
 

@@ -42,6 +42,7 @@ from app.api.schemas_lesson_ai import (
     LessonChatTurnOut,
     LessonKitIn,
     LessonKitOut,
+    LessonKitsPageOut,
     LessonObjectivesOut,
 )
 from app.application.lesson_ai_access import LessonAccessService
@@ -85,6 +86,17 @@ def create_kit(
             difficulty_level=body.difficulty_level,
         )
     )
+
+
+@router.get("/kits")
+def kits(
+    user: Annotated[User, Depends(deps.get_current_user)],
+    params: Annotated[PageParams, Depends()],
+    svc: Annotated[LessonKitsService, Depends(deps.get_lesson_kits_service)],
+    q: Annotated[str | None, Query(max_length=200)] = None,
+) -> LessonKitsPageOut:
+    data = svc.my_kits(user, q=q, offset=params.offset, limit=params.per_page)
+    return LessonKitsPageOut(**page_out(data["items"], data["total"], params))
 
 
 @router.get("/kits/{kit_id}")
