@@ -20,7 +20,8 @@ import json
 
 from openai import OpenAI
 
-from app.adapters.ai.openai_chat import OpenAiChat
+from app.adapters.ai.openai_chat import MediaUnsupportedError, OpenAiChat
+from app.application.ports import AiMedia, AiReply
 from app.config import Settings
 
 
@@ -51,3 +52,13 @@ class ZaiChat(OpenAiChat):
             f" без текста вокруг:\n{json.dumps(schema, ensure_ascii=False)}"
         )
         return system, {"type": "json_object"}
+
+    def describe_media(
+        self, *, system: str, media: AiMedia, instruction: str
+    ) -> AiReply:
+        """GLM в OpenAI-совместимом API Z.ai content part'ы `image_url`/`file`
+        не описывает (docs.z.ai, сверено 25.09.2026) — разбор вложений
+        на нём не работает. Отказ понятным кодом: когда провайдер «Жоспара»
+        сменится, вложения заработают без правки сценария (учителя сейчас
+        на OpenAI)."""
+        raise MediaUnsupportedError(f"{self.label} не читает файлы")

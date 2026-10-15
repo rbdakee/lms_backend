@@ -23,6 +23,7 @@ from app.adapters.db.models import (
     CurriculumSubject,
     LearningObjective,
     LessonAiAccess,
+    LessonAiAttachment,
     LessonAiChat,
     LessonAiChatGroup,
     LessonAiChatMessage,
@@ -1180,6 +1181,108 @@ class LessonAccessRepo:
             (access, teacher, kits_count, tokens_in, tokens_out, cost)
             for access, teacher, _, kits_count, tokens_in, tokens_out, cost in rows
         ], total
+
+
+class LessonAttachmentRepo:
+    """Вложения чата «Жоспара»: строки `lesson_ai_attachment` и выборки,
+    которыми живут ручки, лента и сборка промптов."""
+
+    def __init__(self, db: DbSession):
+        self.db = db
+
+    def add(self, **fields) -> LessonAiAttachment:
+        row = LessonAiAttachment(**fields)
+        self.db.add(row)
+        self.db.flush()
+        return row
+
+    def get(self, attachment_id: int) -> LessonAiAttachment | None:
+        return self.db.get(LessonAiAttachment, attachment_id)
+
+    def in_chat(self, chat_id: int) -> list[LessonAiAttachment]:
+        return list(
+            self.db.scalars(
+                select(LessonAiAttachment)
+                .where(LessonAiAttachment.chat_id == chat_id)
+                .order_by(LessonAiAttachment.id)
+            )
+        )
+
+    def count_in_chat(self, chat_id: int) -> int:
+        return self.db.scalar(
+            select(func.count()).select_from(LessonAiAttachment)
+            .where(LessonAiAttachment.chat_id == chat_id)
+        ) or 0
+
+    def by_message(self, message_ids: list[int]) -> dict[int, list[LessonAiAttachment]]:
+        """Вложения реплик страницы ленты одним запросом: у сообщений
+        помощника их не бывает, но фильтр на роль не нужен — `message_id`
+        пуст у всех, к кому файл не приложен."""
+        found: dict[int, list] = {message_id: [] for message_id in message_ids}
+        if message_ids:
+            for row in self.db.scalars(
+                select(LessonAiAttachment)
+                .where(LessonAiAttachment.message_id.in_(message_ids))
+                .order_by(LessonAiAttachment.id)
+            ):
+                found[row.message_id].append(row)
+        return found
+
+    def bind_message(self, attachment_ids: list[int], message_id: int) -> None:
+        """Привязать вложения к реплике, с которой они уходят в разговор.
+        Записи уже проверены у вызывающего; привязка — одна на всю жизнь
+        строки: файл не перестёгивается с реплики на реплику."""
+        self.db.execute(
+            update(LessonAiAttachment)
+            .where(LessonAiAttachment.id.in_(attachment_ids))
+            .values(message_id=message_id)
+        )
+        self.db.flush()
+
+    def ready_for_chat(self, chat_id: int) -> list[LessonAiAttachment]:
+        """Готовые вложения — для блока «Материалы учителя». Ещё разбирающиеся
+        идут в блок отдельной строкой «файл ещё читается» (`in_chat`),
+        а упавшие в разговор не идут вовсе: модели нечего про них сказать."""
+        return list(
+            self.db.scalars(
+                select(LessonAiAttachment)
+                .where(
+                    LessonAiAttachment.chat_id == chat_id,
+                    LessonAiAttachment.status == "ready",
+                )
+                .order_by(LessonAiAttachment.id)
+            )
+        )
+
+    def ready_for_kit(self, kit_id: int) -> list[LessonAiAttachment]:
+        """Готовые вложения комплекта: контекст генерации знает комплект,
+        а не чат, — чат находится по `lesson_ai_chat.kit_id`. Прямой заказ
+        (без чата) получает пустой список — обычный путь."""
+        return list(
+            self.db.scalars(
+                select(LessonAiAttachment)
+                .join(LessonAiChat, LessonAiChat.id == LessonAiAttachment.chat_id)
+                .where(LessonAiChat.kit_id == kit_id, LessonAiAttachment.status == "ready")
+                .order_by(LessonAiAttachment.id)
+            )
+        )
+
+    def next_pending(self) -> LessonAiAttachment | None:
+        """Старейшее вложение, чья выжимка ещё не снята. Берётся под замком
+        строки: замок держится до конца разбора — второй воркер возьмёт
+        следующую строку, а это же не возьмёт дважды. Замок на десятки секунд
+        разового разбора дешевле таблицы аренд вокруг одного статуса."""
+        return self.db.scalar(
+            select(LessonAiAttachment)
+            .where(LessonAiAttachment.status == "processing")
+            .order_by(LessonAiAttachment.id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+
+    def delete(self, row: LessonAiAttachment) -> None:
+        self.db.delete(row)
+        self.db.flush()
 
 
 class LessonUsageRepo:

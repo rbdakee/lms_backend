@@ -48,7 +48,7 @@ from app.api.routers import (
 from app.application.bootstrap import ensure_bootstrap_admin
 from app.config import check_providers, get_settings
 from app.lesson_ai.images import catalog as image_catalog
-from app.lesson_ai.worker import start_workers
+from app.lesson_ai.worker import start_attachment_workers, start_workers
 from app.mcp_server.server import McpEndpoint
 
 # Один на процесс: менеджер SDK внутри него заводится в lifespan приложения
@@ -81,10 +81,13 @@ async def lifespan(app: FastAPI):
         task = asyncio.create_task(run_poller(cfg))
     # Очередь генерации «Жоспара» — тоже здесь: отдельного сервиса бриф
     # не разрешает (TEACHER_AI_BRIEF, раздел 7). Выключенный продукт воркеров
-    # не поднимает вовсе, тесты — тоже (`LESSON_AI_WORKERS=0`)
+    # не поднимает вовсе, тесты — тоже (`LESSON_AI_WORKERS=0`). Рядом — разбор
+    # вложений: выжимка снимается фоном, а не в запросе загрузки
     workers = None
+    attach_workers = None
     if cfg.lesson_ai_on and cfg.lesson_ai_workers > 0:
         workers = start_workers(cfg)
+        attach_workers = start_attachment_workers(cfg)
     async with AsyncExitStack() as stack:
         # MCP-менеджер SDK держит свою группу задач — её жизнь привязана к приложению
         if cfg.mcp_enabled:
@@ -92,6 +95,8 @@ async def lifespan(app: FastAPI):
         yield
     if workers is not None:
         workers.stop()
+    if attach_workers is not None:
+        attach_workers.stop()
     if task is not None:
         task.cancel()
         with suppress(asyncio.CancelledError):

@@ -729,3 +729,58 @@ class ObjectivesMixedError(ValidationAppError):
             "Цели одного урока должны быть из одной программы и одного класса:"
             " предметы, классы и языки обучения смешивать нельзя"
         )
+
+
+# Вложения в чат «Жоспара» (решение владельца 16.10.2026). Четыре случая,
+# и фронту они нужны разными кодами: экран у каждого говорит своё — «места
+# больше нет», «такой файл не берём», «сохраните как JPG», «документ длиннее».
+
+
+class AttachmentLimitError(ValidationAppError):
+    """Файлов в чате уже максимум (пока 5, настройка): новый не принимается.
+    Учитель удаляет ненужное — и место освобождается."""
+
+    code = "attachment_limit"
+
+    def __init__(self, max_files: int):
+        super().__init__(
+            f"В чате уже {max_files} файлов — больше не приложить",
+            details={"max_files": max_files},
+        )
+
+
+class AttachmentTypeError(ValidationAppError):
+    """Файл не распознан по сигнатуре байтов или не принимается вовсе.
+    HEIC сюда же: текст у него свой — понятная просьба «сохраните как JPG»,
+    а не безымянное «тип не поддерживается»."""
+
+    code = "attachment_type"
+
+    def __init__(self, message: str):
+        super().__init__(message)
+
+
+class AttachmentPagesError(ValidationAppError):
+    """PDF длиннее потолка (пока 20 страниц): выжимка с него стоила бы
+    больше, чем стоит весь остальной ход."""
+
+    code = "attachment_pages"
+
+    def __init__(self, max_pages: int, pages: int):
+        super().__init__(
+            f"В PDF {pages} страниц — принимается до {max_pages}."
+            " Разбейте документ на части",
+            details={"max_pages": max_pages, "pages": pages},
+        )
+
+
+class AttachmentTooBigError(AppError):
+    """Файл больше потолка размера (пока 20 МБ). 413, а не 422: это отказ
+    про размер тела, и смысл у него тот же, что у `file_too_large` у файлов
+    курса."""
+
+    status = 413
+    code = "attachment_too_big"
+
+    def __init__(self, max_mb: int):
+        super().__init__(f"Файл больше {max_mb} МБ", details={"max_size_mb": max_mb})

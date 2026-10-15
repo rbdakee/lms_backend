@@ -48,6 +48,15 @@ class LocalStorage:
             while chunk := src.read(CHUNK_SIZE):
                 yield chunk
 
+    def delete(self, key: str) -> None:
+        # Ключ ставится самим сервисом, но «за пределы каталога» проверяем
+        # по той же причине, что и в `size`: защита не должна зависеть от того,
+        # чья рука положила ключ
+        try:
+            self._path(key).unlink(missing_ok=True)
+        except ValueError:
+            return
+
     def _path(self, key: str) -> Path:
         """Ключ в базе ставит админ, а на диске это путь: `../../etc/passwd`
         не должен уводить за пределы каталога хранилища."""

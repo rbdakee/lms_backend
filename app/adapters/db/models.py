@@ -36,6 +36,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.domain.iin import IIN_PLACEHOLDER
 from app.domain.lesson_ai import (
+    ATTACH_KINDS,
+    ATTACHMENT_STATUSES,
     BANK_KINDS,
     CHAT_STATUSES,
     DEFAULT_DIFFICULTY,
@@ -1285,6 +1287,55 @@ class LessonAiChatMessage(Base):
     __table_args__ = (
         CheckConstraint("role IN ('user', 'assistant', 'tool', 'event')", name="role"),
         Index("ix_lesson_ai_chat_message_chat_id_id", "chat_id", "id"),
+    )
+
+
+class LessonAiAttachment(Base):
+    """Файл, приложенный учителем к чату «Жоспара» (решение владельца
+    16.10.2026): фото, PDF, Word или PowerPoint.
+
+    Модель файл целиком не видит никогда — ни в ходе чата, ни при генерации.
+    Сразу после загрузки фоновый разбор снимает с файла выжимку (`summary`),
+    и дальше модели ходят только выжимки: контекст не раздувается, а личное
+    учителя не уходит провайдеру файлом на каждый ход.
+
+    `filename` — имя, с которым файл прислал браузер: его видит учитель
+    у скрепки в ленте, и в логи оно не идёт (в имени бывает школа и класс).
+    `storage_key` — случайный ключ в приватном хранилище, как у файлов курса.
+    """
+
+    __tablename__ = "lesson_ai_attachment"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
+    chat_id: Mapped[int] = mapped_column(ForeignKey("lesson_ai_chat.id", ondelete="CASCADE"))
+    # Реплика учителя, с которой файл ушёл модели. Пусто — ещё не приложен
+    # ни к одной реплике (файл можно приложить и до неё).
+    message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("lesson_ai_chat_message.id", ondelete="SET NULL")
+    )
+    kind: Mapped[str] = mapped_column(Text)
+    # Какой файл лежит в хранилище на самом деле: по сигнатуре байтов,
+    # а не по расширению имени.
+    mime: Mapped[str] = mapped_column(Text)
+    filename: Mapped[str] = mapped_column(Text)
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    # Только у PDF: сколько страниц насчиталось при загрузке.
+    pages: Mapped[int | None] = mapped_column(Integer)
+    storage_key: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="processing", server_default="processing")
+    # Выжимка: текст документа дословно и описание картинок и таблиц.
+    summary: Mapped[str | None] = mapped_column(Text)
+    # Машинный код отказа разбора (`attachment_unsupported`, `ai_failed`).
+    # Текста ошибки здесь нет нарочно: в нём бывают имена файлов.
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(_in("kind", ATTACH_KINDS), name="kind"),
+        CheckConstraint(_in("status", ATTACHMENT_STATUSES), name="status"),
+        Index("ix_lesson_ai_attachment_chat_id_id", "chat_id", "id"),
+        Index("ix_lesson_ai_attachment_message_id", "message_id"),
     )
 
 

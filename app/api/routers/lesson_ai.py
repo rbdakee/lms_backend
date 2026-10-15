@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session as DbSession
 
@@ -32,6 +32,8 @@ from app.api import deps
 from app.api.pagination import PageParams, page_out
 from app.api.schemas_lesson_ai import (
     LessonAccessStatusOut,
+    LessonAttachmentOut,
+    LessonAttachmentsOut,
     LessonBlockEditIn,
     LessonBlockOut,
     LessonBlockRegenerateIn,
@@ -62,6 +64,7 @@ from app.api.schemas_lesson_ai import (
     LessonSubjectsOut,
 )
 from app.application.lesson_ai_access import LessonAccessService
+from app.application.lesson_ai_attachments import LessonAttachmentService
 from app.application.lesson_ai_chat import LessonChatService
 from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService, MaterialFile
@@ -69,6 +72,7 @@ from app.application.ports import AiPort
 from app.application.ratelimit import SlidingWindowLimiter
 from app.config import get_settings
 from app.domain.errors import NotFoundError
+from app.domain.lesson_ai import ATTACH_BUDGET
 from app.lesson_ai import images as lesson_images
 
 router = APIRouter(
@@ -277,6 +281,37 @@ def restore_block(
 # -- Чат сбора заказа (сессия L6) ---------------------------------------------
 
 Chats = Annotated[LessonChatService, Depends(deps.get_lesson_chat_service)]
+Attachments = Annotated[LessonAttachmentService, Depends(deps.get_lesson_attachment_service)]
+
+
+@router.post("/chats/{chat_id}/attachments", status_code=201)
+def upload_attachment(
+    chat_id: int,
+    user: CurrentUser,
+    svc: Attachments,
+    file: Annotated[UploadFile, File(description="Фото (JPG, PNG, WEBP), PDF, .docx или .pptx")],
+) -> LessonAttachmentOut:
+    """Приложить файл к чату. Один файл на запрос — учителю проще понять,
+    у какой скрепки отказ. Ответ — строка вложения со статусом `processing`:
+    выжимка снимается фоном, и статус меняется на `ready` или `failed`;
+    экран узнаёт о нём опросом ленты или списка вложений."""
+    return LessonAttachmentOut(**svc.upload(user, chat_id, file.filename or "", file.file))
+
+
+@router.get("/chats/{chat_id}/attachments")
+def attachments(chat_id: int, user: CurrentUser, svc: Attachments) -> LessonAttachmentsOut:
+    return LessonAttachmentsOut(**svc.attachments(user, chat_id))
+
+
+@router.delete("/chats/{chat_id}/attachments/{attachment_id}", status_code=204)
+def delete_attachment(
+    chat_id: int, attachment_id: int, user: CurrentUser, svc: Attachments
+) -> Response:
+    """Снять файл с чата: строка и объект хранилища уходят вместе.
+    Разбор при этом не останавливается — выжимка упавшего разбора не запишется
+    в удалённую строку (`SET NULL` не нужен: строка уже снесена), это нормально."""
+    svc.delete(user, chat_id, attachment_id)
+    return Response(status_code=204)
 
 
 @router.post("/kits/{kit_id}/chat")
@@ -390,9 +425,9 @@ def say(
 ) -> StreamingResponse:
     """Реплика учителя и ответ помощника — стримом. Проверки входа идут
     **до** стрима и остаются обычными отказами: `404`, `409`, `422`, `429`."""
-    text = svc.check_say(user, chat_id, body.text)
+    text = svc.check_say(user, chat_id, body.text, body.attachment_ids)
     return StreamingResponse(
-        _turn(user.id, chat_id, text, ai, limiter),
+        _turn(user.id, chat_id, text, ai, limiter, list(body.attachment_ids)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -403,7 +438,12 @@ def say(
 
 
 def _turn(
-    user_id: int, chat_id: int, text: str, ai: AiPort, limiter: SlidingWindowLimiter
+    user_id: int,
+    chat_id: int,
+    text: str,
+    ai: AiPort,
+    limiter: SlidingWindowLimiter,
+    attachment_ids: list[int],
 ) -> Iterator[str]:
     """Тело стрима — со **своей** сессией базы: зависимости с `yield`
     FastAPI закрывает до того, как отдаёт тело ответа (как у ассистента)."""
@@ -426,11 +466,12 @@ def _turn(
             max_edit_tool_calls=cfg.lesson_ai_edit_max_tool_calls,
             history_messages=cfg.lesson_ai_chat_history_messages,
             model=cfg.lesson_model,
+            attach_budget=ATTACH_BUDGET,
         )
         user = db.get(User, user_id)
         if user is None:
             return
-        for event in svc.say_stream(user, chat_id, text):
+        for event in svc.say_stream(user, chat_id, text, attachment_ids):
             yield _sse(event["event"], event["data"])
         db.commit()
     except Exception:
