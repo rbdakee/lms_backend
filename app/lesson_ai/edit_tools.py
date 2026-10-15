@@ -10,6 +10,8 @@
 | `add_item` | добавить пункт в блок-список (слайд, задание, шаг урока) |
 | `replace_item` | заменить пункт блока-списка |
 | `delete_item` | убрать пункт блока-списка |
+| `set_objectives` | сменить набор целей урока: добавить, убрать, переставить |
+| `find_objectives`, `browse_objectives`, `show_objectives` | поиск новых целей, как в сборке |
 
 Своего пути к блокам у инструментов нет: каждая правка идёт через
 `LessonMaterialsService` — ту же, что ручка кнопки ИИ и ручная правка учителя.
@@ -33,8 +35,10 @@ from typing import Any
 
 from app.adapters.db.lesson_ai_repos import LessonKitRepo
 from app.adapters.db.models import LessonMaterial, User
+from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService
 from app.domain.lesson_ai import KIND_TITLES_RU, MATERIAL_KINDS, objective_codes_in
+from app.lesson_ai import order_tools
 from app.lesson_ai.context import strip_codes_deep
 
 GET_MATERIAL = "get_material"
@@ -43,6 +47,9 @@ REWRITE = "rewrite_block"
 ADD = "add_item"
 REPLACE = "replace_item"
 DELETE = "delete_item"
+SET_OBJECTIVES = "set_objectives"
+# Поиск целей — инструменты сборки заказа, без правок: читают справочник
+SEARCH_TOOLS = (order_tools.SUBJECTS, order_tools.BROWSE, order_tools.SHOW, order_tools.FIND)
 
 # Просьба учителя на кнопке ИИ — не длиннее 500 символов (`LessonBlockRegenerateIn`);
 # у чата тот же потолок: инструкция уходит в тот же запрос к модели
@@ -154,6 +161,30 @@ SCHEMAS = [
     ),
 ]
 
+SCHEMAS.append(
+    _tool(
+        SET_OBJECTIVES,
+        "Сменить набор целей обучения урока: убрать лишние, добавить новые, поменять"
+        " порядок. Передай полный новый набор — номера `id` целей в нужном порядке,"
+        " включая те, что остаются. Номера бери из состояния комплекта (текущие цели)"
+        " и из find_objectives, browse_objectives или show_objectives (новые). Цели"
+        " только той же программы и того же класса, что у комплекта. Блоки «раздел»"
+        " и «цели обучения» во всех материалах обновятся сами; остальное — критерии,"
+        " цели урока, задания — ты не меняешь, а предлагаешь учителю переписать.",
+        {
+            "objective_ids": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "minItems": 1,
+                "description": "Полный новый набор целей в порядке учителя.",
+            }
+        },
+        ["objective_ids"],
+    )
+)
+# Описания инструментов поиска — те же, что у сборки заказа: часть кэшируемого начала запроса
+SCHEMAS.extend(s for s in order_tools.SCHEMAS if s["function"]["name"] in SEARCH_TOOLS)
+
 
 @dataclass
 class EditCtx:
@@ -164,22 +195,30 @@ class EditCtx:
     kits: LessonKitRepo
     user: User
     kit_id: int | None
+    # Смена целей — тем же сценарием, что и ручка экрана
+    kits_svc: LessonKitsService
+    # Поиск целей — контекст инструментов сборки: справочник, язык урока
+    search: order_tools.OrderCtx
 
 
 class EditTools:
-    """Шесть инструментов правки в том виде, в каком их ждёт общий цикл
+    """Инструменты правки и поиска целей в том виде, в каком их ждёт общий цикл
     (`ai_loop.Toolbox`)."""
 
     def schemas(self) -> list[dict]:
         return SCHEMAS
 
     def call(self, name: str, args: dict, ctx: EditCtx) -> dict:
+        if name in SEARCH_TOOLS:
+            return order_tools.OrderTools().call(name, args, ctx.search)
         handler = _HANDLERS.get(name)
-        if handler is None:
-            names = ", ".join(_HANDLERS)
+        if handler is None and name != SET_OBJECTIVES:
+            names = ", ".join([*_HANDLERS, SET_OBJECTIVES, *SEARCH_TOOLS])
             return _refusal("unknown_tool", f"Инструмента {name} нет. Доступны: {names}.")
         if ctx.kit_id is None:
             return _refusal("no_kit", "У этого чата нет комплекта — править нечего")
+        if name == SET_OBJECTIVES:
+            return _set_objectives(ctx, args)
         material = _material(ctx, args.get("kind"))
         if isinstance(material, dict):
             return material
@@ -277,6 +316,33 @@ def _delete(ctx: EditCtx, material: LessonMaterial, args: dict) -> dict:
     return _changed(ctx, material, "item_deleted", out, index=index)
 
 
+def _set_objectives(ctx: EditCtx, args: dict) -> dict:
+    raw = args.get("objective_ids")
+    ids = (
+        [i for i in raw if isinstance(i, int) and not isinstance(i, bool)]
+        if isinstance(raw, list)
+        else []
+    )
+    if not ids or len(ids) != len(raw):
+        return _refusal("bad_arguments", "Нужен список номеров целей (id), хотя бы один")
+    # Ошибки набора (смешанный, не найден, не опубликован) — `AppError`: цикл
+    # покажет их модели отказом, и она объяснит учителю
+    kit = ctx.kits_svc.set_objectives(ctx.user, ctx.kit_id, ids)
+    return {
+        "ok": True,
+        "objectives": kit["objectives"],
+        "hint": (
+            "Блоки «раздел» и «цели обучения» в материалах обновлены. Предложи учителю"
+            " переписать зависимые блоки (цели урока, критерии оценивания, задания про"
+            " убранную или новую цель) и перепиши по его согласию через rewrite_block."
+        ),
+        "event": {
+            "type": "objectives_changed",
+            "objectives": [{"id": o["id"], "code": o["code"]} for o in kit["objectives"]],
+        },
+    }
+
+
 _HANDLERS = {
     GET_MATERIAL: _get_material,
     GET_BLOCK: _get_block,
@@ -312,6 +378,8 @@ def _changed(
 
 def event_text(event: dict) -> str:
     """Подпись события словами — запасная, для экрана без своей вёрстки."""
+    if event["type"] == "objectives_changed":
+        return "Цели урока изменены: " + ", ".join(o["code"] for o in event["objectives"])
     title = KIND_TITLES_RU[event["kind"]]
     if event["action"] == "rewritten":
         return f"{title}: переписан блок «{event['block']}»"
@@ -346,23 +414,23 @@ def _outline(content: Any, *, shown: bool) -> dict:
     if not shown:
         return {"type": "server"}
     if isinstance(content, list):
-        return {"type": "list", "count": len(content), "items": [_preview(i) for i in content]}
+        return {"type": "list", "count": len(content), "items": [preview(i) for i in content]}
     if isinstance(content, dict):
         return {"type": "object", "keys": list(content)}
-    return {"type": "text", "preview": _preview(content)}
+    return {"type": "text", "preview": preview(content)}
 
 
-def _preview(value: Any) -> str:
+def preview(value: Any) -> str:
     if isinstance(value, dict):
         for key in ("title", "teacher", "text", "name"):
             if isinstance(value.get(key), str):
-                return _clip(value[key])
+                return clip(value[key])
         first = next((v for v in value.values() if isinstance(v, str)), "")
-        return _clip(first)
-    return _clip(value if isinstance(value, str) else str(value))
+        return clip(first)
+    return clip(value if isinstance(value, str) else str(value))
 
 
-def _clip(text: str) -> str:
+def clip(text: str) -> str:
     text = strip_codes_deep(" ".join(text.split()))
     return text if len(text) <= PREVIEW_MAX else text[: PREVIEW_MAX - 1] + "…"
 

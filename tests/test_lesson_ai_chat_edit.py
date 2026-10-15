@@ -152,6 +152,8 @@ def test_chat_keeps_going_after_confirm(client, sms, ai, scene):
         edit_tools.ADD,
         edit_tools.REPLACE,
         edit_tools.DELETE,
+        edit_tools.SET_OBJECTIVES,
+        *edit_tools.SEARCH_TOOLS,
     ]
     # Изменчивое — в служебном сообщении, а не в системном промпте
     state = next(m.content for m in call["messages"] if m.role == "system")
