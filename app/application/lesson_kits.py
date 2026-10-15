@@ -15,11 +15,12 @@
 без задания в очереди и без вызова модели.
 """
 
-from app.adapters.db.lesson_ai_repos import LessonKitRepo, objective_sections
+from app.adapters.db.lesson_ai_repos import LessonKitRepo, objective_sections, record_kit_event
 from app.adapters.db.lesson_bank_repo import LessonBankRepo
 from app.adapters.db.models import LessonKit, LessonMaterialBank, User
 from app.application.ratelimit import SlidingWindowLimiter
 from app.domain.errors import (
+    ConflictError,
     FieldError,
     NotFoundError,
     ObjectivesMixedError,
@@ -81,13 +82,7 @@ class LessonKitsService:
         objective, program, _subject = cards[0]
         # Лимит — после всех проверок заказа: отбитый заказ не съедает
         # комплект из суточных
-        wait = self.limiter.hit(str(user.id))
-        if wait:
-            raise RateLimitedError(
-                f"За сутки можно заказать не больше {self.limiter.limit} комплектов"
-                " — следующий станет доступен позже",
-                retry_after_sec=wait,
-            )
+        self._spend_kit(user)
         kit = self.kits.create_kit(
             user_id=user.id,
             objective_ids=objective_ids,
@@ -121,6 +116,45 @@ class LessonKitsService:
         # из банка целиком, заданий нет — без пересчёта он остался бы
         # «собирается» навсегда
         kit.status = kit_status(material.status for material in self.kits.materials(kit.id))
+        return self._out(kit)
+
+    def _spend_kit(self, user: User, *, regeneration: bool = False) -> None:
+        """Один комплект из суточного лимита. Единственное место, где он тратится:
+        и заказ, и пересборка. Пересборка засчитывается как один комплект, сколько
+        бы видов ни пересобиралось (решение владельца по умолчанию, 16.10.2026)."""
+        wait = self.limiter.hit(str(user.id))
+        if wait:
+            what = "заказать или пересобрать" if regeneration else "заказать"
+            raise RateLimitedError(
+                f"За сутки можно {what} не больше {self.limiter.limit} комплектов"
+                " (пересборка считается как новый комплект) — следующий станет доступен позже",
+                retry_after_sec=wait,
+            )
+
+    # -- POST /lesson_ai/kits/{id}/regenerate ------------------------------
+
+    def regenerate(self, user: User, kit_id: int, kinds: list[str] | None = None) -> dict:
+        """Материалы комплекта собираются заново — с текущими целями и теми же
+        параметрами урока (уровни, тема, пожелания).
+
+        Пусто — все материалы. Ключи с ответами собираются из заданий, домашней
+        и проверочной, поэтому пересобираются вместе с любым из них. Пока комплект
+        собирается — 409: второй набор заданий встал бы поверх первого.
+        """
+        kit = self.kits.kit(kit_id)
+        if kit is None or kit.user_id != user.id:
+            raise NotFoundError("Комплект не найден")
+        present = [m.kind for m in self.kits.materials(kit.id)]
+        if kit.status == "generating":
+            raise ConflictError("Комплект ещё собирается — дождитесь, пока он будет готов")
+        wanted = set(kinds or present)
+        if not wanted <= set(present):
+            raise FieldError("kinds", "Такого материала в комплекте нет")
+        if "answer_key" in present and wanted & set(ANSWER_SOURCES):
+            wanted.add("answer_key")
+        self._spend_kit(user, regeneration=True)
+        self.kits.requeue(kit, [k for k in present if k in wanted])
+        record_kit_event(self.kits.db, kit)
         return self._out(kit)
 
     def _checked_cards(self, objective_ids: list[int]) -> list:

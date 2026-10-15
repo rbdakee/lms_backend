@@ -51,6 +51,12 @@ class LessonKitObjectivesIn(BaseModel):
     objective_ids: list[int] = Field(min_length=1)
 
 
+class LessonKitRegenerateIn(BaseModel):
+    """Пересборка материалов комплекта. Без `kinds` или пусто — все материалы."""
+
+    kinds: list[MaterialKind] | None = None
+
+
 class LessonObjectiveOut(BaseModel):
     """Цель обучения из справочника — дословно, как в приказе."""
 
@@ -264,6 +270,11 @@ class LessonChatEventOut(BaseModel):
     slide: int | None = None
 
 
+class LessonSuggestionOut(BaseModel):
+    label: str
+    text: str
+
+
 class LessonChatMessageOut(BaseModel):
     """Строка ленты. `role: "tool"` — вызов инструмента: поиск по программе
     (в `tool_result.items` найденные цели формы `LessonChatObjectiveOut`, отказ —
@@ -277,6 +288,8 @@ class LessonChatMessageOut(BaseModel):
     tool_args: dict[str, Any] | None
     tool_result: dict[str, Any] | None
     event: LessonChatEventOut | None
+    # Быстрые ответы под сообщением помощника: клик отправляет `text` репликой
+    suggestions: list[LessonSuggestionOut] | None = None
     created_at: datetime
 
 

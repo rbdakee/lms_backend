@@ -163,6 +163,7 @@ def test_chat_keeps_going_after_confirm(client, sms, ai, scene):
         edit_tools.REPLACE,
         edit_tools.DELETE,
         edit_tools.SET_OBJECTIVES,
+        edit_tools.REGENERATE,
         *edit_tools.SEARCH_TOOLS,
         edit_tools.FIND_IMAGE,
     ]
