@@ -42,6 +42,7 @@ from app.adapters.ai.openai_chat import AiUnavailableError
 from app.adapters.curriculum.parser import subject_title_kz
 from app.adapters.db.lesson_ai_repos import (
     LessonChatRepo,
+    LessonMaterialRepo,
     LessonUsageRepo,
     ObjectiveRow,
     record_kit_event,
@@ -217,7 +218,7 @@ class LessonChatService:
         if editing:
             # Заказ подтверждён и записан в комплект: разбирать в реплике нечего
             extract_in = extract_out = 0
-            state = edit_prompt.state_message(self._kit_summary(chat))
+            state = edit_prompt.state_message(self._edit_state(chat))
             loop = ToolLoop(
                 self.ai,
                 self.max_edit_tool_calls,
@@ -226,7 +227,12 @@ class LessonChatService:
             )
             system = edit_prompt.SYSTEM
             ctx: OrderCtx | EditCtx = EditCtx(
-                svc=self.materials, kits=self.kits.kits, user=user, kit_id=chat.kit_id
+                svc=self.materials,
+                kits=self.kits.kits,
+                user=user,
+                kit_id=chat.kit_id,
+                kits_svc=self.kits,
+                search=OrderCtx(repo=self.repo, user_id=user.id, chat_id=chat.id, lang=chat.lang),
             )
         else:
             extract_in, extract_out = self._extract(chat, text)
@@ -722,6 +728,34 @@ class LessonChatService:
             "materials": [
                 {"id": m.id, "kind": m.kind, "status": m.status}
                 for m in self.kits.kits.materials(kit.id)
+            ],
+        }
+
+    def _edit_state(self, chat: LessonAiChat) -> dict | None:
+        """Комплект для служебного сообщения режима правки: сводка плюс предмет,
+        цели по порядку и блоки каждого материала — модель должна знать,
+        что выбрано и что в материалах, а не переспрашивать учителя."""
+        summary = self._kit_summary(chat)
+        if summary is None:
+            return None
+        cards = self.kits.kits.kit_objectives([chat.kit_id])[chat.kit_id]
+        materials = LessonMaterialRepo(self.db)
+        rewriter = self.materials.rewriter
+        for item in summary["materials"]:
+            item["blocks"] = [
+                {
+                    "name": block.kind,
+                    "content": block.content,
+                    "server": rewriter.is_server_block(item["kind"], block.kind),
+                }
+                for block in (materials.blocks(item["id"]) if item["status"] == "ready" else [])
+            ]
+        return {
+            **summary,
+            "subject_code": cards[0][2].code,
+            "subject_title": cards[0][2].title,
+            "objectives": [
+                {"id": obj.id, "code": obj.code, "text": obj.text} for obj, _p, _s in cards
             ],
         }
 

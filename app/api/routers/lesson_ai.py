@@ -21,7 +21,11 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.adapters import lesson_files, lesson_preview
 from app.adapters.db.base import get_engine
-from app.adapters.db.lesson_ai_repos import LessonKitRepo, LessonMaterialRepo
+from app.adapters.db.lesson_ai_repos import (
+    LessonKitRepo,
+    LessonMaterialRepo,
+    record_objectives_event,
+)
 from app.adapters.db.models import User
 from app.adapters.docx.common import DocHeader
 from app.api import deps
@@ -42,6 +46,7 @@ from app.api.schemas_lesson_ai import (
     LessonChatsPageOut,
     LessonChatTurnOut,
     LessonKitIn,
+    LessonKitObjectivesIn,
     LessonKitOut,
     LessonKitsPageOut,
     LessonObjectivesOut,
@@ -108,6 +113,20 @@ def kit(
     svc: Annotated[LessonKitsService, Depends(deps.get_lesson_kits_service)],
 ) -> LessonKitOut:
     return LessonKitOut(**svc.kit(user, kit_id))
+
+
+@router.put("/kits/{kit_id}/objectives")
+def set_kit_objectives(
+    kit_id: int,
+    body: LessonKitObjectivesIn,
+    user: Annotated[User, Depends(deps.get_current_user)],
+    svc: Annotated[LessonKitsService, Depends(deps.get_lesson_kits_service)],
+) -> LessonKitOut:
+    """Кнопка «Изменить цели» на экране; тот же сценарий, что у инструмента чата."""
+    out = svc.set_objectives(user, kit_id, body.objective_ids)
+    # Событие в ленту чата комплекта — как у правки из чата: плашка и обновление экрана
+    record_objectives_event(svc.kits.db, kit_id, out["objectives"])
+    return LessonKitOut(**out)
 
 
 # -- Материал: файл, блоки, история (сессии L4 и L5) ----------------------

@@ -44,6 +44,13 @@ class LessonKitIn(BaseModel):
     difficulty_level: DifficultyLevel = "standard"
 
 
+class LessonKitObjectivesIn(BaseModel):
+    """Новый набор целей готового комплекта, в порядке учителя. Из той же
+    программы и класса, что у комплекта, иначе 422 `objectives_mixed`."""
+
+    objective_ids: list[int] = Field(min_length=1)
+
+
 class LessonObjectiveOut(BaseModel):
     """Цель обучения из справочника — дословно, как в приказе."""
 
@@ -228,15 +235,24 @@ class LessonChatOrderOut(BaseModel):
     ready: bool
 
 
+class LessonEventObjectiveOut(BaseModel):
+    id: int
+    code: str
+
+
 class LessonChatEventOut(BaseModel):
     """Событие ленты. `type: "kit_status"` — комплект собирается / готов /
     собран не целиком / не собрался (`status`, `failed_kinds` у неполного);
     `type: "block_changed"` — помощник изменил материал из чата: `action`,
     `material_id`, `kind`, `block`, `index` (пункт блока с единицы, `null` —
     блок переписан целиком) и `slide` (сквозной номер слайда презентации,
-    только у слайдов). По нему экран подсвечивает материал справа."""
+    только у слайдов). По нему экран подсвечивает материал справа.
+    `type: "objectives_changed"` — набор целей урока изменён (из чата или кнопкой
+    «Изменить цели»): `objectives` — новый набор по порядку. Экран перечитывает
+    комплект: цели, шапка и серверные блоки материалов уже другие."""
 
-    type: Literal["kit_status", "block_changed"]
+    type: Literal["kit_status", "block_changed", "objectives_changed"]
+    objectives: list[LessonEventObjectiveOut] | None = None
     kit_id: int | None = None
     status: Literal["generating", "ready", "partial", "failed"] | None = None
     failed_kinds: list[MaterialKind] | None = None
