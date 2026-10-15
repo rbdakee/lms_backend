@@ -322,7 +322,9 @@ def test_objectives_language_is_set_by_the_registry_not_guessed():
 
 
 def test_list_subjects_tells_grades_and_goal_language(tools, english, goals):
-    items = {row["code"]: row for row in tools("list_subjects")["items"]}
+    result = tools("list_subjects")
+    assert "items" not in result
+    items = {row["code"]: row for row in result["subjects"]}
     assert items["english"]["grades"] == {"ru": [3]}
     assert items["english"]["objectives_language"] == {"ru": "en"}
     assert items["math"]["objectives_language"] == {"ru": "ru"}
@@ -405,3 +407,18 @@ def test_questions_about_the_product_are_not_off_topic_in_the_prompt():
     ]:
         assert phrase in text, phrase
     assert "заказ" not in text.replace("Слов «заказ» и «заявка» не произноси", "")
+
+
+def test_prompt_says_cards_are_the_goal_list_and_foreign_languages_skip_the_question():
+    from app.lesson_ai.prompts import order_chat
+
+    text = " ".join(order_chat.SYSTEM.split())
+    for phrase in [
+        "Карточки и есть список целей: в тексте цели не перечисляй",
+        "вызови show_objectives с `id` выбранных",
+        "Подходящих мало — скажи об этом честно",
+        "иностранные языки (английский, немецкий, французский)",
+        "`objectives_language` не ru и не kz",
+        "спрашивать «русский или казахский» не надо",
+    ]:
+        assert phrase in text, phrase
