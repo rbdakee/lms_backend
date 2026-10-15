@@ -724,16 +724,39 @@ class LessonChatRepo:
         ).all()
         return [tuple(row) for row in rows]
 
-    def grade_objectives(self, grade: int, lang: str) -> list[ObjectiveRow]:
+    def grade_objectives(
+        self, grade: int, lang: str, subject_code: str | None = None
+    ) -> list[ObjectiveRow]:
         """Все цели класса в одной редакции — в порядке приказа: учитель
         открывает список и выбирает сам (раздел 1). Порядок строк импорта
         и есть порядок документа."""
-        rows = self.db.execute(
-            self._objectives()
-            .where(LearningObjective.grade == grade, CurriculumProgram.lang == lang)
-            .order_by(CurriculumProgram.id, LearningObjective.id)
-        ).all()
+        query = self._objectives().where(
+            LearningObjective.grade == grade, CurriculumProgram.lang == lang
+        )
+        if subject_code is not None:
+            query = query.where(CurriculumSubject.code == subject_code)
+        rows = self.db.execute(query.order_by(CurriculumProgram.id, LearningObjective.id)).all()
         return [tuple(row) for row in rows]
+
+    def published_subjects(self) -> list[tuple[str, str, int, int, list[str]]]:
+        """Предметы, у которых есть опубликованная программа с целями, —
+        для чипов «выбрать самому»: пустой предмет в фильтре вёл бы в пустой
+        список. Классы — по самим целям, а не по шапке приказа."""
+        rows = self.db.execute(
+            select(
+                CurriculumSubject.code,
+                CurriculumSubject.title,
+                func.min(LearningObjective.grade),
+                func.max(LearningObjective.grade),
+                func.array_agg(func.distinct(CurriculumProgram.lang)),
+            )
+            .join(CurriculumProgram, CurriculumProgram.subject_id == CurriculumSubject.id)
+            .join(LearningObjective, LearningObjective.program_id == CurriculumProgram.id)
+            .where(CurriculumProgram.status == "published")
+            .group_by(CurriculumSubject.id)
+            .order_by(CurriculumSubject.order_index, CurriculumSubject.id)
+        ).all()
+        return [(code, title, lo, hi, sorted(langs)) for code, title, lo, hi, langs in rows]
 
     def subject_known(self, subject_code: str) -> bool:
         """Есть ли такой предмет в справочнике — чтобы опечатку модели в коде

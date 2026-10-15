@@ -302,6 +302,7 @@ def test_chats_require_login(client, scene):
         ("patch", "/lesson_ai/chats/1/order", {"topic": TOPIC}),
         ("post", "/lesson_ai/chats/1/confirm", {"kinds": ["lesson_plan"], **LEVELS}),
         ("get", "/lesson_ai/objectives?q=сложение", None),
+        ("get", "/lesson_ai/subjects", None),
     ]:
         resp = client.request(method, path, json=body)
         assert resp.status_code == 401, (path, resp.text)
@@ -1283,6 +1284,70 @@ def test_objectives_need_words_or_a_grade_and_language(client, sms, scene, param
 
     assert resp.status_code == 422, resp.text
     assert [row["field"] for row in resp.json()["error"]["details"]["fields"]] == ["q"]
+
+
+def test_objectives_filter_by_subject(client, sms, scene):
+    second_subject_with_same_code(scene)
+    login(client, sms)
+
+    # Код цели один в двух предметах: без фильтра приходят оба, с ним — один
+    both = client.get("/lesson_ai/objectives", params={"q": CODE}).json()["items"]
+    assert {row["subject_code"] for row in both} == {"math", "music"}
+    only = client.get(
+        "/lesson_ai/objectives", params={"q": CODE, "subject_code": "music"}
+    ).json()["items"]
+    assert {row["subject_code"] for row in only} == {"music"}
+    # Список класса без слов — тоже по предмету
+    grade = client.get(
+        "/lesson_ai/objectives", params={"grade": 2, "lang": "ru", "subject_code": "music"}
+    ).json()["items"]
+    assert grade and {row["subject_code"] for row in grade} == {"music"}
+
+
+def test_objectives_unknown_subject_is_refused(client, sms, scene):
+    login(client, sms)
+
+    resp = client.get("/lesson_ai/objectives", params={"q": QUERY, "subject_code": "astrology"})
+
+    assert resp.status_code == 422, resp.text
+    fields = resp.json()["error"]["details"]["fields"]
+    assert [row["field"] for row in fields] == ["subject_code"]
+
+
+def test_subjects_list_only_published(client, sms, scene):
+    # Предмет, у которого есть только загруженная программа, в чипах не нужен
+    draft = make_subject("music", "Музыка")
+    draft_program = make_program(draft.id, lang="ru", status="loaded")
+    draft_section = make_section(draft_program.id, "1", "Слушание")
+    make_objective(draft_program.id, draft_section.id, "1.1.1.1", text="слушать музыку")
+    login(client, sms)
+
+    resp = client.get("/lesson_ai/subjects")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "items": [
+            {
+                "code": "math",
+                "title_ru": "Математика",
+                "title_kz": "Математика",
+                "grade_from": 1,
+                "grade_to": 2,
+                "langs": ["kz", "ru"],
+            }
+        ]
+    }
+    set_program_status(draft_program.id, "published")
+    codes = [row["code"] for row in client.get("/lesson_ai/subjects").json()["items"]]
+    assert codes == ["math", "music"]
+
+
+def test_subjects_empty_without_published_programs(client, sms, scene):
+    set_program_status(scene.ru.id, "loaded")
+    set_program_status(scene.kz.id, "loaded")
+    login(client, sms)
+
+    assert client.get("/lesson_ai/subjects").json() == {"items": []}
 
 
 # -- 14. инструменты напрямую ---------------------------------------------------------

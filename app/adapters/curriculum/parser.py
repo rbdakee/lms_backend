@@ -193,6 +193,30 @@ _SUBJECTS: dict[str, SubjectSpec] = {
 
 SUBJECT_CODES: tuple[str, ...] = tuple(_SUBJECTS)
 
+# Скобка языка обучения по-казахски — как в шапках казахских приложений приказа:
+# без неё «Қазақ тілі» для двух вариантов программы выглядели бы одним предметом.
+_KZ_INSTRUCTION = {
+    "_INSTR_KZ": "оқыту қазақ тілінде",
+    "_INSTR_NOT_KZ": "оқыту қазақ тілінде емес",
+    "_INSTR_RU": "оқыту орыс тілінде",
+    "_INSTR_NOT_RU": "оқыту орыс тілінде емес",
+}
+
+
+def subject_title_kz(code: str, fallback: str) -> str:
+    """Казахское название предмета для учителя. В базе у предмета одно русское
+    название, казахское живёт только в реестре разбора. Кода нет в реестре —
+    отдаём `fallback`, а не пустую строку."""
+    spec = _SUBJECTS.get(code)
+    if spec is None:
+        return fallback
+    if spec.instruction is None:
+        return spec.name_kz
+    for name, value in _KZ_INSTRUCTION.items():
+        if spec.instruction is globals()[name]:
+            return f"{spec.name_kz} ({value})"
+    return spec.name_kz
+
 
 def _appendix_patterns(
     spec: SubjectSpec, lang: str

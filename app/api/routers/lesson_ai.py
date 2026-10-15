@@ -45,6 +45,7 @@ from app.api.schemas_lesson_ai import (
     LessonKitOut,
     LessonKitsPageOut,
     LessonObjectivesOut,
+    LessonSubjectsOut,
 )
 from app.application.lesson_ai_access import LessonAccessService
 from app.application.lesson_ai_chat import LessonChatService
@@ -358,7 +359,15 @@ def objectives(
     q: Annotated[str, Query(max_length=200)] = "",
     grade: Annotated[int | None, Query(ge=1, le=12)] = None,
     lang: Annotated[Literal["ru", "kz"] | None, Query()] = None,
+    subject_code: Annotated[str | None, Query(max_length=64)] = None,
 ) -> LessonObjectivesOut:
     # Учитель вошёл — этого достаточно: справочник государственный, а видно
     # в нём только опубликованное
-    return LessonObjectivesOut(**svc.objectives(q=q, grade=grade, lang=lang))
+    return LessonObjectivesOut(
+        **svc.objectives(q=q, grade=grade, lang=lang, subject_code=subject_code)
+    )
+
+
+@router.get("/subjects")
+def subjects(user: CurrentUser, svc: Chats) -> LessonSubjectsOut:
+    return LessonSubjectsOut(**svc.subjects())
