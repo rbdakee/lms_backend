@@ -412,6 +412,7 @@ class LessonChatService:
             AiMessage(role="user", content=text),
         ]
         result: LoopResult | None = None
+        turn_events: list[dict] = []
         try:
             for event in loop.run_stream(system=system, history=messages, ctx=ctx):
                 if event.result is not None:
@@ -432,6 +433,7 @@ class LessonChatService:
                     }
                     changed = _step_event(event.step.result)
                     if changed is not None:
+                        turn_events.append(changed)
                         # Материал справа можно подсветить, не дожидаясь конца хода
                         yield {"event": "material_changed", "data": changed}
                 elif event.delta:
@@ -452,6 +454,14 @@ class LessonChatService:
             chat.id,
             role="assistant",
             content=result.text,
+            suggestions=edit_prompt.suggestions(
+                turn_events,
+                [step.name for step in result.steps],
+                stopped_at_cap=result.stopped_at_cap,
+                text=f"{text} {result.text}",
+            )
+            if editing
+            else None,
             # Расход хода целиком — с разбором заказа: он тоже стоит денег
             tokens_in=result.tokens_in + extract_in,
             tokens_out=result.tokens_out + extract_out,
@@ -1046,5 +1056,6 @@ def _message_out(row: LessonAiChatMessage) -> dict:
         "tool_args": row.tool_args,
         "tool_result": row.tool_result,
         "event": row.event,
+        "suggestions": row.suggestions,
         "created_at": row.created_at,
     }

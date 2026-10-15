@@ -144,7 +144,11 @@ def test_text_from_model_is_escaped():
     for kind, fmt, content in (("homework", "docx", homework), ("presentation", "pptx", slides)):
         html = lesson_preview.render(fmt, rendered(kind, content), "ru")
 
-        assert page_tags(html).isdisjoint({"script", "img"}), kind
+        assert "script" not in page_tags(html), kind
+        # Картинки презентации — свои, data:-адресом; чужая разметка тегом не становится
+        assert all(
+            'src="data:' in tag and "onerror" not in tag for tag in re.findall(r"<img[^>]*>", html)
+        )
         assert evil in page_text(html), kind
 
 

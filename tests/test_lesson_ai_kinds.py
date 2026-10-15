@@ -88,6 +88,9 @@ def rejected(kind: str, data) -> JobError:
     return exc.value
 
 
+OPTIONAL_TEXT = {"left_title", "right_title", "fact", "answer", "image", "visual"}
+
+
 def string_paths(value, path=()):
     """Пути ко всем строкам ответа на любой глубине — туда модель может
     вписать код или оставить пусто."""
@@ -281,6 +284,9 @@ def test_objective_code_in_any_string_is_rejected(kind):
     assert paths
 
     for path in paths:
+        # Ключ картинки с кодом — не каталожный: он отбрасывается, слайд без картинки
+        if path[-1] == "image":
+            continue
         data = put(sample(kind), path, f"{get(SAMPLES[kind], path)} (цель {CODE})")
         err = rejected(kind, data)
         assert (err.code, err.retryable) == ("model_output_invalid", True), path
@@ -292,6 +298,9 @@ def test_empty_string_in_any_field_is_rejected(kind):
     блок учителю пришлось бы дописывать самому. Слаг перечисления пустым
     тоже не бывает."""
     for path in string_paths(SAMPLES[kind]):
+        # Поля слайда, чужие его типу, пусты по схеме: пусто там — норма
+        if path[-1] in OPTIONAL_TEXT:
+            continue
         for empty in ("", "   "):
             err = rejected(kind, put(sample(kind), path, empty))
             assert (err.code, err.retryable) == ("model_output_invalid", True), path

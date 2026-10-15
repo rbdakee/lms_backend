@@ -149,6 +149,27 @@ class LessonKitRepo:
         self.db.add(LessonAiJob(kit_id=kit_id, kind=kind))
         self.db.flush()
 
+    def requeue(self, kit: LessonKit, kinds: list[str]) -> None:
+        """Материалы заново в очередь, с текущими целями и параметрами урока.
+
+        Старое содержимое остаётся в блоках и в их истории: каждое состояние
+        блока уже лежит версией, а новая генерация допишет свои поверх. Связь
+        с банком снята, комплект личный. Задание на материал заводится новое:
+        прежнее закрыто, и его счёт попыток не трогаем.
+        """
+        wanted = set(kinds)
+        for material in self.materials(kit.id):
+            if material.kind not in wanted:
+                continue
+            material.bank_id = None
+            material.status = "queued"
+            material.updated_at = func.now()
+            self.db.add(LessonAiJob(kit_id=kit.id, kind=material.kind))
+        kit.personal = True
+        kit.status = "generating"
+        kit.updated_at = func.now()
+        self.db.flush()
+
     def kit(self, kit_id: int) -> LessonKit | None:
         return self.db.get(LessonKit, kit_id)
 

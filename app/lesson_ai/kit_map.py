@@ -55,6 +55,7 @@ SHAPES = {list: "список", dict: "объект", str: "текст", int: "�
 def kinds_catalog() -> str:
     """Описание семи видов для системного промпта — из схем видов."""
     lines: list[str] = []
+    described: set[type[BaseModel]] = set()
     for kind in MATERIAL_KINDS:
         head = f"- {kind} ({KIND_TITLES_RU[kind]}) — {PURPOSE[kind]}."
         spec = next((s for s in SPECS if s.kind == kind), None)
@@ -62,14 +63,36 @@ def kinds_catalog() -> str:
             lines.append(f"{head} Ключи {ANSWER_KEY_NOTE}.")
             continue
         lines.append(head)
-        lines.append(
-            "  Блоки сервера (не правятся): " + ", ".join(spec.server_blocks) + "."
-        )
+        lines.append("  Блоки сервера (не правятся): " + ", ".join(spec.server_blocks) + ".")
         for name, field in spec.draft.model_fields.items():
             shape = _shape(field.annotation)
             how = "add_item/replace_item/delete_item" if shape == "список" else "rewrite_block"
             lines.append(f"  · {name} — {shape}; {_first_sentence(field.description)} [{how}]")
+            item = _item_model(field.annotation)
+            if item is not None and item not in described:
+                described.add(item)
+                lines.extend(_item_fields(name, item))
     return "\n".join(lines)
+
+
+def _item_model(annotation: Any) -> type[BaseModel] | None:
+    """Модель пункта списка, если пункт — объект с полями (слайд)."""
+    if get_origin(annotation) is list:
+        (inner,) = get_args(annotation)
+        if isinstance(inner, type) and issubclass(inner, BaseModel):
+            return inner
+    return None
+
+
+def _item_fields(block: str, model: type[BaseModel]) -> list[str]:
+    """Поля пункта — полными описаниями из схемы: по ним помощник знает, какое
+    поле когда заполнять. Первой фразы тут мало: у типа слайда в описании перечислены
+    все типы. Одна модель описывается один раз, даже если она в трёх блоках."""
+    lines = [f"    Пункт блока {block} (и других блоков той же формы) — объект с полями:"]
+    for name, field in model.model_fields.items():
+        text = " ".join((field.description or "").split())
+        lines.append(f"    - {name}: {text}")
+    return lines
 
 
 def _shape(annotation: Any) -> str:
@@ -134,8 +157,10 @@ def _outline(materials: list[dict], shown: int) -> list[str]:
 
 def _block_line(name: str, content: Any, first_slide: int | None, limit: int) -> str:
     if isinstance(content, list):
-        shown = [_item(i, content[i]) if first_slide is None else _slide(first_slide, i, content[i])
-                 for i in range(min(len(content), limit))]
+        shown = [
+            _item(i, content[i]) if first_slide is None else _slide(first_slide, i, content[i])
+            for i in range(min(len(content), limit))
+        ]
         rest = f"; …ещё {len(content) - limit}" if len(content) > limit else ""
         return f"{name}: список, {len(content)}: " + "; ".join(shown) + rest
     if isinstance(content, dict):
@@ -157,7 +182,16 @@ def _item(index: int, value: Any) -> str:
 
 
 def _slide(first: int, index: int, value: Any) -> str:
-    return f"слайд {first + index} «{_short(preview(value))}»"
+    """Слайд в оглавлении: номер, тип, заголовок, ключ картинки — «слайд 5
+    [question] «Where is my bag?» img:bag». Слайд без типа сохранён до появления
+    типов — он image_text, тип не показывается."""
+    kind = ""
+    image = ""
+    if isinstance(value, dict):
+        kind = f" [{value['layout']}]" if value.get("layout") else ""
+        if value.get("image"):
+            image = f" img:{value['image']}"
+    return f"слайд {first + index}{kind} «{_short(preview(value))}»{image}"
 
 
 def _short(text: str) -> str:

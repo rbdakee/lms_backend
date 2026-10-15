@@ -964,6 +964,9 @@ class LessonKit(Base):
     # Сводка по материалам, а не отдельное состояние: пишется только
     # пересчётом после каждого закрытого задания (`kit_status` в домене).
     status: Mapped[str] = mapped_column(Text, default="generating", server_default="generating")
+    # Комплект пересобран под цели учителя: генерация личная, с его темой и
+    # планом, и в банк не ложится (даже без пожеланий)
+    personal: Mapped[bool] = mapped_column(default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
@@ -1269,6 +1272,9 @@ class LessonAiChatMessage(Base):
     # блок изменён из чата). Экран подсвечивает материал справа по этому
     # объекту, а `content` — запасная подпись словами.
     event: Mapped[dict | None] = mapped_column(JSONB)
+    # Только у ответа помощника: быстрые ответы-кнопки под сообщением,
+    # [{label, text}]; клик отправляет `text` как реплику учителя
+    suggestions: Mapped[list[dict] | None] = mapped_column(JSONB)
     # Связь «просьба вызвать — результат»: хвост истории уходит модели как есть
     tool_call_id: Mapped[str | None] = mapped_column(Text)
     # Расход хода — на ответе помощника; учёт по учителю — сессия L7

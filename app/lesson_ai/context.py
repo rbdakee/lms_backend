@@ -118,7 +118,8 @@ def prepare(
     sections = [objective_sections(db, card[0]) for card in cards]
     section = "; ".join(dict.fromkeys(title for title, _ in sections))
     subsection = "; ".join(dict.fromkeys(sub for _, sub in sections if sub))
-    impersonal = bank and bankable(kit.notes)
+    # Пересобранный комплект — личный: с темой учителя и его планом, мимо банка
+    impersonal = bank and bankable(kit.notes) and not kit.personal
     if impersonal:
         slot, plan = _bank_slot(db, kit, objective_ids, with_plan=with_plan)
     else:

@@ -56,6 +56,7 @@ from app.api.schemas_lesson_ai import (
     LessonKitIn,
     LessonKitObjectivesIn,
     LessonKitOut,
+    LessonKitRegenerateIn,
     LessonKitsPageOut,
     LessonObjectivesOut,
     LessonSubjectsOut,
@@ -137,6 +138,18 @@ def set_kit_objectives(
     return LessonKitOut(**out)
 
 
+@router.post("/kits/{kit_id}/regenerate")
+def regenerate_kit(
+    kit_id: int,
+    body: LessonKitRegenerateIn,
+    user: Annotated[User, Depends(deps.get_current_user)],
+    svc: Annotated[LessonKitsService, Depends(deps.get_lesson_kits_service)],
+) -> LessonKitOut:
+    """Кнопка «Пересобрать урок»; тот же сценарий, что у инструмента чата.
+    Комплект уже собирается — 409, суточный лимит исчерпан — 429."""
+    return LessonKitOut(**svc.regenerate(user, kit_id, body.kinds))
+
+
 # -- Материал: файл, блоки, история (сессии L4 и L5) ----------------------
 
 Materials = Annotated[LessonMaterialsService, Depends(deps.get_lesson_materials_service)]
@@ -185,8 +198,11 @@ def material_preview(material_id: int, user: CurrentUser, svc: Materials) -> HTM
         lesson_preview.render(file.format, data, file.lang),
         headers={
             # Скриптов в странице нет и не будет; открытая напрямую, а не во
-            # фрейме экрана, она всё равно не выполнит ничего, кроме стилей
-            "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
+            # фрейме экрана, она всё равно не выполнит ничего, кроме стилей.
+            # Картинки презентации — data:, внешних адресов нет
+            "content-security-policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+            ),
             "cache-control": "no-store",
         },
     )
