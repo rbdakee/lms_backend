@@ -195,6 +195,9 @@ class FakeStorage:
     def read(self, key):
         return iter([self.objects[key]])
 
+    def delete(self, key):
+        self.objects.pop(key, None)
+
 
 @pytest.fixture
 def storage():
@@ -263,6 +266,19 @@ class FakeAi:
         self.replies: list[AiReply] = []
         # Каждый запрос целиком: system, переписка и список инструментов
         self.calls: list[dict] = []
+        # Запросы с файлом (`describe_media`): разбора вложений «Жоспара»
+        self.media_calls: list[dict] = []
+        self.media_replies: list = []
+
+    def describes(self, text: str = "На фото страница учебника", **kw) -> "FakeAi":
+        """Ответ разбора вложения: выжимка файла."""
+        self.media_replies.append(AiReply(text=text, **kw))
+        return self
+
+    def media_fails(self, exc: Exception) -> "FakeAi":
+        """Разбор вложения упал: сеть, неподдерживаемый файл, битый документ."""
+        self.media_replies.append(exc)
+        return self
 
     def says(self, text: str = "Готово", **kw) -> "FakeAi":
         self.replies.append(AiReply(text=text, **kw))
@@ -299,6 +315,19 @@ class FakeAi:
             {"system": system, "messages": list(messages), "name": name, "schema": schema}
         )
         reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    def describe_media(self, *, system, media, instruction) -> AiReply:
+        """Мультимодальный запрос: файл виден целиком — тест проверяет,
+        что модель позвали один раз и с тем файлом."""
+        self.media_calls.append(
+            {"system": system, "media": media, "instruction": instruction}
+        )
+        if not self.media_replies:
+            return AiReply(text="Выжимка файла", tokens_in=50, tokens_out=20)
+        reply = self.media_replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
         return reply

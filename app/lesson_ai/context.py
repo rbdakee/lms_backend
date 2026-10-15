@@ -17,6 +17,10 @@
 её результат ложится в банк готовых материалов и выдаётся другим учителям
 (раздел 7). Такая модель не видит ни темы, ни числа детей — обезличенность
 держится тем, что личного в брифе нет, а не чисткой готового текста.
+
+Вложения учителя в чат (`teacher_materials`) делают комплект личным всегда:
+урок, собранный по файлам учителя, в банк не идёт (решение владельца
+16.10.2026). В бриф идёт не файл, а выжимка — тем же блоком, что и в чат.
 """
 
 import json
@@ -24,17 +28,19 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session as DbSession
 
-from app.adapters.db.lesson_ai_repos import LessonKitRepo, objective_sections
+from app.adapters.db.lesson_ai_repos import LessonAttachmentRepo, LessonKitRepo, objective_sections
 from app.adapters.db.lesson_bank_repo import LessonBankRepo, document
 from app.adapters.db.models import LessonKit
 from app.application.lesson_ai_queue import BankSlot
 from app.domain.lesson_ai import (
+    ATTACH_BUDGET,
     DEFAULT_DIFFICULTY,
     DEFAULT_ENGAGEMENT,
     JobError,
     bankable,
     strip_objective_codes,
 )
+from app.lesson_ai.prompts.attachment import materials_block
 from app.lesson_ai.schemas.lesson_plan import SERVER_BLOCKS as PLAN_SERVER_BLOCKS
 
 LANG_NAMES = {"ru": "русский", "kz": "казахский"}
@@ -82,6 +88,9 @@ class LessonBrief:
     # Код предмета из справочника (`math`): по нему каталог игр отбирает
     # механики. Модели не показывается — ей хватает названия
     subject_code: str = ""
+    # Выжимки файлов, приложенных учителем к чату: пожеланиями они не
+    # являются, но идут тем же путём — как сказанное учителем о его уроке
+    teacher_materials: str = ""
 
 
 @dataclass(frozen=True)
@@ -118,8 +127,12 @@ def prepare(
     sections = [objective_sections(db, card[0]) for card in cards]
     section = "; ".join(dict.fromkeys(title for title, _ in sections))
     subsection = "; ".join(dict.fromkeys(sub for _, sub in sections if sub))
+    # Урок по файлам учителя — личный всегда: в банк он не идёт ни готовым,
+    # ни новым (решение владельца 16.10.2026). Читаем вложения до выбора:
+    # они же идут в бриф
+    attachments = LessonAttachmentRepo(db).ready_for_kit(kit.id)
     # Пересобранный комплект — личный: с темой учителя и его планом, мимо банка
-    impersonal = bank and bankable(kit.notes) and not kit.personal
+    impersonal = bank and bankable(kit.notes) and not kit.personal and not attachments
     if impersonal:
         slot, plan = _bank_slot(db, kit, objective_ids, with_plan=with_plan)
     else:
@@ -142,6 +155,7 @@ def prepare(
         difficulty_level=kit.difficulty_level,
         plan=plan,
         subject_code=subject.code,
+        teacher_materials=_teacher_materials(attachments),
     )
     return Prepared(
         brief=brief,
@@ -152,6 +166,20 @@ def prepare(
         ],
         bank=slot,
     )
+
+
+def _teacher_materials(attachments) -> str:
+    """Выжимки вложений комплекта — тем же блоком, что читает чат: текст
+    собирает `materials_block`, с равномерной урезкой под общий бюджет.
+    Бюджет генерации тот же, что у хода чата: контекст вида и так несёт план
+    урока целиком, больше отдавать выжимкам незачем."""
+    if not attachments:
+        return ""
+    rows = [
+        {"kind": row.kind, "pages": row.pages, "summary": row.summary or ""}
+        for row in attachments
+    ]
+    return materials_block(rows, budget=ATTACH_BUDGET)
 
 
 def _bank_slot(
@@ -259,4 +287,8 @@ def describe(brief: LessonBrief, *, levels: bool = True) -> str:
             " этапы, задания и ресурсы (JSON):\n"
             + json.dumps(brief.plan, ensure_ascii=False, indent=1)
         )
+    # Материалы учителя — после плана: они источник содержания («опирайся»),
+    # план — источник структуры, и модель читает их в этом порядке
+    if brief.teacher_materials:
+        lines.append("\n" + brief.teacher_materials)
     return "\n".join(lines)
