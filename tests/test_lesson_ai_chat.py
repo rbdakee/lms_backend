@@ -582,6 +582,22 @@ def test_objective_shown_in_another_chat_does_not_count(client, sms, ai, scene):
     assert order["objective"] is None
 
 
+def test_named_subject_that_differs_from_shown_objective_blocks_it(client, sms, ai, scene):
+    """Учитель назвал музыку, а показанная и подтверждённая строка — математика:
+    заказ цель не принимает, код предмета сверяет сервер, а не промпт."""
+    login(client, sms)
+    chat = new_chat(client)
+    say(client, ai, chat["id"], FIRST_REPLY, then=shows())
+
+    extract = {"objective_id": scene.objective.id, "subject_code": "music"}
+    order = done(say(client, ai, chat["id"], "да, музыка", extract=extract))["chat"]["order"]
+    assert order["objective"] is None
+
+    extract = {"objective_id": scene.objective.id, "subject_code": "math"}
+    order = done(say(client, ai, chat["id"], "да, математика", extract=extract))["chat"]["order"]
+    assert order["objective"] == item(scene.objective)
+
+
 def test_loaded_program_is_invisible(client, sms, ai, scene):
     """Загруженная программа ещё не вычитана: её цели не находит ни модель,
     ни «выбрать самому», а кнопка отвечает 404, как на несуществующую."""
@@ -880,7 +896,7 @@ def test_extract_sees_the_order_shown_goals_and_the_reply(client, sms, ai, scene
     assert call["schema"] == prompt.EXTRACT_SCHEMA
     assert call["name"] == "lesson_order"
     [message] = call["messages"]
-    assert f"{scene.objective.id} — {CODE} — {OBJECTIVE_TEXT}" in message.content
+    assert f"{scene.objective.id} — {CODE} — math — {OBJECTIVE_TEXT}" in message.content
     assert message.content.rstrip().endswith("Учитель: да, первая")
 
 
@@ -1361,6 +1377,57 @@ def test_get_objective(tools, scene):
     for args in ({"code": "2.1.2"}, {"code": "16.09.2022"}, {"code": 2126}, {}):
         assert tools("get_objective", **args)["error"]["code"] == "bad_arguments", args
     assert tools("get_objective", code=CODE, lang="en")["error"]["code"] == "bad_arguments"
+
+
+def second_subject_with_same_code(scene) -> None:
+    """Код 2.1.2.6 есть ещё и в музыке — как в справочнике, где коды целей
+    не уникальны между предметами."""
+    music = make_subject("music", "Музыка")
+    program = make_program(music.id, lang="ru", status="published")
+    section = make_section(program.id, "1", "Слушание")
+    make_objective(program.id, section.id, CODE, text="слушать и различать звуки по высоте")
+
+
+def test_get_objective_ambiguous_code_asks_for_subject(tools, scene):
+    second_subject_with_same_code(scene)
+
+    result = tools("get_objective", code=CODE)
+
+    assert "items" not in result
+    assert result["ambiguous"] is True
+    assert result["subjects"] == [
+        {"code": "math", "title": "Математика"},
+        {"code": "music", "title": "Музыка"},
+    ]
+
+
+def test_get_objective_with_subject_returns_one_goal(tools, scene):
+    second_subject_with_same_code(scene)
+
+    result = tools("get_objective", code=CODE, subject_code="math", lang="ru")
+    assert result["items"] == [item(scene.objective)]
+    both = tools("get_objective", code=CODE, subject_code="math")
+    assert {row["subject_code"] for row in both["items"]} == {"math"}
+    music = tools("get_objective", code=CODE, subject_code="music")
+    assert [row["subject_code"] for row in music["items"]] == ["music"]
+
+
+def test_find_objectives_filters_by_subject(tools, scene):
+    second_subject_with_same_code(scene)
+
+    result = tools("find_objectives", query=CODE, subject_code="music")
+
+    assert [row["subject_code"] for row in result["items"]] == ["music"]
+
+
+def test_unknown_subject_is_refused(tools, scene):
+    for name, args in (("get_objective", {"code": CODE}), ("find_objectives", {"query": QUERY})):
+        result = tools(name, subject_code="astrology", **args)
+        assert result["error"]["code"] == "unknown_subject", name
+        assert "items" not in result
+    # Предмет есть, но такой цели в нём нет — это not_found, а не неизвестный предмет
+    make_subject("music", "Музыка")
+    assert tools("get_objective", code=CODE, subject_code="music")["error"]["code"] == "not_found"
 
 
 def test_unknown_tool_is_refused(tools, scene):

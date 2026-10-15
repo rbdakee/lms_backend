@@ -626,6 +626,7 @@ class LessonChatRepo:
         grade: int | None,
         lang: str | None,
         limit: int,
+        subject_code: str | None = None,
     ) -> list[ObjectiveRow]:
         """Цели, в тексте которых больше всего основ запроса, — сверху.
 
@@ -644,6 +645,8 @@ class LessonChatRepo:
             query = query.where(LearningObjective.grade == grade)
         if lang is not None:
             query = query.where(CurriculumProgram.lang == lang)
+        if subject_code is not None:
+            query = query.where(CurriculumSubject.code == subject_code)
         rows = self.db.execute(
             query.order_by(
                 score.desc(), LearningObjective.grade, CurriculumProgram.lang, LearningObjective.id
@@ -662,10 +665,24 @@ class LessonChatRepo:
         ).all()
         return [tuple(row) for row in rows]
 
-    def objectives_by_code(self, code: str, lang: str | None) -> list[ObjectiveRow]:
+    def subject_known(self, subject_code: str) -> bool:
+        """Есть ли такой предмет в справочнике — чтобы опечатку модели в коде
+        предмета отличить от предмета, у которого просто нет такой цели."""
+        return (
+            self.db.scalar(
+                select(CurriculumSubject.id).where(CurriculumSubject.code == subject_code)
+            )
+            is not None
+        )
+
+    def objectives_by_code(
+        self, code: str, lang: str | None, subject_code: str | None = None
+    ) -> list[ObjectiveRow]:
         query = self._objectives().where(LearningObjective.code == code)
         if lang is not None:
             query = query.where(CurriculumProgram.lang == lang)
+        if subject_code is not None:
+            query = query.where(CurriculumSubject.code == subject_code)
         rows = self.db.execute(query.order_by(CurriculumProgram.lang, LearningObjective.id)).all()
         return [tuple(row) for row in rows]
 
