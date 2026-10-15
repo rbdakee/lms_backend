@@ -492,3 +492,20 @@ def test_failed_generation_is_not_banked(client, sms, scene, broken):
     assert len(ai.calls) == MAX_ATTEMPTS
     assert materials(kit_id)["lesson_plan"]["status"] == "failed"
     assert bank() == []
+
+
+def test_kit_from_the_bank_is_in_the_receivers_list(client, sms, scene):
+    """«Мои уроки»: комплект, собранный из банка, — комплект получателя,
+    а не донора; материалы в нём сразу готовы."""
+    donor = banked(client, sms, scene)
+    received = kit_of(client, sms, scene, phone=OTHER_PHONE, kinds=["lesson_plan", "tasks"])
+
+    rows = client.get("/lesson_ai/kits").json()
+
+    assert [row["id"] for row in rows["items"]] == [received["id"]]
+    assert donor not in [row["id"] for row in rows["items"]]
+    assert rows["items"][0]["status"] == "ready"
+    assert [(m["kind"], m["status"]) for m in rows["items"][0]["materials"]] == [
+        ("lesson_plan", "ready"),
+        ("tasks", "ready"),
+    ]

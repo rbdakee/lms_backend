@@ -162,6 +162,44 @@ class LessonKitsService:
             raise NotFoundError("Комплект не найден")
         return self._out(kit)
 
+    # -- GET /lesson_ai/kits -----------------------------------------------
+
+    def my_kits(self, user: User, *, q: str | None, offset: int, limit: int) -> dict:
+        """Свои комплекты, новые сверху, — карточки «Моих уроков».
+
+        Без `content`, `notes` и `class_size`: список не тянет документы,
+        страница собирается тремя запросами при любом размере.
+        """
+        rows, total = self.kits.user_kits(
+            user.id, q=(q or "").strip() or None, offset=offset, limit=limit
+        )
+        materials = self.kits.materials_of([kit.id for kit, _, _ in rows])
+        items = [
+            {
+                "id": kit.id,
+                "objective": {
+                    "id": objective.id,
+                    "code": objective.code,
+                    "text": objective.text,
+                    "marker": objective.marker,
+                },
+                "subject_code": subject.code,
+                "grade": kit.grade,
+                "lang": kit.lang,
+                "topic": kit.topic,
+                "engagement_level": kit.engagement_level,
+                "difficulty_level": kit.difficulty_level,
+                "status": kit.status,
+                "created_at": kit.created_at,
+                "updated_at": kit.updated_at,
+                "materials": [
+                    {"id": m.id, "kind": m.kind, "status": m.status} for m in materials[kit.id]
+                ],
+            }
+            for kit, objective, subject in rows
+        ]
+        return {"items": items, "total": total}
+
     def _out(self, kit: LessonKit) -> dict:
         objective, _program, subject = self.kits.objective_card(kit.objective_id)
         errors = self.kits.last_errors(kit.id)

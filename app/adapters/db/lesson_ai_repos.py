@@ -75,6 +75,52 @@ class LessonKitRepo:
         rows = self.db.scalars(select(LessonMaterial).where(LessonMaterial.kit_id == kit_id))
         return sorted(rows, key=lambda material: MATERIAL_KINDS.index(material.kind))
 
+    def user_kits(
+        self, user_id: int, *, q: str | None, offset: int, limit: int
+    ) -> tuple[list[tuple[LessonKit, LearningObjective, CurriculumSubject]], int]:
+        """Комплекты учителя для «Моих уроков» — новые сверху.
+
+        Комплект из банка — такая же строка `lesson_kit` с `user_id` получателя
+        (банк отдаёт материалы, а не комплекты), поэтому выбор по `user_id`
+        находит и его. Порядок и отбор идут по `ix_lesson_kit_user_id_id`.
+        `q` ищет по теме, коду и тексту цели без учёта регистра.
+        """
+        where = [LessonKit.user_id == user_id]
+        if q:
+            # Спецсимволы LIKE экранируются: «50%» ищется как есть
+            like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            where.append(
+                or_(
+                    LessonKit.topic.ilike(like, escape="\\"),
+                    LearningObjective.code.ilike(like, escape="\\"),
+                    LearningObjective.text.ilike(like, escape="\\"),
+                )
+            )
+        base = (
+            select(LessonKit, LearningObjective, CurriculumSubject)
+            .join(LearningObjective, LearningObjective.id == LessonKit.objective_id)
+            .join(CurriculumProgram, CurriculumProgram.id == LearningObjective.program_id)
+            .join(CurriculumSubject, CurriculumSubject.id == CurriculumProgram.subject_id)
+            .where(*where)
+        )
+        total = self.db.execute(
+            select(func.count()).select_from(base.with_only_columns(LessonKit.id).subquery())
+        ).scalar_one()
+        rows = self.db.execute(base.order_by(LessonKit.id.desc()).offset(offset).limit(limit)).all()
+        return [tuple(row) for row in rows], total
+
+    def materials_of(self, kit_ids: list[int]) -> dict[int, list[LessonMaterial]]:
+        """Материалы страницы комплектов одним запросом, в порядке видов из брифа."""
+        found: dict[int, list[LessonMaterial]] = {kit_id: [] for kit_id in kit_ids}
+        if kit_ids:
+            for material in self.db.scalars(
+                select(LessonMaterial).where(LessonMaterial.kit_id.in_(kit_ids))
+            ):
+                found[material.kit_id].append(material)
+        for rows in found.values():
+            rows.sort(key=lambda material: MATERIAL_KINDS.index(material.kind))
+        return found
+
     def ready_blocks(self, kit_id: int, kinds: tuple[str, ...]) -> list[tuple[str, list]]:
         return ready_blocks(self.db, kit_id, kinds)
 
