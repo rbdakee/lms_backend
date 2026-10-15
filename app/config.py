@@ -177,6 +177,30 @@ class Settings(BaseSettings):
     # параметр вовсе: организациям с Zero Data Retention `24h` недоступен,
     # и запрос с ним отобьётся целиком.
     openai_cache_retention: str = "24h"
+    # Провайдер у каждого продукта ИИ свой: владелец держит ассистента админки
+    # на GLM, а «Жоспар» учителей — на OpenAI (25.09.2026). `openai` — как
+    # решено в ASSISTANT_BRIEF (решение 9), и это умолчание обоих. `zai` — GLM
+    # через OpenAI-совместимый API Z.ai, включается только явной строкой.
+    # Ключи у провайдеров свои и друг друга не подменяют: включение — одна
+    # строка, откат — её возврат, ключ OpenAI при этом на месте.
+    assistant_ai_provider: str = "openai"
+    lesson_ai_provider: str = "openai"
+    zai_api_key: str = ""
+    # Общий API Z.ai. Адрес Coding Plan (`/api/coding/paas/v4`) сюда не годится:
+    # его квота — только для программ-помощников программиста, не для сервиса.
+    zai_base_url: str = "https://api.z.ai/api/paas/v4/"
+    # Модели без умолчания нарочно: выбор модели — решение владельца, а молча
+    # подставленная сервисом она тратила бы деньги не по договорённости.
+    # Таймаут у GLM общий с OpenAI — `OPENAI_TIMEOUT_SEC` и `LESSON_AI_*_TIMEOUT_SEC`.
+    zai_model: str = ""
+    # Модель «Жоспара» на GLM — своя по той же причине, что `lesson_ai_model`.
+    # Пусто — та же, что у ассистента.
+    lesson_ai_zai_model: str = ""
+    # Размышление модели. У GLM 4.7 и 5.x оно включено по умолчанию, и его текст
+    # провайдер просит возвращать в следующем запросе вместе с результатами
+    # инструментов — цикл ассистента этого не делает. Поэтому выключено.
+    # Пусто — параметр не посылается, и решает модель.
+    zai_thinking: str = "disabled"
     # Выключатель отдельно от ключа: ключ есть, а ассистента на время
     # выключили — это правка одной строки, а не выдёргивание ключа.
     assistant_enabled: bool = True
@@ -189,8 +213,8 @@ class Settings(BaseSettings):
     # В GPT уходит хвост истории, а не весь чат (ASSISTANT_BRIEF, раздел 8).
     assistant_history_messages: int = 40
 
-    # «Жоспар» — помощник учителя (TEACHER_AI_BRIEF). Ключ и провайдер те же,
-    # что у ассистента (решение 10), всё остальное своё.
+    # «Жоспар» — помощник учителя (TEACHER_AI_BRIEF). Ключ тот же, что у
+    # ассистента (решение 10), если провайдер у них один; всё остальное своё.
     #
     # Выключен по умолчанию: включённый продукт — это воркеры генерации в процессе
     # API и расход по ключу. Каждая ручка продукта с L7 проверяет ещё
@@ -234,13 +258,27 @@ class Settings(BaseSettings):
         """Есть ли ассистент вообще. Одно место на роутер, кнопку черновика
         и сборку списка чатов: пустой ключ и снятый выключатель значат
         для экрана одно и то же."""
-        return self.assistant_enabled and bool(self.openai_api_key)
+        return self.assistant_enabled and bool(self.ai_api_key(self.assistant_ai_provider))
 
     @property
     def lesson_ai_on(self) -> bool:
         """Есть ли «Жоспар» в этой установке — по той же логике, что у ассистента:
         пустой ключ и снятый выключатель значат одно и то же."""
-        return self.lesson_ai_enabled and bool(self.openai_api_key)
+        return self.lesson_ai_enabled and bool(self.ai_api_key(self.lesson_ai_provider))
+
+    def ai_api_key(self, provider: str) -> str:
+        """Ключ провайдера продукта. Ключ OpenAI при `zai` не считается:
+        иначе продукт «был бы включён», а ходил бы с чужим ключом."""
+        return self.zai_api_key if provider == "zai" else self.openai_api_key
+
+    @property
+    def lesson_model(self) -> str:
+        """Модель «Жоспара» у выбранного провайдера. Одно место на воркер,
+        запросы у экрана и учёт расхода: в строку расхода пишется ровно та
+        модель, что генерировала."""
+        if self.lesson_ai_provider == "zai":
+            return self.lesson_ai_zai_model or self.zai_model
+        return self.lesson_ai_model
 
     def verify_base(self, platform: str) -> str:
         """Адрес страницы проверки для площадки документа.
@@ -261,7 +299,11 @@ PROVIDERS = {
     "sms_provider": ("log", "whatsapp"),
     "telegram_provider": ("log", "bot"),
     "storage_provider": ("local", "s3"),
+    "assistant_ai_provider": ("openai", "zai"),
+    "lesson_ai_provider": ("openai", "zai"),
 }
+
+ZAI_THINKING_MODES = ("", "enabled", "disabled")
 
 # `telegram_updates` не провайдер — не выбирает адаптер, а выбирает, кто
 # первым заговорит с Telegram (сервис или Telegram с сервисом). Проверяется
@@ -327,6 +369,44 @@ def check_providers(cfg: Settings) -> None:
     check_admin_origins(cfg)
     check_platform_origins(cfg)
     check_platform_verify_urls(cfg)
+    check_zai(cfg)
+
+
+def check_zai(cfg: Settings) -> None:
+    """GLM проверяется при старте, только когда он выбран.
+
+    Пустой ключ — не отказ, а «ИИ нет», ровно как у OpenAI (ASSISTANT_BRIEF,
+    раздел 9), но с предупреждением: после переключения провайдера это почти
+    наверняка забытый ключ, а не решение. Ключ без модели — отказ: сервис
+    поднялся бы здоровым, а каждый ход ассистента и каждая генерация
+    отбивались бы провайдером.
+    """
+    if cfg.zai_thinking not in ZAI_THINKING_MODES:
+        raise RuntimeError(
+            f"ZAI_THINKING={cfg.zai_thinking!r} — такого режима нет."
+            " Допустимые значения: enabled, disabled или пусто"
+        )
+    # Модель у продуктов своя: «Жоспару» хватает LESSON_AI_ZAI_MODEL,
+    # и требовать от него ZAI_MODEL ассистента было бы лишним
+    on_zai = {
+        "ASSISTANT_AI_PROVIDER": ("ассистента", cfg.zai_model, "ZAI_MODEL"),
+        "LESSON_AI_PROVIDER": ("«Жоспара»", cfg.lesson_model, "LESSON_AI_ZAI_MODEL и ZAI_MODEL"),
+    }
+    for field, (product, model, model_env) in on_zai.items():
+        if getattr(cfg, field.lower()) != "zai":
+            continue
+        if not cfg.zai_api_key:
+            log.warning(
+                "%s=zai, но ZAI_API_KEY пуст — %s нет;"
+                " ключ OpenAI при этом провайдере не используется",
+                field,
+                product,
+            )
+            continue
+        if not model:
+            raise RuntimeError(
+                f"{field}=zai, но {model_env} пусты — модель выбирает владелец, умолчания у неё нет"
+            )
 
 
 def check_admin_origins(cfg: Settings) -> None:

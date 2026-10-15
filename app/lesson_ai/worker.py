@@ -14,7 +14,7 @@ import threading
 
 from sqlalchemy.orm import Session as DbSession
 
-from app.adapters.ai.openai_chat import OpenAiChat
+from app.adapters.ai.provider import ai_chat
 from app.adapters.db.base import get_engine
 from app.application.lesson_ai_queue import JobRunner
 from app.config import Settings
@@ -70,10 +70,12 @@ def start_workers(cfg: Settings) -> Workers:
     # Каталог игр читается сразу: кривая карточка — отказ старта с именем
     # файла, а не упавшая посреди ночи генерация игры
     log.info("Жоспар: механик в каталоге игр: %s", len(catalog()))
-    ai = OpenAiChat(cfg, model=cfg.lesson_ai_model, timeout_sec=cfg.lesson_ai_timeout_sec)
+    ai = ai_chat(
+        cfg, cfg.lesson_ai_provider, model=cfg.lesson_model, timeout_sec=cfg.lesson_ai_timeout_sec
+    )
     runner = JobRunner(
         lambda: DbSession(get_engine()),
-        generators(ai, cfg.lesson_ai_model),
+        generators(ai, cfg.lesson_model),
         lease_sec=lease_seconds(cfg),
     )
     workers = Workers(runner, cfg.lesson_ai_workers, cfg.lesson_ai_poll_sec)

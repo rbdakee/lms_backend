@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import Depends, Request, Response
 from sqlalchemy.orm import Session as DbSession
 
-from app.adapters.ai.openai_chat import OpenAiChat
+from app.adapters.ai.provider import ai_chat
 from app.adapters.db.base import get_db
 from app.adapters.db.lesson_ai_repos import LessonAccessRepo, LessonKitRepo, LessonMaterialRepo
 from app.adapters.db.models import Session, User
@@ -227,7 +227,8 @@ def require_assistant() -> None:
 def get_ai() -> AiPort:
     global _ai
     if _ai is None:
-        _ai = OpenAiChat(get_settings())
+        cfg = get_settings()
+        _ai = ai_chat(cfg, cfg.assistant_ai_provider)
     return _ai
 
 
@@ -800,8 +801,11 @@ def get_lesson_block_ai() -> AiPort:
     global _lesson_block_ai
     if _lesson_block_ai is None:
         cfg = get_settings()
-        _lesson_block_ai = OpenAiChat(
-            cfg, model=cfg.lesson_ai_model, timeout_sec=cfg.lesson_ai_block_timeout_sec
+        _lesson_block_ai = ai_chat(
+            cfg,
+            cfg.lesson_ai_provider,
+            model=cfg.lesson_model,
+            timeout_sec=cfg.lesson_ai_block_timeout_sec,
         )
     return _lesson_block_ai
 
@@ -829,7 +833,7 @@ def get_lesson_chat_service(
         limiter=limiter,
         max_tool_calls=cfg.lesson_ai_chat_max_tool_calls,
         history_messages=cfg.lesson_ai_chat_history_messages,
-        model=cfg.lesson_ai_model,
+        model=cfg.lesson_model,
     )
 
 
@@ -846,7 +850,7 @@ def get_lesson_materials_service(
         _block_rewriter,
         db=db,
         commit=db.commit,
-        model=get_settings().lesson_ai_model,
+        model=get_settings().lesson_model,
     )
 
 

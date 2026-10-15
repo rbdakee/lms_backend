@@ -274,7 +274,7 @@ def _turn(
             limiter=limiter,
             max_tool_calls=cfg.lesson_ai_chat_max_tool_calls,
             history_messages=cfg.lesson_ai_chat_history_messages,
-            model=cfg.lesson_ai_model,
+            model=cfg.lesson_model,
         )
         user = db.get(User, user_id)
         if user is None:

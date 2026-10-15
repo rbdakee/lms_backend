@@ -28,6 +28,10 @@ class AiUnavailableError(Exception):
 
 
 class OpenAiChat:
+    # Кто не ответил — в лог. Ключ туда не идёт, а имя провайдера нужно:
+    # тот же адаптер ходит и к GLM (`zai_chat.py`)
+    label = "OpenAI"
+
     def __init__(self, cfg: Settings, *, model: str = "", timeout_sec: int = 0):
         """`model` и `timeout_sec` — для второго продукта на том же ключе:
         «Жоспар» генерирует своей моделью и ждёт дольше ассистента
@@ -48,11 +52,20 @@ class OpenAiChat:
         # весь вход запроса, и он один и тот же во всех чатах: чем дольше
         # живёт кэш, тем реже за него платят полную цену. Пустая настройка
         # значит «не посылать параметр»: с Zero Data Retention он отобьётся.
-        self._cache = (
+        self._extra = (
             {"prompt_cache_retention": cfg.openai_cache_retention}
             if cfg.openai_cache_retention
             else {}
         )
+        # Расход в стриме надо просить — см. `stream`
+        self._stream_extra = {"stream_options": {"include_usage": True}}
+
+    def _json_request(self, system: str, name: str, schema: dict) -> tuple[str, dict]:
+        """Системный промпт и `response_format` для ответа по схеме."""
+        return system, {
+            "type": "json_schema",
+            "json_schema": {"name": name, "schema": schema, "strict": True},
+        }
 
     def complete(
         self,
@@ -67,13 +80,13 @@ class OpenAiChat:
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=payload,
-                **self._cache,
+                **self._extra,
                 **({"tools": tools, "tool_choice": "auto"} if tools else {}),
             )
         except Exception as exc:
             # Ключ не попадает ни в лог, ни в текст ошибки: репозитории
             # публичные, а лог читают не только мы
-            log.error("OpenAI не ответил: %s: %s", type(exc).__name__, self._safe(str(exc)))
+            log.error("%s не ответил: %s: %s", self.label, type(exc).__name__, self._safe(str(exc)))
             raise AiUnavailableError("Модель не ответила") from None
         return _reply(resp)
 
@@ -91,20 +104,18 @@ class OpenAiChat:
         модели отвечать (`refusal`, текста тогда нет вовсе) ловит вызывающий
         при разборе — пустой `text` для него просто кривой ответ.
         """
+        system, response_format = self._json_request(system, name, schema)
         payload = [{"role": "system", "content": system}]
         payload += [_wire(message) for message in messages]
         try:
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=payload,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {"name": name, "schema": schema, "strict": True},
-                },
-                **self._cache,
+                response_format=response_format,
+                **self._extra,
             )
         except Exception as exc:
-            log.error("OpenAI не ответил: %s: %s", type(exc).__name__, self._safe(str(exc)))
+            log.error("%s не ответил: %s: %s", self.label, type(exc).__name__, self._safe(str(exc)))
             raise AiUnavailableError("Модель не ответила") from None
         return _reply(resp)
 
@@ -133,12 +144,12 @@ class OpenAiChat:
                 model=self.model,
                 messages=payload,
                 stream=True,
-                stream_options={"include_usage": True},
-                **self._cache,
+                **self._stream_extra,
+                **self._extra,
                 **({"tools": tools, "tool_choice": "auto"} if tools else {}),
             )
         except Exception as exc:
-            log.error("OpenAI не ответил: %s: %s", type(exc).__name__, self._safe(str(exc)))
+            log.error("%s не ответил: %s: %s", self.label, type(exc).__name__, self._safe(str(exc)))
             raise AiUnavailableError("Модель не ответила") from None
 
         parts: list[str] = []
@@ -155,7 +166,10 @@ class OpenAiChat:
                 break
             except Exception as exc:
                 log.error(
-                    "OpenAI оборвал ответ: %s: %s", type(exc).__name__, self._safe(str(exc))
+                    "%s оборвал ответ: %s: %s",
+                    self.label,
+                    type(exc).__name__,
+                    self._safe(str(exc)),
                 )
                 raise AiUnavailableError("Модель не ответила") from None
 
@@ -257,7 +271,7 @@ def _usage(usage) -> tuple[int, int]:
     tokens_out = getattr(usage, "completion_tokens", 0) or 0
     details = getattr(usage, "prompt_tokens_details", None)
     log.info(
-        "OpenAI: вход %d, из кэша %d, выход %d",
+        "Расход модели: вход %d, из кэша %d, выход %d",
         tokens_in,
         getattr(details, "cached_tokens", 0) or 0,
         tokens_out,
