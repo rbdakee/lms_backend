@@ -300,10 +300,10 @@ class LessonChatService:
             log.warning("Разбор заказа вернул не JSON — заказ чата %s не изменился", chat.id)
             return reply.tokens_in, reply.tokens_out
         if isinstance(data, dict):
-            self._apply(chat, data, shown_ids={item["id"] for item in shown})
+            self._apply(chat, data, shown={item["id"]: item for item in shown})
         return reply.tokens_in, reply.tokens_out
 
-    def _apply(self, chat: LessonAiChat, data: dict, *, shown_ids: set[int]) -> None:
+    def _apply(self, chat: LessonAiChat, data: dict, *, shown: dict[int, dict]) -> None:
         """Что разбор принёс — в заказ, каждое поле через проверку.
 
         Неподходящее молча отбрасывается, а не превращается в ошибку: это
@@ -313,8 +313,14 @@ class LessonChatService:
         русскую строку и тут же меняет её на казахскую того же кода.
         """
         objective_id = data.get("objective_id")
-        if isinstance(objective_id, int) and objective_id in shown_ids:
-            self._set_objective(chat, objective_id, strict=False)
+        if isinstance(objective_id, int) and objective_id in shown:
+            # Код цели общий для многих предметов: если учитель назвал предмет,
+            # а подтверждённая строка из другого, цель в заказ не идёт
+            named = data.get("subject_code")
+            if not (
+                isinstance(named, str) and named and named != shown[objective_id]["subject_code"]
+            ):
+                self._set_objective(chat, objective_id, strict=False)
         lang = data.get("lang")
         if lang in ("ru", "kz"):
             self._set_lang(chat, lang, strict=False)
