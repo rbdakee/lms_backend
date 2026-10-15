@@ -3320,3 +3320,48 @@ category = "other"
 ru = ["фонарик"]
 kz = ["қалта", "шамы"]
 en = ["flashlight", "torch"]
+
+[[image]]
+key = "numbers"
+file = "numbers.png"
+src = "Fluent Emoji: Input numbers"
+category = "school"
+ru = ["цифры", "числа", "счёт"]
+kz = ["сандар", "есеп"]
+en = ["numbers", "digits", "count"]
+
+[[image]]
+key = "abc"
+file = "abc.png"
+src = "Fluent Emoji: Input latin uppercase"
+category = "school"
+ru = ["буквы", "азбука", "алфавит"]
+kz = ["әріптер", "әліпби"]
+en = ["letters", "abc", "alphabet"]
+
+[[image]]
+key = "blue_book"
+file = "blue_book.png"
+src = "Fluent Emoji: Blue book"
+category = "school"
+ru = ["синяя книга", "учебник"]
+kz = ["көк кітап", "оқулық"]
+en = ["blue book", "textbook"]
+
+[[image]]
+key = "orange_book"
+file = "orange_book.png"
+src = "Fluent Emoji: Orange book"
+category = "school"
+ru = ["оранжевая книга", "учебник"]
+kz = ["қызғылт сары кітап", "оқулық"]
+en = ["orange book", "textbook"]
+
+[[image]]
+key = "speaking_head"
+file = "speaking_head.png"
+src = "Fluent Emoji: Speaking head"
+category = "school"
+ru = ["говорящая голова", "речь", "язык"]
+kz = ["сөйлеу", "тіл"]
+en = ["speaking head", "speech", "language"]

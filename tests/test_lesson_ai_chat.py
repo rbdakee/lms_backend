@@ -1339,6 +1339,7 @@ def test_subjects_list_only_published(client, sms, scene):
                 "grade_from": 1,
                 "grade_to": 2,
                 "langs": ["kz", "ru"],
+                "icon_url": "/lesson_ai/images/numbers",
             }
         ]
     }
