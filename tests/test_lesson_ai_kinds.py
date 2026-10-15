@@ -373,6 +373,12 @@ def prepared_for(monkeypatch):
     """`prepare` генератора вида — настоящая, с подменённым справочником."""
     FakeRepo.plan_calls = []
     monkeypatch.setattr(context, "LessonKitRepo", FakeRepo)
+    # Базы здесь нет: вложений у комплекта нет — обычный путь без файлов учителя
+    monkeypatch.setattr(
+        context,
+        "LessonAttachmentRepo",
+        lambda db: SimpleNamespace(ready_for_kit=lambda kit_id: []),
+    )
     monkeypatch.setattr(
         context, "objective_sections", lambda db, objective: ("Числа и величины", "Операции")
     )
@@ -387,6 +393,7 @@ def prepared_for(monkeypatch):
             notes=f"Хочу по цели {CODE}, с палочками",
             engagement_level=engagement,
             difficulty_level=difficulty,
+            personal=False,
         )
         return generators(FakeAi(), "gpt-4.1")[kind].prepare(None, kit)
 
