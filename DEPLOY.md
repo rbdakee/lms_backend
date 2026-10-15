@@ -601,3 +601,37 @@ STORAGE_PROVIDER=local STORAGE_DIR="storage-backup" \
 Заводя любой новый вывод в лог, проверять по этому списку. Отдельный сборщик
 ошибок (Sentry и подобные) не заведён: это новая зависимость и новый адрес,
 куда уезжают трассировки, — решение владельца.
+
+## MCP: подключение внешнего ИИ
+
+Решение — `MCP_BRIEF.md`. Включается `MCP_ENABLED=true`; `PUBLIC_BASE_URL` обязан быть боевым
+адресом API (`https://api.<домен>`) — он попадает в метаданные OAuth, а `ADMIN_BASE_URL` —
+адресом админки (туда браузер уходит на экран согласия). Прокси должен отдавать `/mcp`,
+`/oauth/*` и `/.well-known/*` без буферизации и без своей авторизации. Лимит
+`MCP_CALLS_PER_MIN` — на одно подключение, счётчик в памяти процесса (как у прочих лимитов).
+Таблицы чата `assistant_*` в базе остаются нетронутыми, миграция их не дропает.
+
+Как подключить (URL сервера — `https://api.<домен>/mcp`):
+
+- **claude.ai**: Settings → Connectors → Add custom connector → вставить URL. Откроется экран
+  согласия админки; галочка «допуск к персональным данным» ставится там же.
+- **ChatGPT**: Settings → Connectors (режим разработчика, Developer mode) → создать коннектор с этим URL,
+  аутентификация OAuth. Дальше то же согласие в админке.
+- **Codex**: токен создаётся на экране «Подключения ИИ». В `~/.codex/config.toml`:
+
+  ```toml
+  [mcp_servers.lms]
+  url = "https://api.<домен>/mcp"
+  bearer_token_env_var = "LMS_MCP_TOKEN"
+  ```
+
+  и `export LMS_MCP_TOKEN=mcp_pat_...` в оболочке.
+- **Claude Code**:
+
+  ```bash
+  claude mcp add --transport http lms https://api.<домен>/mcp \
+    --header "Authorization: Bearer mcp_pat_..."
+  ```
+
+Токен показывается один раз; отзыв на том же экране действует сразу. Синтаксис Codex и Claude Code
+сверен с документацией 15.10.2026; настройки ChatGPT и claude.ai меняются в интерфейсе чаще — сверять по месту.
