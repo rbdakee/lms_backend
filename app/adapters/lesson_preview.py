@@ -6,7 +6,7 @@
 увидел бы на сайте не то, что распечатает. Из файла берётся только то, чем
 пользуются наши рендеры (`app/adapters/docx/*`, `app/adapters/pptx/*`):
 абзацы с жирным, курсивом и кеглем, выравнивание, таблицы с объединёнными
-ячейками, рамки, разрывы страниц; у презентации — текст слайдов и заметки.
+ячейками, рамки, разрывы страниц; у презентации — фигуры слайдов (плашки, текст, картинки) и заметки.
 
 Документ не копирует страницу A4, а переливается под ширину экрана: на 390px
 телефона лист в масштабе был бы набран шрифтом в 8px. Таблицы держат пропорции
@@ -17,13 +17,15 @@
 в странице нет, стили встроены — фронт показывает её в `iframe` без скриптов.
 """
 
+import base64
 from html import escape
 from io import BytesIO
 
 import docx
 from docx.oxml.ns import qn
 from pptx import Presentation
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 
 # Заметки докладчика — как их называет PowerPoint на языке обучения
 NOTES = {"ru": "Заметки", "kz": "Ескертпелер"}
@@ -57,10 +59,10 @@ table.lined>tbody>tr>td{border:1px solid #1a1a1a}
 .num{font-size:12px;color:#6b6b6b;margin:0 0 4px}
 .slide{position:relative;container-type:inline-size;aspect-ratio:16/9;background:#fff;
   border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.18);overflow:hidden;
-  display:flow-root;line-height:1.15}
+  line-height:1.15}
 .bar{position:absolute}
-.box{position:relative}
-.box p{min-height:0}
+.bar p{min-height:0;margin:0}
+.mk{white-space:pre}
 .notes{background:#fff;border-radius:6px;margin:6px 0 0;padding:8px 10px;font-size:13px;
   color:#3a3a3a;line-height:1.35}
 .notes b{display:block;font-size:12px;color:#6b6b6b;margin-bottom:2px}
@@ -247,30 +249,19 @@ def _cell(cell: dict) -> str:
 
 
 def _pptx(data: bytes, lang: str) -> str:
-    """Слайд — рамка 16:9, в ней блоки текста на своих местах, кегль —
-    в долях ширины слайда (`cqw`). Текст, который PowerPoint ужал бы под
-    рамку, здесь не режется: слайд растёт вниз, и прочитать можно всё."""
+    """Слайд — рамка 16:9, в ней каждая фигура файла на своём месте (доли
+    ширины и высоты слайда), кегль — в долях ширины (`cqw`). Тот же файл,
+    что скачает учитель: плашки, кружки, картинки и порядок наложения — как
+    в нём. Анимации в просмотре нет: ответ вопроса и число видны сразу."""
     deck = Presentation(BytesIO(data))
     width, height = deck.slide_width, deck.slide_height
     total = len(deck.slides)
     out = []
     for number, slide in enumerate(deck.slides, start=1):
-        items = []
-        bottom = 0
-        shapes = sorted(slide.shapes, key=lambda s: (s.top or 0, s.left or 0))
-        for shape in shapes:
-            if not shape.has_text_frame or not shape.text_frame.text.strip():
-                items.append(_bar(shape, width, height))
-                continue
-            gap = max((shape.top or 0) - bottom, 0)
-            css = (
-                f"margin-top:{_cqw(gap, width)};margin-left:{_cqw(shape.left or 0, width)};"
-                f"width:{_cqw(shape.width or 0, width)};min-height:{_cqw(shape.height or 0, width)}"
-            )
-            items.append(f'<div class="box" style="{css}">{_frame(shape.text_frame, width)}</div>')
-            bottom = (shape.top or 0) + (shape.height or 0)
+        items = "".join(_shape(shape, width, height) for shape in slide.shapes)
         out.append(
-            f'<p class="num">{number} / {total}</p><div class="slide">{"".join(items)}</div>'
+            f'<p class="num">{number} / {total}</p>'
+            f'<div class="slide" style="background:{_background(slide)}">{items}</div>'
         )
         notes = slide.notes_slide.notes_text_frame.text if slide.has_notes_slide else ""
         if notes.strip():
@@ -284,30 +275,78 @@ def _cqw(emu: int, width: int) -> str:
     return f"{emu / width * 100:.2f}cqw"
 
 
-def _bar(shape, width: int, height: int) -> str:
-    """Фигура без текста — у нас это полоса слева: рисуется цветом заливки
-    на своём месте, а не пропадает — по ней слайды узнаются как одна презентация."""
+def _background(slide) -> str:
     try:
-        color = f"#{shape.fill.fore_color.rgb}"
+        return f"#{slide.background.fill.fore_color.rgb}"
     except (AttributeError, TypeError, ValueError):
-        return ""
-    css = (
-        f"left:{(shape.left or 0) / width * 100:.2f}%;top:{(shape.top or 0) / height * 100:.2f}%;"
-        f"width:{(shape.width or 0) / width * 100:.2f}%;"
-        f"height:{(shape.height or 0) / height * 100:.2f}%;background:{color}"
+        return "#fff"
+
+
+def _fill(shape) -> str | None:
+    try:
+        return f"#{shape.fill.fore_color.rgb}"
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _shape(shape, width: int, height: int) -> str:
+    css = [
+        f"left:{(shape.left or 0) / width * 100:.2f}%",
+        f"top:{(shape.top or 0) / height * 100:.2f}%",
+        f"width:{(shape.width or 0) / width * 100:.2f}%",
+        f"height:{(shape.height or 0) / height * 100:.2f}%",
+    ]
+    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+        mime = shape.image.content_type
+        src = base64.b64encode(shape.image.blob).decode()
+        alt = escape(shape._element.nvPicPr.cNvPr.get("descr") or "", quote=True)
+        return (
+            f'<img class="bar" alt="{alt}" src="data:{mime};base64,{src}" '
+            f'style="{";".join(css)}">'
+        )
+    fill = _fill(shape) if shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE else None
+    if fill:
+        css.append(f"background:{fill}")
+        geometry = shape._element.spPr.find(qn("a:prstGeom"))
+        kind = geometry.get("prst") if geometry is not None else ""
+        if kind == "ellipse":
+            css.append("border-radius:50%")
+        elif kind == "roundRect":
+            # Скругление — доля короткой стороны, как у PowerPoint
+            css.append(f"border-radius:{min(shape.adjustments[0], 0.5) * min(shape.width, shape.height) / width * 100:.2f}cqw")
+    if not (shape.has_text_frame and shape.text_frame.text.strip()):
+        return f'<div class="bar" style="{";".join(css)}"></div>'
+    frame = shape.text_frame
+    anchor = {MSO_ANCHOR.MIDDLE: "center", MSO_ANCHOR.BOTTOM: "flex-end"}.get(
+        frame.vertical_anchor, "flex-start"
     )
-    return f'<div class="bar" style="{css}"></div>'
+    pad = [frame.margin_top, frame.margin_right, frame.margin_bottom, frame.margin_left]
+    css += [
+        "display:flex",
+        "flex-direction:column",
+        f"justify-content:{anchor}",
+        "padding:" + " ".join(_cqw(p or 0, width) for p in pad),
+    ]
+    return f'<div class="bar" style="{";".join(css)}">{_frame(frame, width)}</div>'
 
 
 def _frame(frame, width: int) -> str:
     align = {PP_ALIGN.CENTER: "center", PP_ALIGN.RIGHT: "right", PP_ALIGN.JUSTIFY: "justify"}
     out = []
+    count = 0
     for paragraph in frame.paragraphs:
         css = []
         if paragraph.alignment in align:
             css.append(f"text-align:{align[paragraph.alignment]}")
         if paragraph.space_after is not None:
             css.append(f"margin-bottom:{_cqw(paragraph.space_after, width)}")
+        ppr = paragraph._p.pPr
+        marker = ""
+        if ppr is not None and ppr.find(qn("a:buAutoNum")) is not None:
+            count += 1
+            marker = f"{count}. "
+        elif ppr is not None and ppr.find(qn("a:buChar")) is not None:
+            marker = "\u2022 "
         runs = []
         for run in paragraph.runs:
             font = run.font
@@ -322,6 +361,11 @@ def _frame(frame, width: int) -> str:
             except AttributeError:
                 pass
             runs.append(_span(escape(run.text), run_css))
+        if marker and runs:
+            # Маркер — того же кегля, что первый кусок текста абзаца
+            size = paragraph.runs[0].font.size
+            style = f' style="font-size:{_cqw(size, width)}"' if size is not None else ""
+            runs.insert(0, f'<span class="mk"{style}>{marker}</span>')
         attr = f' style="{";".join(css)}"' if css else ""
         out.append(f"<p{attr}>{''.join(runs)}</p>")
     return "".join(out)

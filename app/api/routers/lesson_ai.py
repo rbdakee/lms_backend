@@ -158,8 +158,11 @@ def material_preview(material_id: int, user: CurrentUser, svc: Materials) -> HTM
         lesson_preview.render(file.format, data, file.lang),
         headers={
             # Скриптов в странице нет и не будет; открытая напрямую, а не во
-            # фрейме экрана, она всё равно не выполнит ничего, кроме стилей
-            "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'",
+            # фрейме экрана, она всё равно не выполнит ничего, кроме стилей.
+            # Картинки презентации — data:, внешних адресов нет
+            "content-security-policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+            ),
             "cache-control": "no-store",
         },
     )
