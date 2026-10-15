@@ -231,8 +231,12 @@ def test_put_objectives_route_changes_the_set_and_writes_the_event(client, sms, 
     assert [o["id"] for o in resp.json()["objectives"]] == [goals.ru_only.id]
     mid = material_id(client, chat["id"], "lesson_plan")
     assert [o["code"] for o in blocks(client, mid)["learning_objectives"]] == [goals.ru_only.code]
-    [event] = [e for e in events(feed(client, chat["id"])) if e["type"] == "objectives_changed"]
+    body = feed(client, chat["id"])
+    [event] = [e for e in events(body) if e["type"] == "objectives_changed"]
     assert event["objectives"] == [{"id": goals.ru_only.id, "code": goals.ru_only.code}]
+    # Лента несёт комплект с целями: экран перечитывает по ним шапку и шторку
+    assert [o["id"] for o in body["kit"]["objectives"]] == [goals.ru_only.id]
+    assert body["kit"]["subject_code"] == "math"
 
 
 def test_put_objectives_route_refuses_mixed_empty_and_foreign(client, client2, sms, ai, goals):

@@ -287,8 +287,11 @@ class LessonChatKitOut(BaseModel):
     id: int
     status: Literal["generating", "ready", "partial", "failed"]
     topic: str
+    subject_code: str
     grade: int
     lang: Literal["ru", "kz"]
+    # Цели урока по порядку: шторка «Изменить цели» открывается с ними отмеченными
+    objectives: list[LessonObjectiveOut]
     engagement_level: EngagementLevel
     difficulty_level: DifficultyLevel
     materials: list[LessonKitListMaterialOut]

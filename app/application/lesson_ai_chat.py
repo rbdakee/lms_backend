@@ -49,7 +49,7 @@ from app.adapters.db.lesson_ai_repos import (
 )
 from app.adapters.db.models import LessonAiChat, LessonAiChatMessage, User, now_utc
 from app.application.ai_loop import AiStreamBrokenError, LoopResult, Step, ToolLoop
-from app.application.lesson_kits import LessonKitsService
+from app.application.lesson_kits import LessonKitsService, objectives_out
 from app.application.lesson_materials import LessonMaterialsService
 from app.application.ports import AiMessage, AiPort, AiToolCall
 from app.application.ratelimit import SlidingWindowLimiter
@@ -717,8 +717,13 @@ class LessonChatService:
         kit = self.kits.kits.kit(chat.kit_id) if chat.kit_id else None
         if kit is None:
             return None
+        cards = self.kits.kits.kit_objectives([kit.id])[kit.id]
         return {
             "id": kit.id,
+            # Цели нужны экрану: шторка «Изменить цели» открывается с текущим набором,
+            # а смену набора (из чата или кнопкой) он замечает по этому списку
+            "subject_code": cards[0][2].code,
+            "objectives": objectives_out(cards),
             "status": kit.status,
             "topic": kit.topic,
             "grade": kit.grade,
@@ -738,7 +743,6 @@ class LessonChatService:
         summary = self._kit_summary(chat)
         if summary is None:
             return None
-        cards = self.kits.kits.kit_objectives([chat.kit_id])[chat.kit_id]
         materials = LessonMaterialRepo(self.db)
         rewriter = self.materials.rewriter
         for item in summary["materials"]:
@@ -752,11 +756,7 @@ class LessonChatService:
             ]
         return {
             **summary,
-            "subject_code": cards[0][2].code,
-            "subject_title": cards[0][2].title,
-            "objectives": [
-                {"id": obj.id, "code": obj.code, "text": obj.text} for obj, _p, _s in cards
-            ],
+            "subject_title": self.kits.kits.kit_objectives([chat.kit_id])[chat.kit_id][0][2].title,
         }
 
     def _out(self, chat: LessonAiChat) -> dict:
