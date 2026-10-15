@@ -72,9 +72,6 @@ LABELS = {
     "ru": {
         "grade": "класс",
         "goals": "Сегодня на уроке",
-        "stage_beginning": "Начало урока",
-        "stage_middle": "Середина урока",
-        "stage_end": "Конец урока",
         "objective": "Цель обучения",
         "show": "Что показать",
         "answer": "Ответ",
@@ -83,9 +80,6 @@ LABELS = {
     "kz": {
         "grade": "сынып",
         "goals": "Бүгін сабақта",
-        "stage_beginning": "Сабақтың басы",
-        "stage_middle": "Сабақтың ортасы",
-        "stage_end": "Сабақтың соңы",
         "objective": "Оқу мақсаты",
         "show": "Не көрсету керек",
         "answer": "Жауап",
@@ -315,7 +309,6 @@ def _question(ctx: Ctx, item: dict) -> None:
         anchor=MSO_ANCHOR.MIDDLE,
         margin=0.35,
     )
-    _stage_chip(ctx)
     options = item.get("lines") or []
     answer = item.get("answer") or ""
     image = _image(item)
@@ -397,28 +390,6 @@ def _frame(ctx: Ctx, item: dict) -> None:
         bold=True,
         color=NAVY,
         anchor=MSO_ANCHOR.MIDDLE,
-    )
-    _stage_chip(ctx)
-
-
-def _stage_chip(ctx: Ctx) -> None:
-    if ctx.stage == "goals":
-        return
-    _put(
-        ctx,
-        ctx.labels[ctx.stage],
-        MARGIN,
-        6.98,
-        2.7,
-        0.34,
-        sizes=(14,),
-        bold=True,
-        color=WHITE,
-        fill=ctx.accent,
-        align=PP_ALIGN.CENTER,
-        anchor=MSO_ANCHOR.MIDDLE,
-        margin=0.05,
-        radius=0.5,
     )
 
 
