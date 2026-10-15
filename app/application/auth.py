@@ -148,6 +148,8 @@ class AuthService:
         # настройка «завести админа», и фиксированного кода там быть
         # не должно. Одного номера хватило бы, чтобы выдать пустой код,
         # которым не войти вовсе.
+        if self.cfg.auth_any_code:
+            return self.cfg.auth_any_code
         fixed, bootstrap = self.cfg.auth_bootstrap_code, self.cfg.auth_bootstrap_phone
         if fixed and bootstrap and phone == normalize_phone(bootstrap):
             return fixed

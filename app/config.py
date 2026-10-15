@@ -154,6 +154,10 @@ class Settings(BaseSettings):
     # взять неоткуда, — при SMS_PROVIDER=log. С работающим WhatsApp
     # оставлять его незачем: пустое значение выключает.
     auth_bootstrap_code: str = ""
+    # Демо-стенд: любой номер входит этим кодом, минуя провайдера. Нужен,
+    # чтобы клиенту показать продукт с его собственного телефона, не читая
+    # логи. В бою запрещён — сервис с ним не стартует (`check_bootstrap_login`).
+    auth_any_code: str = ""
 
     # Ассистент в админке (ASSISTANT_BRIEF). Ключ — рядом с паролем базы
     # и токеном WhatsApp: он про деплой, а не про настройки площадки,
@@ -515,6 +519,12 @@ def check_bootstrap_login(cfg: Settings) -> None:
     кодом от провайдера. А вот код без номера не пускает никого и значит
     только опечатку.
     """
+    if cfg.auth_any_code:
+        if cfg.env == "prod":
+            raise RuntimeError("AUTH_ANY_CODE в бою запрещён: им входит любой номер")
+        if not cfg.auth_any_code.isdigit() or len(cfg.auth_any_code) != cfg.code_length:
+            raise RuntimeError(f"AUTH_ANY_CODE — ровно {cfg.code_length} цифр")
+        log.warning("AUTH_ANY_CODE: любой номер входит фиксированным кодом")
     if cfg.auth_bootstrap_code and not cfg.auth_bootstrap_phone:
         raise RuntimeError(
             "AUTH_BOOTSTRAP_CODE задан без AUTH_BOOTSTRAP_PHONE —"

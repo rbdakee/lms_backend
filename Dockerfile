@@ -4,6 +4,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /code
 
+# Окружение вне /code: локальный compose монтирует исходники поверх /code,
+# и лежи .venv там же, её пришлось бы спасать томом, который переживает
+# пересборку и прячет от сервиса новые зависимости
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+
 # Зависимости — отдельным слоем, чтобы правка кода их не пересобирала
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project

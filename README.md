@@ -26,14 +26,6 @@ uv run uvicorn app.main:app --reload
 она пишет код в лог сервиса (`SMS на ***4567: код 1234`). В бою стоит
 `whatsapp` — код уходит согласованным шаблоном через Cloud API, см. `DEPLOY.md`.
 
-Появилась новая зависимость — контейнер поднимать с `--renew-anon-volumes`:
-`.venv` внутри него лежит в анонимном томе, и пересборка образа его не трогает,
-так что сервис падает на `ModuleNotFoundError` при живом образе.
-
-```sh
-docker compose up -d --build --renew-anon-volumes api
-```
-
 ## Проверки
 
 ```sh
