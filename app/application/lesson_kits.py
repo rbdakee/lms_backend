@@ -15,7 +15,7 @@
 без задания в очереди и без вызова модели.
 """
 
-from app.adapters.db.lesson_ai_repos import LessonKitRepo
+from app.adapters.db.lesson_ai_repos import LessonKitRepo, objective_sections
 from app.adapters.db.lesson_bank_repo import LessonBankRepo
 from app.adapters.db.models import LessonKit, LessonMaterialBank, User
 from app.application.ratelimit import SlidingWindowLimiter
@@ -76,22 +76,9 @@ class LessonKitsService:
                 "Ключи с ответами собираются из заданий, домашнего задания"
                 " или проверочной — отметьте хотя бы одно из них",
             )
-        # Дубли схлопываются: цель, отмеченную дважды, учитель имел в виду один раз
         objective_ids = distinct_ids(objective_ids)
-        if not objective_ids:
-            raise FieldError("objective_ids", "Отметьте хотя бы одну цель обучения")
-        cards = self.kits.objective_cards(objective_ids)
-        if cards is None:
-            raise NotFoundError("Цель обучения не найдена")
-        # Одна программа (предмет и язык редакции) и один класс — проверяет
-        # сервер, экран только подсказывает (решение владельца 15.10.2026)
-        if not objectives_compatible((program.id, obj.grade) for obj, program, _ in cards):
-            raise ObjectivesMixedError()
+        cards = self._checked_cards(objective_ids)
         objective, program, _subject = cards[0]
-        # Генерация видит только опубликованное: загруженная программа ещё
-        # не вычитана владельцем (раздел 3.1)
-        if program.status != "published":
-            raise ProgramNotPublishedError()
         # Лимит — после всех проверок заказа: отбитый заказ не съедает
         # комплект из суточных
         wait = self.limiter.hit(str(user.id))
@@ -134,6 +121,59 @@ class LessonKitsService:
         # из банка целиком, заданий нет — без пересчёта он остался бы
         # «собирается» навсегда
         kit.status = kit_status(material.status for material in self.kits.materials(kit.id))
+        return self._out(kit)
+
+    def _checked_cards(self, objective_ids: list[int]) -> list:
+        """Цели заказа или правки набора: найдены, из одной программы и одного
+        класса, программа опубликована. Одна проверка на создание и на смену
+        целей — разойтись они не должны."""
+        # Дубли схлопывает вызывающий: цель, отмеченную дважды, учитель имел в виду один раз
+        if not objective_ids:
+            raise FieldError("objective_ids", "Отметьте хотя бы одну цель обучения")
+        cards = self.kits.objective_cards(objective_ids)
+        if cards is None:
+            raise NotFoundError("Цель обучения не найдена")
+        # Одна программа (предмет и язык редакции) и один класс — проверяет
+        # сервер, экран только подсказывает (решение владельца 15.10.2026)
+        if not objectives_compatible((program.id, obj.grade) for obj, program, _ in cards):
+            raise ObjectivesMixedError()
+        # Генерация видит только опубликованное: загруженная программа ещё
+        # не вычитана владельцем (раздел 3.1)
+        if cards[0][1].status != "published":
+            raise ProgramNotPublishedError()
+        return cards
+
+    # -- PUT /lesson_ai/kits/{id}/objectives -------------------------------
+
+    def set_objectives(self, user: User, kit_id: int, objective_ids: list[int]) -> dict:
+        """Цели готового комплекта: добавить, убрать, переставить.
+
+        Новый набор — той же программы и того же класса, что у комплекта:
+        язык и класс документов уже зафиксированы, а смешанный набор сервер
+        отбивает так же, как при заказе. Серверные блоки (`section`,
+        `learning_objectives`) переписываются во всех материалах без модели
+        и с записью в историю блока; прочие блоки сервер не трогает — модель
+        предлагает переписать их учителю, и он решает сам.
+
+        Комплект после этого личный: материал, выданный из банка, уже не тот,
+        что лежит в банке, — связь снимается, и соседи при перегенерации
+        строятся по плану учителя, а не по варианту банка.
+        """
+        kit = self.kits.kit(kit_id)
+        if kit is None or kit.user_id != user.id:
+            raise NotFoundError("Комплект не найден")
+        objective_ids = distinct_ids(objective_ids)
+        cards = self._checked_cards(objective_ids)
+        current = self.kits.kit_objectives([kit.id])[kit.id][0]
+        if (cards[0][1].id, cards[0][0].grade) != (current[1].id, current[0].grade):
+            raise ObjectivesMixedError()
+        self.kits.replace_objectives(kit.id, objective_ids)
+        self.kits.retarget_materials(
+            kit.id,
+            user_id=user.id,
+            objectives=document_objectives(cards),
+            section=document_section(self.kits.db, cards),
+        )
         return self._out(kit)
 
     def _variant(
@@ -257,6 +297,16 @@ def objectives_out(cards) -> list[dict]:
 def document_objectives(cards) -> list[dict]:
     """Блок `learning_objectives` документа: без номера строки справочника."""
     return [{"code": o.code, "text": o.text, "marker": o.marker} for o, _p, _s in cards]
+
+
+def document_section(db, cards) -> dict:
+    """Блок `section` документа: разделы и подразделы всех целей, без повторов,
+    в порядке целей — так же его собирает генерация (`context.prepare`)."""
+    sections = [objective_sections(db, card[0]) for card in cards]
+    return {
+        "title": "; ".join(dict.fromkeys(title for title, _ in sections)),
+        "subsection": "; ".join(dict.fromkeys(sub for _, sub in sections if sub)),
+    }
 
 
 def _error(code: str | None) -> dict | None:

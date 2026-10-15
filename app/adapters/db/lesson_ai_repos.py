@@ -100,6 +100,37 @@ class LessonKitRepo:
         self.db.flush()
         return kit
 
+    def replace_objectives(self, kit_id: int, objective_ids: list[int]) -> None:
+        """Набор целей комплекта заново, в порядке учителя."""
+        self.db.execute(delete(LessonKitObjective).where(LessonKitObjective.kit_id == kit_id))
+        self.db.add_all(
+            LessonKitObjective(kit_id=kit_id, position=position, objective_id=objective_id)
+            for position, objective_id in enumerate(objective_ids, start=1)
+        )
+        self.db.flush()
+
+    def retarget_materials(
+        self, kit_id: int, *, user_id: int, objectives: list[dict], section: dict
+    ) -> None:
+        """Серверные блоки готовых материалов — под новый набор целей, а связь
+        с банком снята у всех: комплект с изменёнными целями личный.
+
+        Блок пишется тем же путём, что правка (документ, блок и версия
+        в одной транзакции под замком материала), чтобы история блока
+        показала, когда цели поменялись.
+        """
+        materials = LessonMaterialRepo(self.db)
+        for material in self.materials(kit_id):
+            material.bank_id = None
+            if material.status != "ready":
+                continue
+            locked = materials.lock_material(material.id)
+            for name, value in (("section", section), ("learning_objectives", objectives)):
+                block = materials.block(locked.id, name)
+                if block is not None and name in (locked.content or {}):
+                    materials.write_block(locked, block, value, source="generated", user_id=user_id)
+        self.db.flush()
+
     def add_material(self, kit_id: int, kind: str) -> None:
         """Материал и задание на него заводятся вместе: материал без задания
         навсегда остался бы в очереди, задание без материала некуда сохранить."""
@@ -1063,3 +1094,25 @@ class LessonUsageRepo:
             )
         )
         self.db.flush()
+
+
+def record_objectives_event(db: DbSession, kit_id: int, objectives: list[dict]) -> None:
+    """Событие «цели урока изменены» в ленте чата комплекта — когда цели
+    сменил экран, а не инструмент чата (тот кладёт событие сам). Без чата
+    (прямой заказ) — ничего."""
+    chat = db.scalar(select(LessonAiChat).where(LessonAiChat.kit_id == kit_id))
+    if chat is None:
+        return
+    codes = [o["code"] for o in objectives]
+    db.add(
+        LessonAiChatMessage(
+            chat_id=chat.id,
+            role="event",
+            content="Цели урока изменены: " + ", ".join(codes),
+            event={
+                "type": "objectives_changed",
+                "objectives": [{"id": o["id"], "code": o["code"]} for o in objectives],
+            },
+        )
+    )
+    chat.updated_at = func.now()
