@@ -760,11 +760,34 @@ def get_lesson_chat_limiter() -> SlidingWindowLimiter:
     return _lesson_chat_limiter
 
 
+def lesson_block_rewriter(ai: AiPort) -> BlockRewriter:
+    """Переписчик блоков на клиенте `ai`. Схемы блоков собираются при создании —
+    один раз на клиента, а не на запрос; чат и ручка блока берут один и тот же."""
+    global _block_rewriter
+    if _block_rewriter is None or _block_rewriter.ai is not ai:
+        _block_rewriter = BlockRewriter(ai)
+    return _block_rewriter
+
+
+def get_lesson_materials_service(
+    db: Annotated[DbSession, Depends(get_db)],
+    ai: Annotated[AiPort, Depends(get_lesson_block_ai)],
+) -> LessonMaterialsService:
+    return LessonMaterialsService(
+        LessonMaterialRepo(db),
+        lesson_block_rewriter(ai),
+        db=db,
+        commit=db.commit,
+        model=get_settings().lesson_model,
+    )
+
+
 def get_lesson_chat_service(
     db: Annotated[DbSession, Depends(get_db)],
     ai: Annotated[AiPort, Depends(get_lesson_block_ai)],
     limiter: Annotated[SlidingWindowLimiter, Depends(get_lesson_chat_limiter)],
     kits: Annotated[LessonKitsService, Depends(get_lesson_kits_service)],
+    materials: Annotated[LessonMaterialsService, Depends(get_lesson_materials_service)],
 ) -> LessonChatService:
     cfg = get_settings()
     return LessonChatService(
@@ -772,26 +795,11 @@ def get_lesson_chat_service(
         ai,
         kits=kits,
         limiter=limiter,
+        materials=materials,
         max_tool_calls=cfg.lesson_ai_chat_max_tool_calls,
+        max_edit_tool_calls=cfg.lesson_ai_edit_max_tool_calls,
         history_messages=cfg.lesson_ai_chat_history_messages,
         model=cfg.lesson_model,
-    )
-
-
-def get_lesson_materials_service(
-    db: Annotated[DbSession, Depends(get_db)],
-    ai: Annotated[AiPort, Depends(get_lesson_block_ai)],
-) -> LessonMaterialsService:
-    # Схемы блоков собираются при создании — один раз на клиента, а не на запрос
-    global _block_rewriter
-    if _block_rewriter is None or _block_rewriter.ai is not ai:
-        _block_rewriter = BlockRewriter(ai)
-    return LessonMaterialsService(
-        LessonMaterialRepo(db),
-        _block_rewriter,
-        db=db,
-        commit=db.commit,
-        model=get_settings().lesson_model,
     )
 
 

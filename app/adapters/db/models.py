@@ -1193,6 +1193,10 @@ class LessonAiChatMessage(Base):
     tool_name: Mapped[str | None] = mapped_column(Text)
     tool_args: Mapped[dict | None] = mapped_column(JSONB)
     tool_result: Mapped[dict | None] = mapped_column(JSONB)
+    # Только у роли `event`: что произошло с комплектом (собирается, готов,
+    # блок изменён из чата). Экран подсвечивает материал справа по этому
+    # объекту, а `content` — запасная подпись словами.
+    event: Mapped[dict | None] = mapped_column(JSONB)
     # Связь «просьба вызвать — результат»: хвост истории уходит модели как есть
     tool_call_id: Mapped[str | None] = mapped_column(Text)
     # Расход хода — на ответе помощника; учёт по учителю — сессия L7
@@ -1201,7 +1205,7 @@ class LessonAiChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     __table_args__ = (
-        CheckConstraint("role IN ('user', 'assistant', 'tool')", name="role"),
+        CheckConstraint("role IN ('user', 'assistant', 'tool', 'event')", name="role"),
         Index("ix_lesson_ai_chat_message_chat_id_id", "chat_id", "id"),
     )
 

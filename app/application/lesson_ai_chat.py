@@ -22,6 +22,13 @@
 не импортируются (раздел 6): общий у двух продуктов только водопровод —
 `ai_loop`, стрим, `SlidingWindowLimiter` и учёт токенов в ленте.
 
+**Один чат — одна сессия — один комплект** (решение владельца 15.10.2026).
+После «Готовить» чат не закрывается, а переходит в режим правки: те же реплики,
+но разбора заказа нет, а у модели другой набор инструментов — оглавление и
+правка блоков материалов комплекта (`app/lesson_ai/edit_tools.py`). Правки идут
+через `LessonMaterialsService` — ту же, что кнопка ИИ на блоке и ручная правка.
+Каждая правка и каждая смена статуса комплекта — событие в ленте (роль `event`).
+
 Чат виден только своему учителю: чужой — 404, а не 403.
 """
 
@@ -32,10 +39,16 @@ from collections.abc import Iterator
 from sqlalchemy.orm import Session as DbSession
 
 from app.adapters.ai.openai_chat import AiUnavailableError
-from app.adapters.db.lesson_ai_repos import LessonChatRepo, LessonUsageRepo, ObjectiveRow
+from app.adapters.db.lesson_ai_repos import (
+    LessonChatRepo,
+    LessonUsageRepo,
+    ObjectiveRow,
+    record_kit_event,
+)
 from app.adapters.db.models import LessonAiChat, LessonAiChatMessage, User, now_utc
-from app.application.ai_loop import AiStreamBrokenError, LoopResult, ToolLoop
+from app.application.ai_loop import AiStreamBrokenError, LoopResult, Step, ToolLoop
 from app.application.lesson_kits import LessonKitsService
+from app.application.lesson_materials import LessonMaterialsService
 from app.application.ports import AiMessage, AiPort, AiToolCall
 from app.application.ratelimit import SlidingWindowLimiter
 from app.domain.errors import (
@@ -58,7 +71,9 @@ from app.domain.lesson_ai import (
     order_missing,
     search_stems,
 )
+from app.lesson_ai.edit_tools import EditCtx, EditTools, event_text
 from app.lesson_ai.order_tools import FIND_LIMIT_MAX, OrderCtx, OrderTools, objective_item
+from app.lesson_ai.prompts import edit_chat as edit_prompt
 from app.lesson_ai.prompts import order_chat as prompt
 
 log = logging.getLogger(__name__)
@@ -87,7 +102,9 @@ class LessonChatService:
         *,
         kits: LessonKitsService,
         limiter: SlidingWindowLimiter,
+        materials: LessonMaterialsService,
         max_tool_calls: int,
+        max_edit_tool_calls: int,
         history_messages: int,
         model: str,
     ):
@@ -98,8 +115,11 @@ class LessonChatService:
         self.model = model
         self.repo = LessonChatRepo(db)
         self.kits = kits
+        # Правка материалов из чата — тем же сценарием, что кнопка ИИ на блоке
+        self.materials = materials
         self.limiter = limiter
         self.max_tool_calls = max_tool_calls
+        self.max_edit_tool_calls = max_edit_tool_calls
         self.history_messages = history_messages
 
     # -- чат ----------------------------------------------------------------
@@ -121,6 +141,7 @@ class LessonChatService:
         objectives = self.repo.objectives_by_ids(
             list({chat.objective_id for chat in chats if chat.objective_id})
         )
+        kit_statuses = self.repo.kit_statuses([chat.kit_id for chat in chats if chat.kit_id])
         items = []
         for chat in chats:
             row = objectives.get(chat.objective_id) if chat.objective_id else None
@@ -133,7 +154,12 @@ class LessonChatService:
                 {
                     "id": chat.id,
                     "status": chat.status,
+                    "mode": _mode(chat),
                     "kit_id": chat.kit_id,
+                    "kit_status": kit_statuses.get(chat.kit_id),
+                    # Подпись строки в боковой панели: тема урока, пока её нет —
+                    # первая реплика; у пустого чата подписи нет, её даёт экран
+                    "title": chat.topic or (first[:FIRST_MESSAGE_MAX] if first else None),
                     "topic": chat.topic,
                     "subject_code": row[2].code if row is not None else None,
                     "grade": row[0].grade if row is not None else None,
@@ -149,9 +175,7 @@ class LessonChatService:
     def check_say(self, user: User, chat_id: int, text: str) -> str:
         """Проверки, которые обязаны стать обычным HTTP-отказом, — до стрима:
         как только ответ потёк, статус уже отдан."""
-        chat = self._own(user, chat_id)
-        if chat.status == "confirmed":
-            raise ChatConfirmedError(chat.kit_id)
+        self._own(user, chat_id)
         text = text.strip()
         if not text:
             raise FieldError("text", "Введите сообщение")
@@ -170,6 +194,8 @@ class LessonChatService:
 
         - `delta` — кусок ответа по мере генерации;
         - `tool` — найденные цели в момент поиска: экран рисует их карточками;
+        - `material_changed` — только в режиме правки: инструмент изменил блок
+          материала, в данных объект события ленты (`event`);
         - `done` — чат целиком: лента и заказ, каким его записал сервер;
         - `error` — провайдер не ответил.
 
@@ -180,12 +206,31 @@ class LessonChatService:
         и то, что по ней записал разбор.
         """
         chat = self._own(user, chat_id)
+        editing = _mode(chat) == "edit"
         history = self._history(chat.id)
         self.repo.add_message(chat.id, role="user", content=text)
-        extract_in, extract_out = self._extract(chat, text)
-
-        order = self._order_out(chat)
-        state = prompt.state_message(order, said=self._said(chat))
+        if editing:
+            # Заказ подтверждён и записан в комплект: разбирать в реплике нечего
+            extract_in = extract_out = 0
+            state = edit_prompt.state_message(self._kit_summary(chat))
+            loop = ToolLoop(
+                self.ai,
+                self.max_edit_tool_calls,
+                tools=EditTools(),
+                cap_message=edit_prompt.CAP_MESSAGE,
+            )
+            system = edit_prompt.SYSTEM
+            ctx: OrderCtx | EditCtx = EditCtx(
+                svc=self.materials, kits=self.kits.kits, user=user, kit_id=chat.kit_id
+            )
+        else:
+            extract_in, extract_out = self._extract(chat, text)
+            state = prompt.state_message(self._order_out(chat), said=self._said(chat))
+            loop = ToolLoop(
+                self.ai, self.max_tool_calls, tools=OrderTools(), cap_message=prompt.CAP_MESSAGE
+            )
+            system = prompt.SYSTEM
+            ctx = OrderCtx(repo=self.repo, user_id=user.id, chat_id=chat.id)
         messages = [
             *history,
             # Служебное сообщение — перед репликой, а не в системном промпте:
@@ -194,16 +239,17 @@ class LessonChatService:
             AiMessage(role="system", content=state),
             AiMessage(role="user", content=text),
         ]
-        loop = ToolLoop(
-            self.ai, self.max_tool_calls, tools=OrderTools(), cap_message=prompt.CAP_MESSAGE
-        )
-        ctx = OrderCtx(repo=self.repo, user_id=user.id, chat_id=chat.id)
         result: LoopResult | None = None
         try:
-            for event in loop.run_stream(system=prompt.SYSTEM, history=messages, ctx=ctx):
+            for event in loop.run_stream(system=system, history=messages, ctx=ctx):
                 if event.result is not None:
                     result = event.result
                 elif event.step is not None:
+                    # Карточка вызова и событие правки пишутся сразу, а не после
+                    # хода: правка блока может закоммитить транзакцию посреди
+                    # хода (перегенерация закрывает читающую транзакцию до вызова
+                    # модели), и событие обязано уйти в базу вместе с правкой
+                    self._persist_step(chat.id, event.step)
                     yield {
                         "event": "tool",
                         "data": {
@@ -212,6 +258,10 @@ class LessonChatService:
                             "tool_result": event.step.result,
                         },
                     }
+                    changed = _step_event(event.step.result)
+                    if changed is not None:
+                        # Материал справа можно подсветить, не дожидаясь конца хода
+                        yield {"event": "material_changed", "data": changed}
                 elif event.delta:
                     yield {"event": "delta", "data": {"text": event.delta}}
         except (AiUnavailableError, AiStreamBrokenError):
@@ -226,15 +276,6 @@ class LessonChatService:
             return
         assert result is not None
 
-        for step in result.steps:
-            self.repo.add_message(
-                chat.id,
-                role="tool",
-                tool_call_id=step.call_id,
-                tool_name=step.name,
-                tool_args=step.args,
-                tool_result=step.result,
-            )
         self.repo.add_message(
             chat.id,
             role="assistant",
@@ -252,6 +293,22 @@ class LessonChatService:
             "event": "done",
             "data": {"chat": self._out(chat), "stopped_at_cap": result.stopped_at_cap},
         }
+
+    def _persist_step(self, chat_id: int, step: Step) -> None:
+        self.repo.add_message(
+            chat_id,
+            role="tool",
+            tool_call_id=step.call_id,
+            tool_name=step.name,
+            tool_args=step.args,
+            tool_result=step.result,
+        )
+        changed = _step_event(step.result)
+        if changed is not None:
+            # Событие — сразу за карточкой вызова, который его породил
+            self.repo.add_message(
+                chat_id, role="event", content=event_text(changed), event=changed
+            )
 
     def _spent(self, user_id: int, chat_id: int, tokens_in: int, tokens_out: int) -> None:
         LessonUsageRepo(self.db).add(
@@ -425,6 +482,11 @@ class LessonChatService:
         chat.notes = notes
         chat.updated_at = now_utc()
         self.db.flush()
+        # Чат остаётся рабочим местом комплекта: в ленте — «комплект готовится»
+        # (или сразу «готов», если весь собран из банка); дальше событие
+        # о готовности пишет воркер, закрывший последнее задание
+        record_kit_event(self.db, self.kits.kits.kit(kit["id"]))
+        self.db.flush()
         return {"chat": self._out(chat), "kit": kit}
 
     # -- справочник для экрана «выбрать самому» ------------------------------
@@ -542,11 +604,45 @@ class LessonChatService:
             "ready": not missing,
         }
 
+    def feed(self, user: User, chat_id: int, *, after_id: int) -> dict:
+        """Лента после указанной строки — для опроса, пока комплект собирается:
+        воркер дописывает события, когда экран ничего не отправляет. Вместе
+        с лентой — комплект: статусы материалов нужны экрану в тот же момент."""
+        chat = self._own(user, chat_id)
+        return {
+            "status": chat.status,
+            "mode": _mode(chat),
+            "kit": self._kit_summary(chat),
+            "items": [_message_out(row) for row in self.repo.messages(chat.id, after_id=after_id)],
+        }
+
+    def _kit_summary(self, chat: LessonAiChat) -> dict | None:
+        """Комплект чата без содержимого: статусы и параметры урока. Содержимое
+        экран берёт у ручек материалов, а модель — у инструментов."""
+        kit = self.kits.kits.kit(chat.kit_id) if chat.kit_id else None
+        if kit is None:
+            return None
+        return {
+            "id": kit.id,
+            "status": kit.status,
+            "topic": kit.topic,
+            "grade": kit.grade,
+            "lang": kit.lang,
+            "engagement_level": kit.engagement_level,
+            "difficulty_level": kit.difficulty_level,
+            "materials": [
+                {"id": m.id, "kind": m.kind, "status": m.status}
+                for m in self.kits.kits.materials(kit.id)
+            ],
+        }
+
     def _out(self, chat: LessonAiChat) -> dict:
         return {
             "id": chat.id,
             "status": chat.status,
+            "mode": _mode(chat),
             "kit_id": chat.kit_id,
+            "kit": self._kit_summary(chat),
             "order": self._order_out(chat),
             "items": [_message_out(row) for row in self.repo.messages(chat.id)],
             "created_at": chat.created_at,
@@ -572,7 +668,9 @@ class LessonChatService:
         отверг бы переписку целиком. Как у ассистента — это второе такое
         место, и выносить общее пока рано (CLAUDE.md, DRY по третьему).
         """
-        rows = self.repo.messages(chat_id)[-self.history_messages :]
+        # События ленты — для экрана; модель их не читает
+        rows = [row for row in self.repo.messages(chat_id) if row.role != "event"]
+        rows = rows[-self.history_messages :]
         while rows and rows[0].role != "user":
             rows.pop(0)
 
@@ -608,6 +706,17 @@ class LessonChatService:
         return out
 
 
+def _mode(chat: LessonAiChat) -> str:
+    """`order` — заказ собирается; `edit` — комплект заказан, чат правит материалы."""
+    return "edit" if chat.status == "confirmed" else "order"
+
+
+def _step_event(result: dict) -> dict | None:
+    """Событие правки, если инструмент что-то изменил: его несёт успешный результат."""
+    event = result.get("event") if isinstance(result, dict) else None
+    return event if isinstance(event, dict) else None
+
+
 def _kinds(kinds: list) -> list[str]:
     """Виды без повторов и чужих слов, в порядке брифа (раздел 4.2)."""
     return [kind for kind in MATERIAL_KINDS if kind in kinds]
@@ -631,5 +740,6 @@ def _message_out(row: LessonAiChatMessage) -> dict:
         "tool_name": row.tool_name,
         "tool_args": row.tool_args,
         "tool_result": row.tool_result,
+        "event": row.event,
         "created_at": row.created_at,
     }

@@ -116,6 +116,18 @@ def objective_code_in(text: str) -> str | None:
 
 
 KIT_STATUSES = ("generating", "ready", "partial", "failed")
+# Названия видов для событий ленты чата: подпись события пишет сервер, а язык
+# интерфейса учителя ему неизвестен — запасная подпись русская, экран при желании
+# строит свою по объекту `event`
+KIND_TITLES_RU = {
+    "lesson_plan": "ҚМЖ",
+    "presentation": "Презентация",
+    "tasks": "Задания",
+    "homework": "Домашнее задание",
+    "assessment": "Проверочная работа",
+    "game": "Игра",
+    "answer_key": "Ключи с ответами",
+}
 MATERIAL_STATUSES = ("queued", "generating", "ready", "failed")
 JOB_STATUSES = ("queued", "running", "done", "failed")
 # Откуда взялось содержимое блока. Первая генерация, блок, переписанный моделью

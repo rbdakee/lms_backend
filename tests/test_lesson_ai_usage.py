@@ -47,9 +47,7 @@ from tests.test_lesson_ai_chat import (
     OTHER_PHONE,
     SilentAi,
     StreamingChatAi,
-    confirm,
     new_chat,
-    ready_chat,
     say,
 )
 from tests.test_lesson_ai_chat import Scene as ChatScene
@@ -406,17 +404,12 @@ def test_refusals_before_the_stream_cost_nothing(
     client, sms, ai, chat_scene, lesson_chat_limiter_clock
 ):
     """Отказ до стрима — модель не звали, строки нет: пустой текст,
-    подтверждённый чат, потолок реплик."""
+    потолок реплик."""
     login(client, sms)
     chat = new_chat(client)
     assert client.post(
         f"/lesson_ai/chats/{chat['id']}/messages", json={"text": "  "}
     ).status_code == 422
-
-    confirmed = ready_chat(client, chat_scene)
-    assert confirm(client, confirmed["id"], notes=NOTES).status_code == 201
-    resp = client.post(f"/lesson_ai/chats/{confirmed['id']}/messages", json={"text": "ещё"})
-    assert resp.status_code == 409, resp.text
 
     limiter = app.dependency_overrides[get_lesson_chat_limiter]()
     while limiter.hit(str(user_id(client))) == 0:

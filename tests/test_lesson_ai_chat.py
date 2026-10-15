@@ -267,7 +267,9 @@ def test_new_chat_is_an_empty_order(client, sms, ai):
     assert body == {
         "id": body["id"],
         "status": "collecting",
+        "mode": "order",
         "kit_id": None,
+        "kit": None,
         "order": {
             "subject_code": None,
             "grade": None,
@@ -940,9 +942,10 @@ def test_confirm_with_explicit_values_overrides_the_chat(client, sms, ai, scene)
     assert (kit["class_size"], kit["notes"]) == (18, "устный счёт")
 
 
-def test_confirmed_chat_is_closed(client, sms, ai, scene):
-    """Чат — про один урок: после «Готовить» ни реплик, ни кнопок, ни второго
-    комплекта; в отказе — номер заведённого, чтобы экран на него перешёл."""
+def test_confirmed_chat_is_closed_for_the_order(client, sms, ai, scene):
+    """Заказ после «Готовить» закрыт: ни кнопок, ни второго комплекта; в отказе —
+    номер заведённого. Реплики при этом принимаются — чат стал рабочим местом
+    комплекта (`test_lesson_ai_chat_edit.py`)."""
     login(client, sms)
     chat = ready_chat(client, scene)
     body = confirm(client, chat["id"]).json()
@@ -957,7 +960,6 @@ def test_confirmed_chat_is_closed(client, sms, ai, scene):
     }
 
     responses = [
-        client.post(f"/lesson_ai/chats/{chat['id']}/messages", json={"text": "ещё один"}),
         patch(client, chat["id"], topic="Другая тема"),
         confirm(client, chat["id"]),
     ]
@@ -1492,7 +1494,10 @@ def test_chat_list_row_fields(client, sms, ai, scene):
     assert rows[empty["id"]] == {
         "id": empty["id"],
         "status": "collecting",
+        "mode": "order",
         "kit_id": None,
+        "kit_status": None,
+        "title": None,
         "topic": None,
         "subject_code": None,
         "grade": None,
