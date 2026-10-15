@@ -5,7 +5,7 @@
 добавление: у чата четыре новые колонки, группы — новая таблица.
 
 Revision ID: d5f3b9a1c274
-Revises: c4e8a2f17b93
+Revises: d5f1b7c2a904
 Create Date: 2026-10-15 22:00:00.000000
 
 """
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "d5f3b9a1c274"
-down_revision = "c4e8a2f17b93"
+down_revision = "d5f1b7c2a904"
 branch_labels = None
 depends_on = None
 
