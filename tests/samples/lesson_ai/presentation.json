@@ -5,45 +5,77 @@
  ],
  "slides_beginning": [
   {
+   "layout": "image_text",
    "title": "Вспомним",
    "lines": [
     "40 + 7",
     "56 − 6",
     "30 + 20"
    ],
+   "left_title": "",
+   "right_title": "",
+   "right_lines": [],
+   "fact": "",
+   "answer": "",
+   "image": "abacus",
+   "animation": "appear",
    "visual": "10 палочек пучком и 7 отдельно",
    "notes": "Начало урока, шаг 1: устный счёт хором."
   }
  ],
  "slides_middle": [
   {
+   "layout": "image_text",
    "title": "Считаем по разрядам",
    "lines": [
     "34 + 25",
     "3 дес. + 2 дес. = 5 дес.",
     "4 ед. + 5 ед. = 9 ед."
    ],
+   "left_title": "",
+   "right_title": "",
+   "right_lines": [],
+   "fact": "",
+   "answer": "",
+   "image": "",
+   "animation": "appear",
    "visual": "10 палочек пучком и 7 отдельно",
    "notes": "Середина урока, шаг 1: объяснение на примере."
   },
   {
+   "layout": "question",
    "title": "Реши сам",
    "lines": [
-    "57 − 23",
-    "61 + 18",
-    "45 − 12"
+    "71",
+    "79",
+    "67"
    ],
-   "visual": "10 палочек пучком и 7 отдельно",
+   "left_title": "",
+   "right_title": "",
+   "right_lines": [],
+   "fact": "",
+   "answer": "79",
+   "image": "pencil",
+   "animation": "appear",
+   "visual": "Три варианта ответа крупно.",
    "notes": "Середина урока, шаг 2: самостоятельная работа."
   }
  ],
  "slides_end": [
   {
+   "layout": "summary",
    "title": "Что мы узнали?",
    "lines": [
     "Десятки — с десятками",
     "Единицы — с единицами"
    ],
+   "left_title": "",
+   "right_title": "",
+   "right_lines": [],
+   "fact": "",
+   "answer": "",
+   "image": "",
+   "animation": "appear",
    "visual": "10 палочек пучком и 7 отдельно",
    "notes": "Конец урока: итог и рефлексия."
   }

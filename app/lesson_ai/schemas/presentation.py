@@ -105,11 +105,11 @@ class Slide(Strict):
     )
     left_title: str = Field(
         default="",
-        description="Только two_columns: заголовок левой колонки, 1–3 слова. У остальных типов пусто.",
+        description="Только two_columns: заголовок левой колонки, 1–3 слова. Иначе пусто.",
     )
     right_title: str = Field(
         default="",
-        description="Только two_columns: заголовок правой колонки, 1–3 слова. У остальных типов пусто.",
+        description="Только two_columns: заголовок правой колонки, 1–3 слова. Иначе пусто.",
     )
     right_lines: list[Text] = Field(
         default_factory=list,

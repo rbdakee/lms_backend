@@ -6,7 +6,8 @@
 увидел бы на сайте не то, что распечатает. Из файла берётся только то, чем
 пользуются наши рендеры (`app/adapters/docx/*`, `app/adapters/pptx/*`):
 абзацы с жирным, курсивом и кеглем, выравнивание, таблицы с объединёнными
-ячейками, рамки, разрывы страниц; у презентации — фигуры слайдов (плашки, текст, картинки) и заметки.
+ячейками, рамки, разрывы страниц; у презентации — фигуры слайдов (плашки, текст,
+картинки) и заметки.
 
 Документ не копирует страницу A4, а переливается под ширину экрана: на 390px
 телефона лист в масштабе был бы набран шрифтом в 8px. Таблицы держат пропорции
@@ -301,8 +302,7 @@ def _shape(shape, width: int, height: int) -> str:
         src = base64.b64encode(shape.image.blob).decode()
         alt = escape(shape._element.nvPicPr.cNvPr.get("descr") or "", quote=True)
         return (
-            f'<img class="bar" alt="{alt}" src="data:{mime};base64,{src}" '
-            f'style="{";".join(css)}">'
+            f'<img class="bar" alt="{alt}" src="data:{mime};base64,{src}" style="{";".join(css)}">'
         )
     fill = _fill(shape) if shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE else None
     if fill:
@@ -313,7 +313,8 @@ def _shape(shape, width: int, height: int) -> str:
             css.append("border-radius:50%")
         elif kind == "roundRect":
             # Скругление — доля короткой стороны, как у PowerPoint
-            css.append(f"border-radius:{min(shape.adjustments[0], 0.5) * min(shape.width, shape.height) / width * 100:.2f}cqw")
+            radius = min(shape.adjustments[0], 0.5) * min(shape.width, shape.height)
+            css.append(f"border-radius:{_cqw(int(radius), width)}")
     if not (shape.has_text_frame and shape.text_frame.text.strip()):
         return f'<div class="bar" style="{";".join(css)}"></div>'
     frame = shape.text_frame

@@ -42,7 +42,17 @@ from tests.test_lesson_ai_usage import NOTES, run_next, usage
 
 pytestmark = pytest.mark.usefixtures("lesson_ai_open")
 
+# Слайд целиком, как его хранит схема: правка проходит проверку и дописывает
+# умолчания, поэтому в базе слайд ровно такой
 SLIDE = {
+    "layout": "image_text",
+    "left_title": "",
+    "right_title": "",
+    "right_lines": [],
+    "fact": "",
+    "answer": "",
+    "image": "pencil",
+    "animation": "appear",
     "title": "Проверь себя",
     "lines": ["34 + 25 = ?", "52 + 16 = ?"],
     "visual": "Две строки примеров на доске крупным шрифтом.",
@@ -154,6 +164,7 @@ def test_chat_keeps_going_after_confirm(client, sms, ai, scene):
         edit_tools.DELETE,
         edit_tools.SET_OBJECTIVES,
         *edit_tools.SEARCH_TOOLS,
+        edit_tools.FIND_IMAGE,
     ]
     # Изменчивое — в служебном сообщении, а не в системном промпте
     state = next(m.content for m in call["messages"] if m.role == "system")

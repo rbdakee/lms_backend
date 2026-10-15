@@ -75,7 +75,9 @@ def animate(slide, groups: list[list[Target]], kind: str) -> None:
 def fade_transition(slide) -> None:
     """Плавная смена слайда. Стоит перед `p:timing`: порядок детей `p:sld`
     в схеме — cSld, clrMapOvr, transition, timing."""
-    _after_clr_map(slide, parse_xml(f'<p:transition {nsdecls("p")} spd="med"><p:fade/></p:transition>'))
+    _after_clr_map(
+        slide, parse_xml(f'<p:transition {nsdecls("p")} spd="med"><p:fade/></p:transition>')
+    )
 
 
 def _effect(ids, target: Target, kind: str, node: str) -> str:
@@ -89,8 +91,9 @@ def _effect(ids, target: Target, kind: str, node: str) -> str:
             "</p:txEl></p:spTgt>"
         )
     visible = (
-        '<p:set><p:cBhvr>'
-        f'<p:cTn id="{set_id}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>'
+        "<p:set><p:cBhvr>"
+        f'<p:cTn id="{set_id}" dur="1" fill="hold">'
+        '<p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>'
         f"<p:tgtEl>{shape}</p:tgtEl>"
         "<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr>"
         '<p:to><p:strVal val="visible"/></p:to></p:set>'
@@ -98,7 +101,8 @@ def _effect(ids, target: Target, kind: str, node: str) -> str:
     fade = ""
     if kind == "fade":
         fade = (
-            f'<p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="{next(ids)}" dur="{FADE_MS}"/>'
+            '<p:animEffect transition="in" filter="fade"><p:cBhvr>'
+            f'<p:cTn id="{next(ids)}" dur="{FADE_MS}"/>'
             f"<p:tgtEl>{shape}</p:tgtEl></p:cBhvr></p:animEffect>"
         )
     return (
