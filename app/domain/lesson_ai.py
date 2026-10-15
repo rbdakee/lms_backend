@@ -109,6 +109,30 @@ def search_stems(query: str) -> list[str]:
     return stems[:SEARCH_STEMS_MAX]
 
 
+# Больше стольких целей на урок — повод переспросить учителя один раз
+# (решение владельца 15.10.2026). Это не потолок: сколько целей, решает учитель.
+MANY_OBJECTIVES = 3
+
+
+def distinct_ids(ids) -> list[int]:
+    """Дубли схлопываются, порядок учителя сохраняется: первая отметка
+    цели и есть её место."""
+    return list(dict.fromkeys(ids))
+
+
+def objective_key(ids) -> str:
+    """Ключ набора целей для банка: id по возрастанию через запятую. Порядок
+    в ключ не входит — «совпадение всего набора» (решение владельца 15.10.2026)
+    не зависит от того, в какой последовательности учитель отметил цели."""
+    return ",".join(str(i) for i in sorted(set(ids)))
+
+
+def objectives_compatible(keys) -> bool:
+    """Цели одного урока — из одной программы (она даёт предмет и язык
+    редакции) и одного класса. `keys` — пары (program_id, grade) по целям."""
+    return len(set(keys)) <= 1
+
+
 def objective_code_in(text: str) -> str | None:
     """Код цели, если учитель назвал его в запросе, — первый найденный."""
     found = _CODE.findall(text)
@@ -120,7 +144,7 @@ KIT_STATUSES = ("generating", "ready", "partial", "failed")
 # интерфейса учителя ему неизвестен — запасная подпись русская, экран при желании
 # строит свою по объекту `event`
 KIND_TITLES_RU = {
-    "lesson_plan": "ҚМЖ",
+    "lesson_plan": "Краткосрочный план",
     "presentation": "Презентация",
     "tasks": "Задания",
     "homework": "Домашнее задание",

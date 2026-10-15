@@ -21,7 +21,11 @@ DifficultyLevel = Literal["basic", "standard", "advanced"]
 
 
 class LessonKitIn(BaseModel):
-    """Заказ комплекта. Язык и класс не принимаются: их знает цель обучения.
+    """Заказ комплекта. Язык и класс не принимаются: их знают цели обучения.
+
+    `objective_ids` — цели урока в порядке учителя, без потолка по числу.
+    Все из одной программы и одного класса, иначе 422 `objectives_mixed`;
+    повторы схлопываются.
 
     `kinds` — что подготовить, любые из семи видов. `answer_key` не генерируется,
     а собирается из ответов к `tasks`, `homework` и `assessment` — без них
@@ -31,7 +35,7 @@ class LessonKitIn(BaseModel):
     уровень. Не прислал — середина, `active` и `standard`.
     """
 
-    objective_id: int
+    objective_ids: list[int] = Field(min_length=1)
     topic: str = Field(min_length=1, max_length=200)
     kinds: list[MaterialKind] = Field(min_length=1)
     class_size: int | None = Field(default=None, ge=1, le=60)
@@ -81,7 +85,7 @@ class LessonKitOut(BaseModel):
     перерисовывается одним и тем же ответом."""
 
     id: int
-    objective: LessonObjectiveOut
+    objectives: list[LessonObjectiveOut]
     subject_code: str
     grade: int
     lang: Literal["ru", "kz"]
@@ -107,7 +111,7 @@ class LessonKitListItemOut(BaseModel):
     и `class_size`, материалы — только `id`, `kind`, `status`."""
 
     id: int
-    objective: LessonObjectiveOut
+    objectives: list[LessonObjectiveOut]
     subject_code: str
     grade: int
     lang: Literal["ru", "kz"]
@@ -211,7 +215,9 @@ class LessonChatOrderOut(BaseModel):
     subject_code: str | None
     grade: int | None
     lang: Literal["ru", "kz"] | None
-    objective: LessonChatObjectiveOut | None
+    objectives: list[LessonChatObjectiveOut]
+    # Учитель подтвердил, что целей больше трёх и столько нужно
+    many_objectives_confirmed: bool
     topic: str | None
     engagement_level: EngagementLevel
     difficulty_level: DifficultyLevel
@@ -338,7 +344,8 @@ class LessonChatOrderPatchIn(BaseModel):
     """Кнопки под сообщениями: «Да, она», «Русский» / «Қазақша», правка темы.
     Прислано `null` — поле стёрто; не прислано — не тронуто."""
 
-    objective_id: int | None = None
+    objective_ids: list[int] | None = None
+    many_objectives_confirmed: bool | None = None
     lang: Literal["ru", "kz"] | None = None
     topic: str | None = None
 

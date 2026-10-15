@@ -125,13 +125,19 @@ class SubjectSpec:
     # с разными целями. Пара регулярок (русская редакция, казахская) для скобки
     # в шапке приложения; None — у предмета программа одна.
     instruction: tuple[str, str] | None = None
+    # Язык, на котором написаны сами цели, если он не язык редакции: цели
+    # иностранных языков в приказе — на изучаемом языке в обеих редакциях.
+    # None — цели на языке редакции (русская по-русски, казахская по-казахски)
+    objectives_language: str | None = None
 
 
 def _subject(code: str, title: str, name_ru: str, name_kz: str,
              grades: tuple[int, ...],
-             instruction: tuple[str, str] | None = None) -> SubjectSpec:
+             instruction: tuple[str, str] | None = None,
+             objectives_language: str | None = None) -> SubjectSpec:
     return SubjectSpec(code=code, title=title, name_ru=name_ru, name_kz=name_kz,
-                       grades=grades, instruction=instruction)
+                       grades=grades, instruction=instruction,
+                       objectives_language=objectives_language)
 
 
 # Скобка языка обучения в шапке приложения. «С казахским» не лежит внутри
@@ -185,9 +191,12 @@ _SUBJECTS: dict[str, SubjectSpec] = {
                  "Русский язык", "Орыс тілі", (2, 3, 4), _INSTR_NOT_RU),
         _subject("literary_reading_ru", "Литературное чтение (русский язык обучения)",
                  "Литературное чтение", "Әдебиеттік оқу", (2, 3, 4), _INSTR_RU),
-        _subject("english", "Английский язык", "Английский язык", "Ағылшын тілі", (3, 4)),
-        _subject("german", "Немецкий язык", "Немецкий язык", "Неміс тілі", (3, 4)),
-        _subject("french", "Французский язык", "Французский язык", "Француз тілі", (3, 4)),
+        _subject("english", "Английский язык", "Английский язык", "Ағылшын тілі", (3, 4),
+                 objectives_language="en"),
+        _subject("german", "Немецкий язык", "Немецкий язык", "Неміс тілі", (3, 4),
+                 objectives_language="de"),
+        _subject("french", "Французский язык", "Французский язык", "Француз тілі", (3, 4),
+                 objectives_language="fr"),
     )
 }
 
@@ -201,6 +210,14 @@ _KZ_INSTRUCTION = {
     "_INSTR_RU": "оқыту орыс тілінде",
     "_INSTR_NOT_RU": "оқыту орыс тілінде емес",
 }
+
+
+def objectives_language(code: str, edition: str) -> str:
+    """Язык текста целей предмета: `ru`, `kz`, `en`, `de` или `fr`. Поиск по целям
+    лексический, поэтому язык запроса должен совпасть с ним, а не с языком чата.
+    Предмета нет в реестре — язык редакции."""
+    spec = _SUBJECTS.get(code)
+    return spec.objectives_language if spec and spec.objectives_language else edition
 
 
 def subject_title_kz(code: str, fallback: str) -> str:

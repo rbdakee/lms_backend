@@ -6107,7 +6107,7 @@ OpenAPI есть всегда.
 ```json
 // запрос
 {
-  "objective_id": 845,
+  "objective_ids": [845, 846],
   "topic": "Сложение и вычитание двузначных чисел",
   "kinds": ["lesson_plan"],
   "class_size": 24,
@@ -6115,7 +6115,10 @@ OpenAPI есть всегда.
 }
 ```
 
-- `objective_id` — цель обучения из справочника; её подтверждает учитель (раздел 1 брифа).
+- `objective_ids` — цели урока из справочника **в порядке учителя** (решение владельца
+  15.10.2026); подтверждает их учитель. Хотя бы одна, потолка нет. Все цели — из одной
+  программы (предмет и язык редакции) и одного класса, иначе `422 objectives_mixed`;
+  повторы схлопываются, пустой список — `422`, неизвестный id — `404`.
 - `topic` — тема урока своими словами, 1–200 знаков, не из одних пробелов.
 - `kinds` — что подготовить, хотя бы один вид. **Пока принимается только `"lesson_plan"`**;
   повтор вида не заводит второй материал.
@@ -6128,12 +6131,12 @@ OpenAPI есть всегда.
 // 201
 {
   "id": 3,
-  "objective": {
+  "objectives": [{
     "id": 845,
     "code": "2.1.2.6",
     "text": "выполнять устно сложение и вычитание двузначных чисел без перехода через десяток в таких случаях, как 40+17, 57-40, 57-17, 35±12",
     "marker": ""
-  },
+  }],
   "subject_code": "math",
   "grade": 2,
   "lang": "ru",
@@ -6156,7 +6159,7 @@ OpenAPI есть всегда.
 }
 ```
 
-`objective` — строка справочника **дословно**, с кодом: это то, что учитель подтвердил.
+`objectives` — строки справочника **дословно**, с кодом, в порядке учителя: это то, что он подтвердил. Во все материалы комплекта уходят все цели, а сервер подставляет их коды в документ по порядку.
 
 ```json
 // 409 program_not_published — программа цели в состоянии loaded
@@ -6186,7 +6189,7 @@ OpenAPI есть всегда.
 // 200 — готово
 {
   "id": 1,
-  "objective": { "id": 845, "code": "2.1.2.6", "text": "…", "marker": "" },
+  "objectives": [{ "id": 845, "code": "2.1.2.6", "text": "…", "marker": "" }],
   "subject_code": "math",
   "grade": 2,
   "lang": "ru",
@@ -6558,7 +6561,7 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
 ```json
 // запрос
 {
-  "objective_id": 845,
+  "objective_ids": [845],
   "topic": "Сложение и вычитание двузначных чисел",
   "kinds": ["lesson_plan", "presentation", "tasks", "homework", "assessment", "game", "answer_key"],
   "engagement_level": "active",
@@ -6760,7 +6763,7 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
 
 ## Цель обучения — одна форма везде
 
-Инструменты чата (`tool_result.items`), карточка заказа (`order.objective`) и список
+Инструменты чата (`tool_result.items`), карточка урока (`order.objectives`) и список
 «выбрать самому» (`GET /lesson_ai/objectives`) отдают цель одинаково — строкой справочника
 дословно:
 
@@ -6797,7 +6800,8 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
     "subject_code": null,
     "grade": null,
     "lang": null,
-    "objective": null,
+    "objectives": [],
+    "many_objectives_confirmed": false,
     "topic": null,
     "engagement_level": "active",
     "difficulty_level": "standard",
@@ -6819,7 +6823,8 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
 |---|---|
 | `subject_code`, `grade` | из цели; до подтверждения цели — `null` |
 | `lang` | язык обучения — **спрашивается отдельно**, из цели не выводится |
-| `objective` | подтверждённая цель в редакции языка класса; `null` — ещё нет |
+| `objectives` | подтверждённые цели в редакции языка класса, в порядке учителя; `[]` — ещё нет. Все из одной программы и одного класса |
+| `many_objectives_confirmed` | учитель ответил «да, столько» на вопрос помощника при целях больше трёх; сбрасывается, когда набор целей меняется |
 | `topic` | тема, как записать её в план |
 | `engagement_level`, `difficulty_level` | сказанное в разговоре, иначе середина — `active` и `standard`: это **предвыбор** на карточке, а не ответ |
 | `kinds` | сказанное в разговоре, иначе список по умолчанию, как на экране брифа |
@@ -6827,7 +6832,7 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
 | `missing` | кого из пятерых нет: `subject`, `grade`, `lang`, `objective`, `topic` — в этом порядке |
 | `ready` | `missing` пуст: показывать карточку с галочками, двумя вопросами уровней и «Готовить» |
 
-Цель программы, снятой с публикации, в заказе не числится — `objective: null`
+Цель программы, снятой с публикации, в заказе не числится — `objectives: []`
 и `"objective"` в `missing`: генерация по ней закрыта, и учитель увидит недостачу,
 а не отказ после «Готовить».
 
@@ -6885,6 +6890,7 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
 | Поле | Что это |
 |---|---|
 | `status`, `kit_id` | как у чата: `confirmed` — заказ ушёл в комплект `kit_id`, открывать экран комплекта |
+| `title` | название чата — название урока: тема; нет темы — «Предмет, N кл.: текст первой цели» (до 70 знаков, на языке программы); нет цели — `null`, и экран пишет «Новый урок» / «Жаңа сабақ». Первая реплика в название не идёт; название меняется по мере уточнения урока |
 | `topic` | тема из заказа; не названа — `null` |
 | `subject_code`, `grade` | из цели заказа, по тем же правилам, что `order`: нет цели, программа снята с публикации или цель не в редакции языка класса — `null` |
 | `first_message` | первая реплика учителя, не длиннее 120 символов; реплик нет (чат пустой или собран кнопками) — `null` |
@@ -6903,7 +6909,7 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
   "items": [
     {
       "id": 12,
-      "objective": { "id": 311, "code": "2.1.2.6", "text": "выполнять устно сложение и вычитание двузначных чисел…", "marker": "…" },
+      "objectives": [{ "id": 311, "code": "2.1.2.6", "text": "выполнять устно сложение и вычитание двузначных чисел…", "marker": "…" }],
       "subject_code": "math",
       "grade": 2,
       "lang": "ru",
@@ -6953,8 +6959,10 @@ content-disposition: attachment; filename="lesson_plan_1.docx"; filename*=UTF-8'
 }
 ```
 
-Строка `role: "tool"` — поиск по программе. Инструментов два: `find_objectives`
-(по словам) и `get_objective` (по коду). Нашлось — `tool_result.items`, форма цели выше.
+Строка `role: "tool"` — поиск по программе. Инструментов пять: `list_subjects` (предметы, классы, `objectives_language`),
+`browse_objectives` (цели класса по разделам, без `items`), `show_objectives` (показать выбранные
+карточками), `find_objectives` (по словам, `queries` — несколько вариантов; пусто — `hint`) и
+`get_objective` (по коду). Карточки рисуются из `tool_result.items`, форма цели выше.
 Отказ инструмента — `tool_result.error`, читает его модель, экрану показывать не обязательно:
 
 ```json
@@ -7025,11 +7033,11 @@ data: {"error": {"code": "ai_failed", "message": "Модель не ответи
 ## PATCH /lesson_ai/chats/{id}/order
 
 Кнопки под сообщениями: «Да, она» у карточки цели, «Русский» / «Қазақша», правка темы.
-Любое подмножество полей; `null` — стереть поле, не прислано — не тронуто.
+Любое подмножество полей; `null` — стереть поле, не прислано — не тронуто. `objective_ids` заменяет набор целей целиком (смешанный набор — `422 objectives_mixed`); `many_objectives_confirmed: true` — «да, столько».
 
 ```json
 // запрос — «Да, она»
-{ "objective_id": 1 }
+{ "objective_ids": [1, 2] }
 
 // запрос — язык и тема разом
 { "lang": "kz", "topic": "Екітаңбалы сандарды қосу және азайту" }
@@ -7039,7 +7047,7 @@ data: {"error": {"code": "ai_failed", "message": "Модель не ответи
 
 **Язык и цель согласованы всегда.** Назван казахский язык, а цель подтверждена в русской
 редакции — сервер берёт цель **того же кода** из опубликованной казахской редакции:
-в `order.objective` приезжает другой `id` и казахский текст приказа. Перевода нет.
+в `order.objectives` приезжают другие `id` и казахский текст приказа. Перевода нет.
 
 ```json
 // 404 — цели нет или её программа не опубликована
@@ -7082,7 +7090,7 @@ data: {"error": {"code": "ai_failed", "message": "Модель не ответи
 // 201
 {
   "chat": { "id": 1, "status": "confirmed", "kit_id": 1, "order": { "…": "…", "missing": [], "ready": true }, "items": [ … ], "…": "…" },
-  "kit": { "id": 1, "objective": { "id": 1, "code": "2.1.2.6", "text": "…", "marker": "" }, "subject_code": "math",
+  "kit": { "id": 1, "objectives": [{ "id": 1, "code": "2.1.2.6", "text": "…", "marker": "" }], "subject_code": "math",
            "grade": 2, "lang": "ru", "topic": "Сложение и вычитание двузначных чисел", "class_size": 24,
            "notes": "путают разряды", "engagement_level": "active", "difficulty_level": "advanced",
            "status": "generating", "materials": [ { "id": 1, "kind": "lesson_plan", "status": "queued", "…": "…" } ], "…": "…" }

@@ -267,7 +267,7 @@ def test_add_item_changes_the_block_and_writes_an_event(client, sms, ai, scene):
     rows = done(events_)["chat"]["items"][-4:]
     assert [r["role"] for r in rows] == ["user", "tool", "event", "assistant"]
     assert rows[2]["event"] == expected
-    assert rows[2]["content"] == "ҚМЖ: добавлен пункт 2 блока «stage_middle»"
+    assert rows[2]["content"] == "Краткосрочный план: добавлен пункт 2 блока «stage_middle»"
 
 
 def test_slide_number_runs_through_the_whole_presentation(client, sms, ai, scene):
@@ -465,7 +465,7 @@ def test_material_not_ready_while_generating(client, sms, ai, scene):
 
     assert tool_result(events_)["error"]["code"] == "material_not_ready"
     state = next(m.content for m in turn_calls(ai)[0]["messages"] if m.role == "system")
-    assert "lesson_plan (план урока ҚМЖ): ждёт очереди" in state
+    assert "lesson_plan (краткосрочный план (КСП; по-казахски ҚМЖ)): ждёт очереди" in state
 
 
 def test_edit_events_do_not_reach_the_model(client, sms, ai, scene):

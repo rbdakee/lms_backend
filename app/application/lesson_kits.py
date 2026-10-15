@@ -22,6 +22,7 @@ from app.application.ratelimit import SlidingWindowLimiter
 from app.domain.errors import (
     FieldError,
     NotFoundError,
+    ObjectivesMixedError,
     ProgramNotPublishedError,
     RateLimitedError,
 )
@@ -34,7 +35,9 @@ from app.domain.lesson_ai import (
     MATERIAL_KINDS,
     WAITS_FOR,
     bankable,
+    distinct_ids,
     kit_status,
+    objectives_compatible,
 )
 
 
@@ -54,7 +57,7 @@ class LessonKitsService:
         self,
         user: User,
         *,
-        objective_id: int,
+        objective_ids: list[int],
         topic: str,
         kinds: list[str],
         class_size: int | None,
@@ -73,10 +76,18 @@ class LessonKitsService:
                 "Ключи с ответами собираются из заданий, домашнего задания"
                 " или проверочной — отметьте хотя бы одно из них",
             )
-        card = self.kits.objective_card(objective_id)
-        if card is None:
+        # Дубли схлопываются: цель, отмеченную дважды, учитель имел в виду один раз
+        objective_ids = distinct_ids(objective_ids)
+        if not objective_ids:
+            raise FieldError("objective_ids", "Отметьте хотя бы одну цель обучения")
+        cards = self.kits.objective_cards(objective_ids)
+        if cards is None:
             raise NotFoundError("Цель обучения не найдена")
-        objective, program, _subject = card
+        # Одна программа (предмет и язык редакции) и один класс — проверяет
+        # сервер, экран только подсказывает (решение владельца 15.10.2026)
+        if not objectives_compatible((program.id, obj.grade) for obj, program, _ in cards):
+            raise ObjectivesMixedError()
+        objective, program, _subject = cards[0]
         # Генерация видит только опубликованное: загруженная программа ещё
         # не вычитана владельцем (раздел 3.1)
         if program.status != "published":
@@ -92,9 +103,9 @@ class LessonKitsService:
             )
         kit = self.kits.create_kit(
             user_id=user.id,
-            objective_id=objective.id,
+            objective_ids=objective_ids,
             topic=topic,
-            # Класс и язык — из цели: язык документов равен языку обучения,
+            # Класс и язык — из целей (они у всех одни): язык документов равен языку обучения,
             # а цель взята из редакции приказа на этом языке (раздел 1)
             grade=objective.grade,
             lang=program.lang,
@@ -110,11 +121,13 @@ class LessonKitsService:
         banked = bankable(kit.notes)
         plan: LessonMaterialBank | None = None
         for kind in ordered:
-            variant = self._variant(kit, kind, ordered, plan) if banked else None
+            variant = self._variant(kit, objective_ids, kind, ordered, plan) if banked else None
             if variant is None:
                 self.kits.add_material(kit.id, kind)
                 continue
-            self.bank.issue(kit.id, variant, user_id=user.id)
+            self.bank.issue(
+                kit.id, variant, user_id=user.id, objectives=document_objectives(cards)
+            )
             if kind == "lesson_plan":
                 plan = variant
         # Статус пересчитывает закрытие задания, а у комплекта, собранного
@@ -126,6 +139,7 @@ class LessonKitsService:
     def _variant(
         self,
         kit: LessonKit,
+        objective_ids: list[int],
         kind: str,
         ordered: list[str],
         plan: LessonMaterialBank | None,
@@ -146,7 +160,7 @@ class LessonKitsService:
             plan_bank_id = plan.id
         return self.bank.unseen(
             kit.user_id,
-            objective_id=kit.objective_id,
+            objective_ids=objective_ids,
             kind=kind,
             lang=kit.lang,
             engagement_level=kit.engagement_level,
@@ -170,20 +184,17 @@ class LessonKitsService:
         Без `content`, `notes` и `class_size`: список не тянет документы,
         страница собирается тремя запросами при любом размере.
         """
-        rows, total = self.kits.user_kits(
+        kits, total = self.kits.user_kits(
             user.id, q=(q or "").strip() or None, offset=offset, limit=limit
         )
-        materials = self.kits.materials_of([kit.id for kit, _, _ in rows])
+        ids = [kit.id for kit in kits]
+        materials = self.kits.materials_of(ids)
+        cards = self.kits.kit_objectives(ids)
         items = [
             {
                 "id": kit.id,
-                "objective": {
-                    "id": objective.id,
-                    "code": objective.code,
-                    "text": objective.text,
-                    "marker": objective.marker,
-                },
-                "subject_code": subject.code,
+                "objectives": objectives_out(cards[kit.id]),
+                "subject_code": cards[kit.id][0][2].code,
                 "grade": kit.grade,
                 "lang": kit.lang,
                 "topic": kit.topic,
@@ -196,22 +207,17 @@ class LessonKitsService:
                     {"id": m.id, "kind": m.kind, "status": m.status} for m in materials[kit.id]
                 ],
             }
-            for kit, objective, subject in rows
+            for kit in kits
         ]
         return {"items": items, "total": total}
 
     def _out(self, kit: LessonKit) -> dict:
-        objective, _program, subject = self.kits.objective_card(kit.objective_id)
+        cards = self.kits.kit_objectives([kit.id])[kit.id]
         errors = self.kits.last_errors(kit.id)
         return {
             "id": kit.id,
-            "objective": {
-                "id": objective.id,
-                "code": objective.code,
-                "text": objective.text,
-                "marker": objective.marker,
-            },
-            "subject_code": subject.code,
+            "objectives": objectives_out(cards),
+            "subject_code": cards[0][2].code,
             "grade": kit.grade,
             "lang": kit.lang,
             "topic": kit.topic,
@@ -238,6 +244,19 @@ class LessonKitsService:
                 for material in self.kits.materials(kit.id)
             ],
         }
+
+
+def objectives_out(cards) -> list[dict]:
+    """Цели комплекта дословно из справочника, в порядке учителя."""
+    return [
+        {"id": obj.id, "code": obj.code, "text": obj.text, "marker": obj.marker}
+        for obj, _program, _subject in cards
+    ]
+
+
+def document_objectives(cards) -> list[dict]:
+    """Блок `learning_objectives` документа: без номера строки справочника."""
+    return [{"code": o.code, "text": o.text, "marker": o.marker} for o, _p, _s in cards]
 
 
 def _error(code: str | None) -> dict | None:

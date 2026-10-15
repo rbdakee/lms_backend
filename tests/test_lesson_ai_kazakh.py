@@ -287,7 +287,7 @@ def generate(client, ai, objective_id: int, draft: dict, topic: str, **headers) 
     именно своему комплекту."""
     resp = client.post(
         "/lesson_ai/kits",
-        json={"objective_id": objective_id, "topic": topic, "kinds": ["lesson_plan"]},
+        json={"objective_ids": [objective_id], "topic": topic, "kinds": ["lesson_plan"]},
         headers=headers,
     )
     assert resp.status_code == 201, resp.text
@@ -368,8 +368,8 @@ def test_kazakh_objective_makes_a_kazakh_document(client, kz_kit):
     """Языка в заказе нет — его знает цель, взятая из казахской редакции.
     Комплект казахский, и документ открывается казахским заголовком формы."""
     assert kz_kit["lang"] == "kz"
-    assert kz_kit["objective"] == {
-        "id": kz_kit["objective"]["id"],
+    assert kz_kit["objectives"][0] == {
+        "id": kz_kit["objectives"][0]["id"],
         "code": CODE,
         "text": KZ_OBJECTIVE,
         "marker": "",

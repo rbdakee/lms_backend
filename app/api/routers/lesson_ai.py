@@ -79,7 +79,7 @@ def create_kit(
     return LessonKitOut(
         **svc.create(
             user,
-            objective_id=body.objective_id,
+            objective_ids=body.objective_ids,
             topic=body.topic,
             kinds=list(body.kinds),
             class_size=body.class_size,

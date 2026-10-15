@@ -52,7 +52,7 @@ NOTES = "в классе двое новеньких, Арман и Дана п�
 
 BANK_COLUMNS = {
     "id",
-    "objective_id",
+    "objective_key",
     "kind",
     "lang",
     "engagement_level",
@@ -138,7 +138,7 @@ def test_first_kit_generates_and_banks_every_kind_but_keys(client, sms, scene):
     assert sorted(row["kind"] for row in rows) == sorted(BANK_KINDS)
     [plan] = bank("lesson_plan")
     for row in rows:
-        assert (row["objective_id"], row["lang"]) == (scene.objective.id, "ru")
+        assert (row["objective_key"], row["lang"]) == (str(scene.objective.id), "ru")
         assert (row["engagement_level"], row["difficulty_level"]) == ("active", "standard")
         assert row["model"] == "gpt-test"
         assert row["plan_bank_id"] == (None if row["kind"] == "lesson_plan" else plan["id"])
@@ -248,14 +248,15 @@ def other_objective(scene: Scene) -> int:
         ("lang", "'kz'"),
         ("engagement_level", "'calm'"),
         ("difficulty_level", "'advanced'"),
-        ("objective_id", None),
+        ("objective_key", None),
     ],
 )
 def test_other_key_is_a_miss(client, sms, scene, column, value):
     """Любое поле ключа не совпало — банк не отвечает, всё генерируется
     и ложится в банк вторым вариантом."""
     banked(client, sms, scene)
-    execute(f"UPDATE lesson_material_bank SET {column} = {value or other_objective(scene)}")
+    value = value or repr(str(other_objective(scene)))
+    execute(f"UPDATE lesson_material_bank SET {column} = {value}")
     ai = KindAi()
 
     kit_id = kit_of(client, sms, scene, phone=OTHER_PHONE)["id"]

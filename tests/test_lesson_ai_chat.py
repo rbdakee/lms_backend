@@ -26,7 +26,12 @@ from sqlalchemy.orm import Session as OrmSession
 from app.adapters.ai.openai_chat import AiUnavailableError
 from app.adapters.db.base import get_engine
 from app.adapters.db.lesson_ai_repos import LessonChatRepo
-from app.adapters.db.models import LessonAiChatMessage, LessonAiJob, LessonKit
+from app.adapters.db.models import (
+    LessonAiChatMessage,
+    LessonAiJob,
+    LessonKit,
+    LessonKitObjective,
+)
 from app.api.deps import get_lesson_block_ai, get_lesson_chat_limiter
 from app.application.ports import AiDelta, AiMessage, AiReply, AiToolCall
 from app.config import get_settings
@@ -201,7 +206,7 @@ def ready_chat(client, scene: Scene, *, objective=None, lang="ru", topic=TOPIC) 
     """Чат с собранными пятью — кнопками, без модели: проверкам подтверждения
     разговор не нужен."""
     chat = new_chat(client)
-    fields = {"objective_id": (objective or scene.objective).id, "lang": lang, "topic": topic}
+    fields = {"objective_ids": [(objective or scene.objective).id], "lang": lang, "topic": topic}
     fields = {name: value for name, value in fields.items() if value is not None}
     resp = patch(client, chat["id"], **fields)
     assert resp.status_code == 200, resp.text
@@ -274,7 +279,8 @@ def test_new_chat_is_an_empty_order(client, sms, ai):
             "subject_code": None,
             "grade": None,
             "lang": None,
-            "objective": None,
+            "objectives": [],
+            "many_objectives_confirmed": False,
             "topic": None,
             "engagement_level": "active",
             "difficulty_level": "standard",
@@ -362,12 +368,11 @@ def test_brief_scenario_end_to_end(client, sms, ai, scene):
     assert feed[1]["tool_result"] == tool["tool_result"]
     assert feed[2]["content"] == "Нашёл в программе цель. Она?"
     # Модель показала цель, но подтвердить её может только учитель
-    assert turn["chat"]["order"]["objective"] is None
+    assert turn["chat"]["order"]["objectives"] == []
 
-    order = done(say(client, ai, chat["id"], "да", extract={"objective_id": scene.objective.id}))[
-        "chat"
-    ]["order"]
-    assert order["objective"] == item(scene.objective)
+    extract = {"objective_ids": [scene.objective.id]}
+    order = done(say(client, ai, chat["id"], "да", extract=extract))["chat"]["order"]
+    assert order["objectives"] == [item(scene.objective)]
     assert (order["subject_code"], order["grade"]) == ("math", 2)
     assert order["missing"] == ["lang", "topic"]
 
@@ -391,9 +396,9 @@ def test_brief_scenario_end_to_end(client, sms, ai, scene):
     assert resp.status_code == 201, resp.text
     body = resp.json()
     kit = body["kit"]
-    assert kit["objective"] == {
-        "id": scene.objective.id, "code": CODE, "text": OBJECTIVE_TEXT, "marker": ""
-    }
+    assert kit["objectives"] == [
+        {"id": scene.objective.id, "code": CODE, "text": OBJECTIVE_TEXT, "marker": ""}
+    ]
     assert (kit["grade"], kit["lang"], kit["topic"], kit["subject_code"]) == (
         2, "ru", TOPIC, "math"
     )
@@ -406,9 +411,10 @@ def test_brief_scenario_end_to_end(client, sms, ai, scene):
     assert client.get(f"/lesson_ai/kits/{kit['id']}").json()["id"] == kit["id"]
     with OrmSession(get_engine()) as db:
         [row] = db.scalars(select(LessonKit)).all()
-        assert (row.objective_id, row.topic, row.grade, row.lang) == (
-            scene.objective.id, TOPIC, 2, "ru"
-        )
+        assert (row.topic, row.grade, row.lang) == (TOPIC, 2, "ru")
+        assert db.scalars(
+            select(LessonKitObjective.objective_id).where(LessonKitObjective.kit_id == row.id)
+        ).all() == [scene.objective.id]
         jobs = db.scalars(select(LessonAiJob).order_by(LessonAiJob.id)).all()
         assert sorted(job.kind for job in jobs) == sorted(kinds)
 
@@ -503,7 +509,7 @@ def test_incomplete_order_is_not_confirmed(client, sms, scene, drop, missing):
             topic=None if drop == "topic" else TOPIC,
         )
         if drop == "objective":
-            assert patch(client, chat["id"], objective_id=None).status_code == 200
+            assert patch(client, chat["id"], objective_ids=None).status_code == 200
 
     resp = confirm(client, chat["id"])
 
@@ -566,10 +572,10 @@ def test_objective_not_shown_to_the_teacher_is_ignored(client, sms, ai, scene):
     assert scene.first_grade.id not in shown
 
     for objective_id in (scene.first_grade.id, scene.hidden.id, 999999):
-        order = done(say(client, ai, chat["id"], "да", extract={"objective_id": objective_id}))[
+        order = done(say(client, ai, chat["id"], "да", extract={"objective_ids": [objective_id]}))[
             "chat"
         ]["order"]
-        assert order["objective"] is None, objective_id
+        assert order["objectives"] == [], objective_id
 
 
 def test_objective_shown_in_another_chat_does_not_count(client, sms, ai, scene):
@@ -578,11 +584,10 @@ def test_objective_shown_in_another_chat_does_not_count(client, sms, ai, scene):
     say(client, ai, seen["id"], FIRST_REPLY, then=shows())
     other = new_chat(client)
 
-    order = done(say(client, ai, other["id"], "да", extract={"objective_id": scene.objective.id}))[
-        "chat"
-    ]["order"]
+    extract = {"objective_ids": [scene.objective.id]}
+    order = done(say(client, ai, other["id"], "да", extract=extract))["chat"]["order"]
 
-    assert order["objective"] is None
+    assert order["objectives"] == []
 
 
 def test_named_subject_that_differs_from_shown_objective_blocks_it(client, sms, ai, scene):
@@ -592,13 +597,13 @@ def test_named_subject_that_differs_from_shown_objective_blocks_it(client, sms, 
     chat = new_chat(client)
     say(client, ai, chat["id"], FIRST_REPLY, then=shows())
 
-    extract = {"objective_id": scene.objective.id, "subject_code": "music"}
+    extract = {"objective_ids": [scene.objective.id], "subject_code": "music"}
     order = done(say(client, ai, chat["id"], "да, музыка", extract=extract))["chat"]["order"]
-    assert order["objective"] is None
+    assert order["objectives"] == []
 
-    extract = {"objective_id": scene.objective.id, "subject_code": "math"}
+    extract = {"objective_ids": [scene.objective.id], "subject_code": "math"}
     order = done(say(client, ai, chat["id"], "да, математика", extract=extract))["chat"]["order"]
-    assert order["objective"] == item(scene.objective)
+    assert order["objectives"] == [item(scene.objective)]
 
 
 def test_loaded_program_is_invisible(client, sms, ai, scene):
@@ -617,11 +622,11 @@ def test_loaded_program_is_invisible(client, sms, ai, scene):
     listed = client.get("/lesson_ai/objectives", params={"q": "сравнивать двузначных"}).json()
     assert scene.hidden.id not in {row["id"] for row in listed["items"]}
 
-    resp = patch(client, chat["id"], objective_id=scene.hidden.id)
+    resp = patch(client, chat["id"], objective_ids=[scene.hidden.id])
     assert resp.status_code == 404, resp.text
     assert resp.json()["error"] == {"code": "not_found", "message": "Цель обучения не найдена"}
-    assert patch(client, chat["id"], objective_id=999999).status_code == 404
-    assert get_chat(client, chat["id"])["order"]["objective"] is None
+    assert patch(client, chat["id"], objective_ids=[999999]).status_code == 404
+    assert get_chat(client, chat["id"])["order"]["objectives"] == []
 
 
 def test_button_accepts_any_published_objective(client, sms, scene):
@@ -629,11 +634,11 @@ def test_button_accepts_any_published_objective(client, sms, scene):
     login(client, sms)
     chat = new_chat(client)
 
-    resp = patch(client, chat["id"], objective_id=scene.within_100.id)
+    resp = patch(client, chat["id"], objective_ids=[scene.within_100.id])
 
     assert resp.status_code == 200, resp.text
     order = resp.json()["order"]
-    assert order["objective"] == item(scene.within_100)
+    assert order["objectives"] == [item(scene.within_100)]
     assert order["missing"] == ["lang", "topic"]
 
 
@@ -646,22 +651,22 @@ def test_kazakh_class_gets_the_kazakh_row_of_the_same_code(client, sms, ai, scen
     login(client, sms)
     chat = new_chat(client)
     say(client, ai, chat["id"], FIRST_REPLY, then=shows())
-    say(client, ai, chat["id"], "да", extract={"objective_id": scene.objective.id})
+    say(client, ai, chat["id"], "да", extract={"objective_ids": [scene.objective.id]})
 
     order = done(say(client, ai, chat["id"], "қазақша", extract={"lang": "kz"}))["chat"]["order"]
 
     assert order["lang"] == "kz"
-    assert order["objective"] == item(scene.kz_objective, lang="kz")
-    assert order["objective"]["id"] != scene.objective.id
-    assert order["objective"]["text"] == KZ_TEXT
+    assert order["objectives"] == [item(scene.kz_objective, lang="kz")]
+    assert order["objectives"][0]["id"] != scene.objective.id
+    assert order["objectives"][0]["text"] == KZ_TEXT
 
     assert patch(client, chat["id"], topic="Екі таңбалы сандарды қосу").status_code == 200
     resp = confirm(client, chat["id"])
     assert resp.status_code == 201, resp.text
     kit = resp.json()["kit"]
     assert kit["lang"] == "kz"
-    assert kit["objective"]["id"] == scene.kz_objective.id
-    assert kit["objective"]["text"] == KZ_TEXT
+    assert kit["objectives"][0]["id"] == scene.kz_objective.id
+    assert kit["objectives"][0]["text"] == KZ_TEXT
 
 
 def test_confirmed_objective_and_language_in_one_reply(client, sms, ai, scene):
@@ -674,11 +679,11 @@ def test_confirmed_objective_and_language_in_one_reply(client, sms, ai, scene):
     order = done(
         say(
             client, ai, chat["id"], "да, она, класс казахский",
-            extract={"objective_id": scene.objective.id, "lang": "kz"},
+            extract={"objective_ids": [scene.objective.id], "lang": "kz"},
         )
     )["chat"]["order"]
 
-    assert order["objective"]["id"] == scene.kz_objective.id
+    assert order["objectives"][0]["id"] == scene.kz_objective.id
     assert order["lang"] == "kz"
 
 
@@ -687,9 +692,9 @@ def test_objective_picked_after_language_comes_in_its_edition(client, sms, scene
     chat = new_chat(client)
     assert patch(client, chat["id"], lang="kz").status_code == 200
 
-    order = patch(client, chat["id"], objective_id=scene.objective.id).json()["order"]
+    order = patch(client, chat["id"], objective_ids=[scene.objective.id]).json()["order"]
 
-    assert order["objective"] == item(scene.kz_objective, lang="kz")
+    assert order["objectives"] == [item(scene.kz_objective, lang="kz")]
 
 
 def test_language_button_without_the_kazakh_row_is_refused(client, sms, scene):
@@ -710,15 +715,15 @@ def test_language_button_without_the_kazakh_row_is_refused(client, sms, scene):
         }
     }
     order = get_chat(client, chat["id"])["order"]
-    assert (order["lang"], order["objective"]["id"]) == ("ru", scene.ru_only.id)
+    assert (order["lang"], order["objectives"][0]["id"]) == ("ru", scene.ru_only.id)
 
     # И в обратную сторону: язык уже казахский, а кнопка — у русской цели
     chat = new_chat(client)
     assert patch(client, chat["id"], lang="kz").status_code == 200
-    resp = patch(client, chat["id"], objective_id=scene.ru_only.id)
+    resp = patch(client, chat["id"], objective_ids=[scene.ru_only.id])
     assert resp.status_code == 409, resp.text
     assert resp.json()["error"]["code"] == "objective_lang_missing"
-    assert get_chat(client, chat["id"])["order"]["objective"] is None
+    assert get_chat(client, chat["id"])["order"]["objectives"] == []
 
 
 def test_language_said_in_words_wins_and_drops_the_objective(client, sms, ai, scene):
@@ -732,7 +737,7 @@ def test_language_said_in_words_wins_and_drops_the_objective(client, sms, ai, sc
     ]
 
     assert order["lang"] == "kz"
-    assert order["objective"] is None
+    assert order["objectives"] == []
     assert order["missing"] == ["subject", "grade", "objective"]
 
 
@@ -747,7 +752,7 @@ def test_counterpart_prefers_the_same_order(client, sms, scene):
 
     order = patch(client, chat["id"], lang="kz").json()["order"]
 
-    assert order["objective"]["id"] == scene.kz_objective.id
+    assert order["objectives"][0]["id"] == scene.kz_objective.id
 
 
 def test_language_switch_while_the_program_is_unpublished(client, sms, scene):
@@ -765,7 +770,7 @@ def test_language_switch_while_the_program_is_unpublished(client, sms, scene):
     resp = confirm(client, chat["id"])
 
     assert order["lang"] == "kz"
-    assert order["objective"] is None or order["objective"]["lang"] == "kz"
+    assert order["objectives"] == [] or order["objectives"][0]["lang"] == "kz"
     if resp.status_code == 201:
         assert resp.json()["kit"]["lang"] == "kz"
 
@@ -1000,7 +1005,7 @@ def test_unpublished_program_drops_the_objective_from_the_order(client, sms, sce
     set_program_status(scene.ru.id, "loaded")
 
     order = get_chat(client, chat["id"])["order"]
-    assert order["objective"] is None
+    assert order["objectives"] == []
     assert order["missing"] == ["subject", "grade", "objective"]
     resp = confirm(client, chat["id"])
     assert resp.status_code == 409, resp.text
@@ -1014,12 +1019,12 @@ def test_patch_order_edits_and_erases(client, sms, scene):
     chat = ready_chat(client, scene)
 
     order = patch(client, chat["id"], topic="  Новая тема  ").json()["order"]
-    assert (order["topic"], order["lang"], order["objective"]["id"]) == (
+    assert (order["topic"], order["lang"], order["objectives"][0]["id"]) == (
         "Новая тема", "ru", scene.objective.id
     )
     order = patch(client, chat["id"], lang=None, topic="").json()["order"]
     assert (order["lang"], order["topic"]) == (None, None)
-    assert order["objective"]["id"] == scene.objective.id
+    assert order["objectives"][0]["id"] == scene.objective.id
 
     resp = patch(client, chat["id"], topic="т" * 201)
     assert resp.status_code == 422, resp.text
@@ -1155,7 +1160,7 @@ def test_tool_call_cap_ends_the_turn_in_words(client, sms, ai, scene):
     assert feed[-1]["content"] == "Пока нашёл вот что — уточните урок"
 
 
-# -- 12. служебное сообщение «Заказ сейчас» ------------------------------------------------
+# -- 12. служебное сообщение «Урок сейчас» ------------------------------------------------
 
 
 def test_state_message_goes_right_before_the_reply(client, sms, ai, scene):
@@ -1163,21 +1168,21 @@ def test_state_message_goes_right_before_the_reply(client, sms, ai, scene):
     сообщением перед репликой, а не в системном промпте."""
     login(client, sms)
     chat = new_chat(client)
-    assert patch(client, chat["id"], objective_id=scene.objective.id, lang="ru").status_code == 200
+    resp = patch(client, chat["id"], objective_ids=[scene.objective.id], lang="ru")
+    assert resp.status_code == 200
 
     say(client, ai, chat["id"], "а тема какая?")
 
     call = turn_calls(ai)[-1]
     assert call["tools"] and {tool["function"]["name"] for tool in call["tools"]} == {
-        "find_objectives", "get_objective"
+        "list_subjects", "browse_objectives", "show_objectives", "find_objectives", "get_objective"
     }
     assert call["messages"][-1] == AiMessage(role="user", content="а тема какая?")
     state = call["messages"][-2]
     assert state.role == "system"
-    assert state.content.startswith("Заказ сейчас")
-    assert f"- цель обучения: {CODE} — {OBJECTIVE_TEXT} (русская редакция, 2 класс)" in (
-        state.content
-    )
+    assert state.content.startswith("Урок сейчас")
+    assert f"1. {CODE} — {OBJECTIVE_TEXT}" in state.content
+    assert "(русская редакция, 2 класс), по порядку учителя" in state.content
     assert "- язык обучения: русский" in state.content
     assert "- тема: не названа" in state.content
     assert "- как проводим: не спрашивали" in state.content
@@ -1383,9 +1388,9 @@ def test_find_objectives_filters(tools, scene):
     assert codes(tools("find_objectives", query="екі таңбалы сандарды қосу", lang="kz")) == [
         (CODE, "kz"), ("2.1.2.5", "kz")
     ]
-    assert tools("find_objectives", query="екі таңбалы сандарды қосу", lang="ru") == {
-        "items": []
-    }
+    empty = tools("find_objectives", query="екі таңбалы сандарды қосу", lang="ru")
+    assert empty["items"] == []
+    assert "browse_objectives" in empty["hint"]
 
 
 def test_find_objectives_puts_the_named_code_first(tools, scene):
@@ -1505,7 +1510,7 @@ def test_unknown_tool_is_refused(tools, scene):
 
 def test_order_tools_are_exactly_two():
     assert [schema["function"]["name"] for schema in OrderTools().schemas()] == [
-        "find_objectives", "get_objective"
+        "list_subjects", "browse_objectives", "show_objectives", "find_objectives", "get_objective"
     ]
     # Разбор просит у модели ровно те виды и уровни, что знает сервер
     properties = prompt.EXTRACT_SCHEMA["properties"]

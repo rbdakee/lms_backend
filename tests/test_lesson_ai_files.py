@@ -264,7 +264,7 @@ def ready_kit(client, ai, objective_id: int, kinds, topic: str = TOPIC) -> dict:
     """Заказ и генерация всех видов по образцам. Очередь берёт задания
     в порядке видов брифа, ключи — последними: их ответ не нужен."""
     resp = client.post(
-        "/lesson_ai/kits", json={"objective_id": objective_id, "topic": topic, "kinds": kinds}
+        "/lesson_ai/kits", json={"objective_ids": [objective_id], "topic": topic, "kinds": kinds}
     )
     assert resp.status_code == 201, resp.text
     for kind in [kind for kind in MODEL_KINDS if kind in kinds]:

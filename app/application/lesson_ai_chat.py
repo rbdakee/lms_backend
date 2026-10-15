@@ -58,6 +58,7 @@ from app.domain.errors import (
     FieldError,
     NotFoundError,
     ObjectiveLangMissingError,
+    ObjectivesMixedError,
     OrderIncompleteError,
     RateLimitedError,
 )
@@ -67,8 +68,11 @@ from app.domain.lesson_ai import (
     DEFAULT_KINDS,
     DIFFICULTY_LEVELS,
     ENGAGEMENT_LEVELS,
+    MANY_OBJECTIVES,
     MATERIAL_KINDS,
+    distinct_ids,
     objective_code_in,
+    objectives_compatible,
     order_missing,
     search_stems,
 )
@@ -93,6 +97,8 @@ EXTRACT_DIALOG = 6
 SHOWN_MAX = 20
 # Первая реплика в истории чатов — строкой-подписью, а не текстом целиком
 FIRST_MESSAGE_MAX = 120
+# Цель в названии чата усекается: название — строка боковой панели
+TITLE_OBJECTIVE_MAX = 70
 
 
 class LessonChatService:
@@ -139,17 +145,15 @@ class LessonChatService:
         """
         chats, total = self.repo.user_chats(user.id, offset=offset, limit=limit)
         firsts = self.repo.first_user_messages([chat.id for chat in chats])
+        chosen = self.repo.chat_objective_ids([chat.id for chat in chats])
         objectives = self.repo.objectives_by_ids(
-            list({chat.objective_id for chat in chats if chat.objective_id})
+            list({oid for ids in chosen.values() for oid in ids})
         )
         kit_statuses = self.repo.kit_statuses([chat.kit_id for chat in chats if chat.kit_id])
         items = []
         for chat in chats:
-            row = objectives.get(chat.objective_id) if chat.objective_id else None
-            # То же правило, что в `_order_out`: цель не в редакции языка класса
-            # в заказ не засчитывается — и в истории предмета и класса у неё нет
-            if row is not None and chat.lang and row[1].lang != chat.lang:
-                row = None
+            rows = self._visible(chat, [objectives.get(oid) for oid in chosen[chat.id]])
+            row = rows[0] if rows else None
             first = firsts.get(chat.id)
             items.append(
                 {
@@ -158,9 +162,9 @@ class LessonChatService:
                     "mode": _mode(chat),
                     "kit_id": chat.kit_id,
                     "kit_status": kit_statuses.get(chat.kit_id),
-                    # Подпись строки в боковой панели: тема урока, пока её нет —
-                    # первая реплика; у пустого чата подписи нет, её даёт экран
-                    "title": chat.topic or (first[:FIRST_MESSAGE_MAX] if first else None),
+                    # Название чата — название урока, а не первая реплика:
+                    # меняется само по мере того, как урок уточняется
+                    "title": _title(chat.topic, row),
                     "topic": chat.topic,
                     "subject_code": row[2].code if row is not None else None,
                     "grade": row[0].grade if row is not None else None,
@@ -231,7 +235,7 @@ class LessonChatService:
                 self.ai, self.max_tool_calls, tools=OrderTools(), cap_message=prompt.CAP_MESSAGE
             )
             system = prompt.SYSTEM
-            ctx = OrderCtx(repo=self.repo, user_id=user.id, chat_id=chat.id)
+            ctx = OrderCtx(repo=self.repo, user_id=user.id, chat_id=chat.id, lang=chat.lang)
         messages = [
             *history,
             # Служебное сообщение — перед репликой, а не в системном промпте:
@@ -370,15 +374,25 @@ class LessonChatService:
         Порядок — цель, потом язык: «да, она, класс казахский» подтверждает
         русскую строку и тут же меняет её на казахскую того же кода.
         """
-        objective_id = data.get("objective_id")
-        if isinstance(objective_id, int) and objective_id in shown:
-            # Код цели общий для многих предметов: если учитель назвал предмет,
-            # а подтверждённая строка из другого, цель в заказ не идёт
+        ids = data.get("objective_ids")
+        if isinstance(ids, list):
+            ids = [i for i in ids if isinstance(i, int) and not isinstance(i, bool)]
+            # Цели ещё не записанные берутся только из показанных учителю: подтвердить
+            # можно то, что видел. Код цели общий для многих предметов: если учитель
+            # назвал предмет, а строка из другого, цель в урок не идёт
+            current = set(self.repo.chat_objective_ids([chat.id])[chat.id])
             named = data.get("subject_code")
-            if not (
-                isinstance(named, str) and named and named != shown[objective_id]["subject_code"]
-            ):
-                self._set_objective(chat, objective_id, strict=False)
+            ids = [
+                i
+                for i in ids
+                if i in current
+                or (
+                    i in shown
+                    and not (isinstance(named, str) and named and named != shown[i]["subject_code"])
+                )
+            ]
+            if ids:
+                self._set_objectives(chat, ids, strict=False)
         lang = data.get("lang")
         if lang in ("ru", "kz"):
             self._set_lang(chat, lang, strict=False)
@@ -389,6 +403,8 @@ class LessonChatService:
             chat.engagement_level = data["engagement_level"]
         if data.get("difficulty_level") in DIFFICULTY_LEVELS:
             chat.difficulty_level = data["difficulty_level"]
+        if data.get("many_confirmed") is True and len(self._rows(chat)) > MANY_OBJECTIVES:
+            chat.many_objectives_confirmed = True
         kinds = data.get("kinds")
         if isinstance(kinds, list):
             clean = _kinds(kinds)
@@ -411,11 +427,14 @@ class LessonChatService:
         chat = self._own(user, chat_id)
         if chat.status == "confirmed":
             raise ChatConfirmedError(chat.kit_id)
-        if "objective_id" in data:
-            if data["objective_id"] is None:
-                chat.objective_id = None
+        if "objective_ids" in data:
+            if not data["objective_ids"]:
+                self.repo.set_chat_objectives(chat.id, [])
+                chat.many_objectives_confirmed = False
             else:
-                self._set_objective(chat, data["objective_id"], strict=True)
+                self._set_objectives(chat, data["objective_ids"], strict=True)
+        if data.get("many_objectives_confirmed") is True:
+            chat.many_objectives_confirmed = True
         if "lang" in data:
             if data["lang"] is None:
                 chat.lang = None
@@ -466,7 +485,7 @@ class LessonChatService:
             notes = chat.notes
         kit = self.kits.create(
             user,
-            objective_id=order["objective"]["id"],
+            objective_ids=[o["id"] for o in order["objectives"]],
             topic=chat.topic,
             kinds=kinds,
             class_size=class_size,
@@ -547,45 +566,72 @@ class LessonChatService:
 
     # -- сборка -------------------------------------------------------------
 
-    def _set_objective(self, chat: LessonAiChat, objective_id: int, *, strict: bool) -> None:
-        """Цель — строка опубликованного справочника, в редакции языка класса.
+    def _set_objectives(
+        self, chat: LessonAiChat, objective_ids: list[int], *, strict: bool
+    ) -> None:
+        """Цели урока — строки опубликованного справочника, в редакции языка класса,
+        из одной программы и одного класса.
 
         Язык уже назван, а цель выбрана в другой редакции — берётся та же
         цель по коду из редакции языка класса: переводить формулировку нельзя.
+        Кнопка учителя (`strict`) получает отказ на смешанный набор; разбор реплики
+        оставляет цели первой программы и класса — остальное учитель не видел.
         """
-        row = self.repo.objective(objective_id)
-        if row is None:
-            if strict:
-                raise NotFoundError("Цель обучения не найдена")
-            return
-        if chat.lang and row[1].lang != chat.lang:
-            counterpart = self.repo.counterpart(objective_id, chat.lang)
-            if counterpart is None:
+        rows: list[ObjectiveRow] = []
+        for objective_id in distinct_ids(objective_ids):
+            row = self.repo.objective(objective_id)
+            if row is None:
                 if strict:
-                    raise ObjectiveLangMissingError(row[0].code, chat.lang)
-                return
-            row = counterpart
-        chat.objective_id = row[0].id
-
-    def _set_lang(self, chat: LessonAiChat, lang: str, *, strict: bool) -> None:
-        """Язык обучения и цель в его редакции — меняются вместе.
-
-        Цели нет в редакции нового языка: кнопка учителя получает отказ,
-        а разбор реплики выбирает язык — учитель его назвал только что,
-        и цель ему покажут заново уже из нужной редакции.
-        """
-        if chat.objective_id is not None:
-            # Язык цели — без фильтра публикации: программу могли снять на правку,
-            # а заказ всё равно обязан уйти в редакцию языка класса
-            source = self.repo.objective_lang(chat.objective_id)
-            if source is not None and source[1] != lang:
-                counterpart = self.repo.counterpart(chat.objective_id, lang)
+                    raise NotFoundError("Цель обучения не найдена")
+                continue
+            if chat.lang and row[1].lang != chat.lang:
+                counterpart = self.repo.counterpart(objective_id, chat.lang)
                 if counterpart is None:
                     if strict:
-                        raise ObjectiveLangMissingError(source[0], lang)
-                    chat.objective_id = None
-                else:
-                    chat.objective_id = counterpart[0].id
+                        raise ObjectiveLangMissingError(row[0].code, chat.lang)
+                    continue
+                row = counterpart
+            rows.append(row)
+        if not rows:
+            return
+        if not objectives_compatible((r[1].id, r[0].grade) for r in rows):
+            if strict:
+                raise ObjectivesMixedError()
+            head = (rows[0][1].id, rows[0][0].grade)
+            rows = [r for r in rows if (r[1].id, r[0].grade) == head]
+        self._store_objectives(chat, [r[0].id for r in rows])
+
+    def _store_objectives(self, chat: LessonAiChat, objective_ids: list[int]) -> None:
+        """Набор целей изменился — прежнее «да, столько» к нему уже не относится."""
+        if self.repo.chat_objective_ids([chat.id])[chat.id] != objective_ids:
+            chat.many_objectives_confirmed = False
+        self.repo.set_chat_objectives(chat.id, objective_ids)
+
+    def _set_lang(self, chat: LessonAiChat, lang: str, *, strict: bool) -> None:
+        """Язык обучения и цели в его редакции — меняются вместе.
+
+        Какой-то цели нет в редакции нового языка: кнопка учителя получает отказ,
+        а разбор реплики выбирает язык — учитель его назвал только что,
+        и цели ему покажут заново уже из нужной редакции.
+        """
+        current = self.repo.chat_objective_ids([chat.id])[chat.id]
+        swapped: list[int] = []
+        for objective_id in current:
+            # Язык цели — без фильтра публикации: программу могли снять на правку,
+            # а урок всё равно обязан уйти в редакцию языка класса
+            source = self.repo.objective_lang(objective_id)
+            if source is None or source[1] == lang:
+                swapped.append(objective_id)
+                continue
+            counterpart = self.repo.counterpart(objective_id, lang)
+            if counterpart is None:
+                if strict:
+                    raise ObjectiveLangMissingError(source[0], lang)
+                swapped = []
+                break
+            swapped.append(counterpart[0].id)
+        if swapped != current:
+            self._store_objectives(chat, swapped)
         chat.lang = lang
 
     def _own(self, user: User, chat_id: int) -> LessonAiChat:
@@ -601,31 +647,40 @@ class LessonChatService:
             "difficulty_level": chat.difficulty_level,
         }
 
-    def _objective_row(self, chat: LessonAiChat) -> ObjectiveRow | None:
-        return self.repo.objective(chat.objective_id) if chat.objective_id else None
+    def _rows(self, chat: LessonAiChat) -> list[ObjectiveRow]:
+        """Цели урока, видимые учителю, по его порядку."""
+        ids = self.repo.chat_objective_ids([chat.id])[chat.id]
+        found = self.repo.objectives_by_ids(ids)
+        return self._visible(chat, [found.get(i) for i in ids])
+
+    @staticmethod
+    def _visible(chat: LessonAiChat, rows: list[ObjectiveRow | None]) -> list[ObjectiveRow]:
+        """Цель снятой с публикации программы в уроке не числится: генерация по ней
+        закрыта, и учителю покажут недостачу, а не отказ после «Готовить». Так же —
+        цель не в редакции языка класса: комплект берёт язык из цели, и урок
+        ушёл бы не на том языке."""
+        return [
+            row
+            for row in rows
+            if row is not None and not (chat.lang and row[1].lang != chat.lang)
+        ]
 
     def _order_out(self, chat: LessonAiChat) -> dict:
-        """Карточка заказа. Цель снятой с публикации программы в заказе
-        не числится: генерация по ней закрыта, и учителю покажут недостачу,
-        а не отказ после «Готовить»."""
-        row = self._objective_row(chat)
-        # Цель не в редакции языка класса в заказ не засчитывается: комплект
-        # берёт язык из цели, и такой заказ ушёл бы не на том языке
-        if row is not None and chat.lang and row[1].lang != chat.lang:
-            row = None
-        objective = objective_item(row) if row is not None else None
+        """Карточка материалов к уроку, каким его записал сервер."""
+        objectives = [objective_item(row) for row in self._rows(chat)]
         missing = order_missing(
-            subject=objective["subject_code"] if objective else None,
-            grade=objective["grade"] if objective else None,
+            subject=objectives[0]["subject_code"] if objectives else None,
+            grade=objectives[0]["grade"] if objectives else None,
             lang=chat.lang,
-            objective=objective is not None,
+            objective=bool(objectives),
             topic=chat.topic,
         )
         return {
-            "subject_code": objective["subject_code"] if objective else None,
-            "grade": objective["grade"] if objective else None,
+            "subject_code": objectives[0]["subject_code"] if objectives else None,
+            "grade": objectives[0]["grade"] if objectives else None,
             "lang": chat.lang,
-            "objective": objective,
+            "objectives": objectives,
+            "many_objectives_confirmed": chat.many_objectives_confirmed,
             "topic": chat.topic,
             # Середина, пока учитель не сказал иначе: вопрос не блокирующий,
             # но задан он будет всегда — оба поля обязательны в подтверждении
@@ -738,6 +793,27 @@ class LessonChatService:
             out.append(AiMessage(role=row.role, content=row.content))
         flush()
         return out
+
+
+def _title(topic: str | None, row: ObjectiveRow | None) -> str | None:
+    """Название чата в боковой панели — название урока. По порядку:
+    тема; «Предмет, класс кл.: цель» по первой цели; предмет и класс;
+    ничего — `None`, и экран пишет «Новый урок». Первая реплика в название
+    не идёт: чат, начатый с «что ты умеешь?», так бы и назывался."""
+    if topic:
+        return topic
+    if row is None:
+        return None
+    objective, program, subject = row[0], row[1], row[2]
+    kz = program.lang == "kz"
+    name = subject_title_kz(subject.code, subject.title) if kz else subject.title
+    head = f"{name}, {objective.grade}-сынып" if kz else f"{name}, {objective.grade} кл."
+    text = " ".join(objective.text.split())
+    if not text:
+        return head
+    if len(text) > TITLE_OBJECTIVE_MAX:
+        text = text[: TITLE_OBJECTIVE_MAX - 1].rstrip() + "…"
+    return f"{head}: {text}"
 
 
 def _mode(chat: LessonAiChat) -> str:

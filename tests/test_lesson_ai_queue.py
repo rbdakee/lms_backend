@@ -99,7 +99,7 @@ def order_kit(user_id: int, objective_id: int) -> int:
     with OrmSession(get_engine()) as db:
         out = LessonKitsService(LessonKitRepo(db), limiter=SlidingWindowLimiter(100, 86400)).create(
             db.get(User, user_id),
-            objective_id=objective_id,
+            objective_ids=[objective_id],
             topic="Счёт до десяти",
             kinds=["lesson_plan"],
             class_size=24,

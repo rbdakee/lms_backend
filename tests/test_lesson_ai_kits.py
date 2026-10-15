@@ -129,7 +129,7 @@ def scene() -> Scene:
 
 
 def order(client, objective_id: int, **kw):
-    body = {"objective_id": objective_id, "topic": TOPIC, "kinds": ["lesson_plan"]}
+    body = {"objective_ids": [objective_id], "topic": TOPIC, "kinds": ["lesson_plan"]}
     body.update(kw)
     return client.post("/lesson_ai/kits", json=body)
 
@@ -207,12 +207,14 @@ def test_order_answers_with_the_contract_shape(client, sms, scene):
     [material] = body["materials"]
     assert body == {
         "id": body["id"],
-        "objective": {
-            "id": scene.objective.id,
-            "code": CODE,
-            "text": OBJECTIVE_TEXT,
-            "marker": "",
-        },
+        "objectives": [
+            {
+                "id": scene.objective.id,
+                "code": CODE,
+                "text": OBJECTIVE_TEXT,
+                "marker": "",
+            }
+        ],
         "subject_code": "math",
         "grade": 2,
         "lang": "ru",
@@ -268,7 +270,7 @@ def test_kazakh_objective_makes_a_kazakh_kit(client, sms):
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert (body["lang"], body["grade"]) == ("kz", 3)
-    assert body["objective"]["code"] == "3.1.2.4"
+    assert body["objectives"][0]["code"] == "3.1.2.4"
 
 
 def test_objective_of_an_unpublished_program_is_refused(client, sms):
@@ -496,7 +498,7 @@ def test_learning_objectives_come_from_the_dictionary_verbatim(client, sms, ai):
         "subsection": "Операции над числами",
     }
     assert content["lesson_goals"] == draft["lesson_goals"]
-    assert body["objective"]["marker"] == "**"
+    assert body["objectives"][0]["marker"] == "**"
 
 
 def test_model_never_sees_the_objective_code(client, sms, ai, scene):
@@ -545,11 +547,11 @@ def test_codes_are_cut_from_topic_notes_and_objective_text(client, sms, ai):
         in lines
     )
 
-    assert created["objective"]["text"] == glued
+    assert created["objectives"][0]["text"] == glued
     # Тему учитель написал сам, и она хранится как написана
     assert created["topic"] == "2.1.2.6 Сложение двузначных чисел"
     body = client.get(f"/lesson_ai/kits/{created['id']}").json()
-    assert body["objective"]["text"] == glued
+    assert body["objectives"][0]["text"] == glued
     content = body["materials"][0]["content"]
     assert content["learning_objectives"][0]["text"] == glued
 
@@ -673,7 +675,7 @@ def test_reimport_under_kits_is_refused(client, sms, lang):
     for kit_id in kit_ids:
         resp = client.get(f"/lesson_ai/kits/{kit_id}")
         assert resp.status_code == 200
-        assert resp.json()["objective"]["code"] == "1.1.1.1"
+        assert resp.json()["objectives"][0]["code"] == "1.1.1.1"
 
 
 # -- GET /lesson_ai/kits: «Мои уроки» --------------------------------------------------------
@@ -708,7 +710,7 @@ def test_kit_list_shows_only_own_kits_newest_first(client, client2, sms, scene):
     # Форма карточки: комплект без content, notes и class_size
     assert set(row) == {
         "id",
-        "objective",
+        "objectives",
         "subject_code",
         "grade",
         "lang",
@@ -720,12 +722,14 @@ def test_kit_list_shows_only_own_kits_newest_first(client, client2, sms, scene):
         "updated_at",
         "materials",
     }
-    assert row["objective"] == {
-        "id": scene.objective.id,
-        "code": CODE,
-        "text": OBJECTIVE_TEXT,
-        "marker": scene.objective.marker,
-    }
+    assert row["objectives"] == [
+        {
+            "id": scene.objective.id,
+            "code": CODE,
+            "text": OBJECTIVE_TEXT,
+            "marker": scene.objective.marker,
+        }
+    ]
     assert (row["subject_code"], row["lang"], row["topic"], row["status"]) == (
         "math",
         "ru",
