@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session as DbSession
 from app.adapters.ai.provider import ai_chat
 from app.adapters.db.base import get_db
 from app.adapters.db.lesson_ai_repos import LessonAccessRepo, LessonKitRepo, LessonMaterialRepo
+from app.adapters.db.mcp_repos import McpRepo
 from app.adapters.db.models import Session, User
 from app.adapters.db.preview import (
     PreviewEnrollmentRepo,
@@ -66,6 +67,7 @@ from app.application.lesson_kits import LessonKitsService
 from app.application.lesson_materials import LessonMaterialsService
 from app.application.lessons import LessonsService
 from app.application.lessons_admin import LessonsAdminService
+from app.application.mcp_access import McpAccessService
 from app.application.notifications import NotificationsService
 from app.application.overview import OverviewService
 from app.application.ports import AiPort, SmsPort, StoragePort, TelegramPort
@@ -667,6 +669,10 @@ def get_reviews_admin_service(db: Annotated[DbSession, Depends(get_db)]) -> Revi
 
 def get_admins_service(db: Annotated[DbSession, Depends(get_db)]) -> AdminsService:
     return AdminsService(users=UserRepo(db))
+
+
+def get_mcp_access_service(db: Annotated[DbSession, Depends(get_db)]) -> McpAccessService:
+    return McpAccessService(McpRepo(db), get_settings())
 
 
 def get_categories_service(db: Annotated[DbSession, Depends(get_db)]) -> CategoriesService:

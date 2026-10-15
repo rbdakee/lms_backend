@@ -19,6 +19,9 @@ os.environ["OPENAI_API_KEY"] = "test-key-not-a-real-one"
 # (`JobRunner.run_next`), подставив свой генератор или подставной ИИ.
 os.environ["LESSON_AI_ENABLED"] = "true"
 os.environ["LESSON_AI_WORKERS"] = "0"
+# MCP в тестах включён: выключатель по умолчанию закрыт, а ручки нужны всем
+# тестам в этой папке. Выключенный вариант проверяет `test_mcp_off.py` в отдельном процессе.
+os.environ["MCP_ENABLED"] = "true"
 
 import itertools
 import json
@@ -34,7 +37,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session as OrmSession
 
 # Импорт ради побочного действия: декораторы `@tool` наполняют реестр при загрузке
-# пакета. Сервис его больше не грузит (MCP-сервера пока нет), а тестам он нужен.
+# пакета. Сервис грузит его сам при MCP_ENABLED; тестам он нужен независимо от флага.
 import app.assistant.tools  # noqa: F401
 from app.adapters.ai.openai_chat import AiUnavailableError
 from app.adapters.db.base import get_engine
@@ -366,14 +369,14 @@ def tool_ctx():
     """
     sessions: list[OrmSession] = []
 
-    def make(admin_id: int, grants: dict | None = None) -> ToolCtx:
+    def make(admin_id: int, pd_allowed: bool = False) -> ToolCtx:
         db = OrmSession(get_engine())
         sessions.append(db)
         return ToolCtx(
             db=db,
             admin=db.get(User, admin_id),
             now=datetime.now(UTC),
-            grants=dict(grants or {}),
+            pd_allowed=pd_allowed,
         )
 
     yield make

@@ -240,11 +240,9 @@ def test_issuing_and_revoking_need_confirmation():
 def test_registration_number_is_a_required_argument():
     """Номер называет администратор — придумать его модели нечем: без
     аргумента вызов не проходит вовсе."""
-    schema = next(
-        item for item in registry.openai_tools() if item["function"]["name"] == "certificate_issue"
-    )["function"]
-    assert "registration_number" in schema["parameters"]["required"]
-    assert "ВЫДУМЫВАТЬ ЕГО НЕЛЬЗЯ" in schema["description"]
+    spec = registry.get("certificate_issue")
+    assert "registration_number" in spec.input_schema()["required"]
+    assert "ВЫДУМЫВАТЬ ЕГО НЕЛЬЗЯ" in spec.full_description()
 
 
 def test_certificate_issue_is_described_before_it_is_issued(client, sms, tool_ctx):

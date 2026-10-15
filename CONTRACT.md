@@ -5692,6 +5692,114 @@ Content-Disposition: attachment; filename="KZ-2026-XB7K2M.pdf"
 
 ---
 
+# MCP: работа админа из внешнего ИИ (`MCP_BRIEF`, 15.10.2026)
+
+Всё включается `MCP_ENABLED=true`; выключено — ни одной из ручек ниже нет (404).
+Адрес сервера для клиентов — `{PUBLIC_BASE_URL}/mcp`.
+
+## Для клиентов (не для фронта)
+
+- `POST /mcp` — Streamable HTTP, без сессий, ответы JSON. `Authorization: Bearer <токен>`.
+  Без токена или с негодным — `401` и
+  `WWW-Authenticate: Bearer resource_metadata="{base}/.well-known/oauth-protected-resource"`
+  (при негодном токене добавлено `error="invalid_token"`). Проверка отзыва и `is_admin` — на каждом вызове.
+- `GET /.well-known/oauth-protected-resource` (и `.../mcp`) — RFC 9728.
+- `GET /.well-known/oauth-authorization-server` — RFC 8414: `authorization_endpoint`,
+  `token_endpoint`, `registration_endpoint`, `code_challenge_methods_supported: ["S256"]`,
+  `token_endpoint_auth_methods_supported: ["none"]`, `scopes_supported: ["mcp"]`.
+- `POST /oauth/register` (RFC 7591, JSON) → `201`
+  `{"client_id": "mcp_client_...", "client_name": "Claude", "redirect_uris": [...],
+  "token_endpoint_auth_method": "none", "grant_types": [...], "response_types": ["code"], "scope": "mcp"}`.
+  Ошибка — `400 {"error": "invalid_redirect_uri", "error_description": "..."}` (формат RFC 6749, не общий).
+- `GET /oauth/authorize?client_id&redirect_uri&response_type=code&code_challenge&code_challenge_method=S256&state&scope&resource`
+  → `302` на `{ADMIN_BASE_URL}/mcp/authorize?<те же параметры>`. Клиент или `redirect_uri`
+  не опознаны — `400` JSON, без перехода; прочие ошибки — `302` на `redirect_uri` с `error=`.
+- `POST /oauth/token` (`application/x-www-form-urlencoded`):
+  `grant_type=authorization_code` (`code`, `client_id`, `redirect_uri`, `code_verifier`) или
+  `grant_type=refresh_token` (`refresh_token`, ротация). Ответ:
+  `{"access_token": "mcp_at_...", "token_type": "Bearer", "expires_in": 3600, "refresh_token": "mcp_rt_...", "scope": "mcp"}`.
+  Ошибка: `400 {"error": "invalid_grant", "error_description": "..."}`. Код живёт 5 минут и сгорает
+  при первой попытке, удачной или нет.
+
+## Экран согласия (`admin.domain.kz/mcp/authorize`)
+
+Админская кука, как у всех `/admin/*`. Параметры экран берёт из своего адреса.
+
+`GET /admin/mcp/authorize_info?<параметры из адреса>`:
+
+```json
+{
+  "valid": true,
+  "error_code": null,
+  "error_message": null,
+  "client": { "client_id": "mcp_client_Kx3...", "name": "Claude" },
+  "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+  "scope": "mcp"
+}
+```
+
+Негодный запрос — тоже `200`: `{"valid": false, "error_code": "invalid_request",
+"error_message": "...", "client": {...} | null, "redirect_uri": null, "scope": "mcp"}`;
+экран пишет «Запрос недействителен» и кнопок не показывает.
+
+`POST /admin/mcp/authorize`:
+
+```json
+{
+  "client_id": "mcp_client_Kx3...",
+  "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+  "response_type": "code",
+  "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+  "code_challenge_method": "S256",
+  "state": "abc123",
+  "scope": "mcp",
+  "resource": "https://api.domain.kz/mcp",
+  "decision": "allow",
+  "pd_allowed": false
+}
+```
+
+`decision` — `allow` | `deny`. Ответ: `{"redirect_to": "https://claude.ai/api/mcp/auth_callback?code=...&state=abc123"}`;
+при `deny` — `...?error=access_denied&state=abc123`. Фронт сам делает `location.href = redirect_to`.
+Клиент или `redirect_uri` не опознаны — `422` общего формата (переходить некуда).
+
+## Экран «Подключения ИИ»
+
+`GET /admin/mcp/connections` — только свои, только не отозванные, новые сверху:
+
+```json
+{
+  "items": [
+    { "id": 7, "name": "Codex на ноутбуке", "kind": "token", "pd_allowed": false, "created_at": "2026-10-15T10:20:00Z" },
+    { "id": 6, "name": "Claude", "kind": "oauth", "pd_allowed": true, "created_at": "2026-10-14T08:00:00Z" }
+  ]
+}
+```
+
+«Последнего использования» нет намеренно. Пусто — `{"items": []}`.
+
+`POST /admin/mcp/tokens` `{"name": "Codex на ноутбуке", "pd_allowed": false}` →
+`{"id": 7, "name": "...", "kind": "token", "pd_allowed": false, "created_at": "...", "token": "mcp_pat_..."}`.
+Токен показывается **только в этом ответе**. Имя пустое или длиннее 100 знаков — `422`.
+
+`PATCH /admin/mcp/connections/{id}` `{"pd_allowed": true}` → строка подключения (как в списке);
+действует со следующего вызова. `DELETE /admin/mcp/connections/{id}` → `204`, действует сразу.
+Чужое или уже отозванное — `404`.
+
+## Инструменты
+
+`tools/list` — весь реестр (`app/assistant/registry.py`). Аннотации: `read` →
+`readOnlyHint: true`; `write` → `readOnlyHint: false, destructiveHint: false`;
+`confirm` → `readOnlyHint: false, destructiveHint: true`, в описании «Выполняется сразу… сначала спроси человека».
+`tools/call` исполняет сразу. Ошибка инструмента — результат с `isError: true` и текстом
+`{"error": {"code": "pd_not_allowed", "message": "..."}}` (без персональных данных).
+Коды: `unknown_tool`, `missing_argument`, `bad_argument`, `not_found`, `pd_not_allowed`, `rate_limited`, `internal_error`.
+Лимит — `MCP_CALLS_PER_MIN` на подключение (по умолчанию 120).
+Допуск к персональным данным — флаг `pd_allowed` подключения: `teacher_card`, `teacher_update`,
+`enrollment_grant` без него отказывают `pd_not_allowed`; списки замаскированы всегда.
+
+---
+
 # Справочник учебной программы (сессия L2)
 
 Экран сверки в админке: владелец вычитывает импортированный справочник и открывает

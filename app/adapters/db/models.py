@@ -661,66 +661,97 @@ class AuthCode(Base):
     used_at: Mapped[datetime | None] = mapped_column()
 
 
-# Допуски к персональным данным — то, на чём держится маскирование в реестре
-# действий (`app/assistant/masking.py`). Допуск привязан к «чату», поэтому
-# вместе с ним остаётся таблица чата: чат-ассистент из кода убран (владелец,
-# 15.10.2026), но таблицы в базе живы вместе с историей, и миграций, которые
-# их дропают, нет. Лента, память и предложения здесь больше не описаны — их
-# строки остаются в базе нетронутыми.
+# MCP: работа админа из внешнего ИИ (`MCP_BRIEF`). Пять таблиц. Таблицы чата
+# ассистента (`assistant_*`) из кода убраны, но остаются в базе вместе
+# с историей: миграций, которые их дропают, нет.
 #
 # Площадки здесь нет ни у одной таблицы: админка одна на обе площадки,
 # площадка приходит аргументом инструмента.
 
 
-class AssistantThread(Base):
-    """Чат админа с ассистентом. Принадлежит тому, кто его создал: чужие
-    не видны — проверкой на сервере, а не скрытием в интерфейсе."""
+class McpClient(Base):
+    """Клиент OAuth, зарегистрированный динамически (RFC 7591).
 
-    __tablename__ = "assistant_thread"
+    Публичный: секрета нет, защита кода — PKCE. Имя человек читает на экране
+    согласия, поэтому оно показывается как есть и подтверждения не заменяет:
+    регистрироваться может кто угодно.
+    """
+
+    __tablename__ = "mcp_client"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    client_id: Mapped[str] = mapped_column(Text, unique=True)
+    name: Mapped[str] = mapped_column(Text)
+    redirect_uris: Mapped[list[str]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class McpConnection(Base):
+    """Подключение админа: строка и для OAuth, и для личного токена.
+
+    В базе лежат только хеши токенов (утечка дампа не отдаёт доступ).
+    Токен доступа личного токена не истекает (`access_expires_at` пусто) и
+    живёт до отзыва; у OAuth он короткий, а жизнь подключения держит токен
+    обновления. Отзыв — `revoked_at`: строка остаётся, журнал вызовов на неё
+    ссылается.
+    """
+
+    __tablename__ = "mcp_connection"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     admin_id: Mapped[int] = mapped_column(ForeignKey("user.id"), index=True)
-    # Заголовок ассистент пишет сам после первого ответа; до тех пор пусто,
-    # и список чатов показывает начало первого сообщения.
-    title: Mapped[str] = mapped_column(Text, default="", server_default="")
-    # Закреплённый курс.
-    #
-    # `SET NULL`, а не запрет: иначе удаление курса роняло бы запрос админа
-    # с 500 всякий раз, когда этот курс закреплён в чьём-то чате. Чат —
-    # черновик рассуждений одного человека, и он не должен держать курс.
-    course_id: Mapped[int | None] = mapped_column(
-        ForeignKey("course.id", ondelete="SET NULL")
-    )
-    archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    kind: Mapped[str] = mapped_column(Text)
+    # Имя клиента для OAuth, имя токена, которое ввёл админ, — для личного
+    name: Mapped[str] = mapped_column(Text)
+    client_id: Mapped[str | None] = mapped_column(Text)
+    # Допуск к персональным данным: подключение либо видит их все, либо нет
+    pd_allowed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    access_hash: Mapped[str] = mapped_column(Text, unique=True)
+    access_expires_at: Mapped[datetime | None] = mapped_column()
+    refresh_hash: Mapped[str | None] = mapped_column(Text, unique=True)
+    refresh_expires_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-
-class AssistantPdGrant(Base):
-    """Допуск к персональным данным одного человека в одном чате.
-
-    Допуска на список, на регион, на курс и на «всех» не бывает — отсюда
-    и ключ по паре «чат + человек» (ASSISTANT_BRIEF, раздел 5).
-    """
-
-    __tablename__ = "assistant_pd_grant"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    thread_id: Mapped[int] = mapped_column(
-        ForeignKey("assistant_thread.id", ondelete="CASCADE"), index=True
-    )
-    subject_user_id: Mapped[int] = mapped_column(ForeignKey("user.id"), index=True)
-    level: Mapped[str] = mapped_column(Text)
-    granted_by: Mapped[int] = mapped_column(ForeignKey("user.id"))
-    granted_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    # До конца казахстанских суток или до отзыва, что раньше.
-    expires_at: Mapped[datetime] = mapped_column()
     revoked_at: Mapped[datetime | None] = mapped_column()
 
-    __table_args__ = (
-        UniqueConstraint("thread_id", "subject_user_id"),
-        CheckConstraint("level IN ('read', 'write')", name="level"),
-    )
+    __table_args__ = (CheckConstraint("kind IN ('oauth', 'token')", name="kind"),)
+
+
+class McpAuthCode(Base):
+    """Одноразовый код авторизации: живёт минуты, обменивается один раз."""
+
+    __tablename__ = "mcp_auth_code"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    code_hash: Mapped[str] = mapped_column(Text, unique=True)
+    client_id: Mapped[str] = mapped_column(Text)
+    admin_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
+    redirect_uri: Mapped[str] = mapped_column(Text)
+    code_challenge: Mapped[str] = mapped_column(Text)
+    pd_allowed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column()
+    used_at: Mapped[datetime | None] = mapped_column()
+
+
+class McpCallLog(Base):
+    """Журнал вызовов: кто, какой инструмент, с какими аргументами, чем кончилось.
+
+    Аргументы приходят уже через `mask_args` — персональные поля заменены
+    пометкой. Результат не хранится вовсе. Человека-актёра отдельно не пишем:
+    он виден через подключение.
+    """
+
+    __tablename__ = "mcp_call_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    connection_id: Mapped[int] = mapped_column(ForeignKey("mcp_connection.id"), index=True)
+    tool: Mapped[str] = mapped_column(Text)
+    args: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    ok: Mapped[bool] = mapped_column(Boolean)
+    # Код ошибки реестра (`pd_not_allowed`, `not_found`…), без текста: тексты
+    # могут нести то, что не нужно хранить
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 # Справочник школьной учебной программы (TEACHER_AI_BRIEF, раздел 3). Пять

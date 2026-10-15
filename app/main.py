@@ -1,10 +1,12 @@
 import asyncio
+import importlib
 import logging
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session as DbSession
+from starlette.routing import Route
 
 from app.adapters.db.base import get_engine
 from app.adapters.db.repos import UserRepo
@@ -19,6 +21,7 @@ from app.api.routers import (
     admin_curriculum,
     admin_lesson_ai,
     admin_lessons,
+    admin_mcp,
     admin_quizzes,
     admin_reviews,
     admin_tasks,
@@ -31,6 +34,7 @@ from app.api.routers import (
     health,
     lesson_ai,
     lessons,
+    mcp_oauth,
     me,
     notifications,
     preview,
@@ -43,6 +47,10 @@ from app.api.routers import (
 from app.application.bootstrap import ensure_bootstrap_admin
 from app.config import check_providers, get_settings
 from app.lesson_ai.worker import start_workers
+from app.mcp_server.server import McpEndpoint
+
+# Один на процесс: менеджер SDK внутри него заводится в lifespan приложения
+mcp_endpoint = McpEndpoint()
 
 
 @asynccontextmanager
@@ -70,7 +78,11 @@ async def lifespan(app: FastAPI):
     workers = None
     if cfg.lesson_ai_on and cfg.lesson_ai_workers > 0:
         workers = start_workers(cfg)
-    yield
+    async with AsyncExitStack() as stack:
+        # MCP-менеджер SDK держит свою группу задач — её жизнь привязана к приложению
+        if cfg.mcp_enabled:
+            await stack.enter_async_context(mcp_endpoint.lifespan())
+        yield
     if workers is not None:
         workers.stop()
     if task is not None:
@@ -138,6 +150,13 @@ def create_app() -> FastAPI:
     app.include_router(telegram.admin_router)
     app.include_router(questions.admin_router)
     app.include_router(preview.router)
+    if cfg.mcp_enabled:
+        # Реестр действий грузится только здесь: выключенный MCP его не тянет вовсе
+        importlib.import_module("app.assistant.tools")
+
+        app.include_router(mcp_oauth.router)
+        app.include_router(admin_mcp.router)
+        app.router.routes.append(Route("/mcp", endpoint=mcp_endpoint))
     return app
 
 
