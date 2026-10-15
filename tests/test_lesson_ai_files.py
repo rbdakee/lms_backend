@@ -432,8 +432,8 @@ def test_kazakh_presentation_is_kazakh(client, ai, kz_objective_id):
     assert OBJECTIVE_LINE["kz"] in notes_of(slides[0])
     assert notes_of(slides[0]).startswith("Оқу мақсаты:")
     lines = [line for slide in slides for line in slide_lines(slide)]
-    labels = [line for line in lines if line in ("Сабақтың басы", "Сабақтың ортасы")]
-    assert labels
+    # Плашки с названием этапа на слайдах нет — этап виден только цветом
+    assert not [line for line in lines if line.startswith("Сабақтың")]
     for russian in presentation.LABELS["ru"].values():
         assert russian not in lines
     # Заметки образца русские («Начало урока, шаг 1») — это содержимое;
