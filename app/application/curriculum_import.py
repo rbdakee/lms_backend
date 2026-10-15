@@ -58,10 +58,16 @@ class CurriculumImportService:
             )
 
         ru, kz = parsed["ru"], parsed["kz"]
+        # Название предмета берётся из реестра парсера — реестр источник правды:
+        # при повторном импорте устаревшее название переписывается, а не живёт
+        # в базе вечно. Владелец называет языковые предметы по-своему (Т1/Т2,
+        # Я1/Я2), и правка реестра должна доехать до базы вместе с импортом.
+        title = ru.get("subject") or subject_code
         subject = self.curriculum.subject_by_code(subject_code)
         if subject is None:
-            title = ru.get("subject") or subject_code
             subject = self.curriculum.create_subject(subject_code, title)
+        elif subject.title != title:
+            subject.title = title
 
         # Подозрения считаются до записи: импорт не должен «починить» данные по дороге,
         # а потом отчитаться о чистом справочнике.
