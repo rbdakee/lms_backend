@@ -399,7 +399,8 @@ def test_outline_shows_layout_and_image():
 
 
 def test_edit_catalog_describes_new_slide_fields():
+    """С библиотекой шаблонов слайд презентации — сценарий: помощник правки
+    обязан знать его поля (шаблон, заполнение слотов, анимацию)."""
     text = kinds_catalog()
-    for field in ("layout", "image", "animation", "answer", "fact", "right_lines"):
+    for field in ("template", "fill", "animation"):
         assert f"- {field}:" in text
-    assert "find_image" in text
