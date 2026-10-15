@@ -68,12 +68,33 @@ from app.application.lesson_materials import LessonMaterialsService, MaterialFil
 from app.application.ports import AiPort
 from app.application.ratelimit import SlidingWindowLimiter
 from app.config import get_settings
+from app.domain.errors import NotFoundError
+from app.lesson_ai import images as lesson_images
 
 router = APIRouter(
     prefix="/lesson_ai",
     dependencies=[Depends(deps.require_lesson_ai), Depends(deps.require_lesson_ai_access)],
 )
 access_router = APIRouter(prefix="/lesson_ai", dependencies=[Depends(deps.require_lesson_ai)])
+
+
+@access_router.get("/images/{key}")
+def catalog_image(key: str) -> Response:
+    """PNG из каталога картинок презентаций (значки предметов на чипах).
+
+    Без входа и без проверки доступа к продукту, но не без флага продукта: картинки
+    публичные по лицензии (Fluent Emoji, MIT), а `<img>` не несёт заголовков и живёт
+    на другом домене, чем API. Ключ ищется только среди ключей каталога — путь
+    из запроса к файловой системе не доходит.
+    """
+    data = lesson_images.png(key)
+    if data is None:
+        raise NotFoundError()
+    return Response(
+        data,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @access_router.get("/access")

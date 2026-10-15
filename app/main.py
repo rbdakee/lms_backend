@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session as DbSession
 from starlette.routing import Route
 
+from app.adapters.curriculum.parser import SUBJECT_CODES, subject_icon
 from app.adapters.db.base import get_engine
 from app.adapters.db.repos import UserRepo
 from app.adapters.telegram.poller import run_poller
@@ -46,6 +47,7 @@ from app.api.routers import (
 )
 from app.application.bootstrap import ensure_bootstrap_admin
 from app.config import check_providers, get_settings
+from app.lesson_ai.images import catalog as image_catalog
 from app.lesson_ai.worker import start_workers
 from app.mcp_server.server import McpEndpoint
 
@@ -67,6 +69,11 @@ async def lifespan(app: FastAPI):
     здоровый инстанс, в который некому войти.
     """
     cfg = get_settings()
+    # Значок каждого предмета обязан быть в каталоге картинок: иначе чип без
+    # картинки заметят в школе, а не при выкате
+    missing = [c for c in SUBJECT_CODES if subject_icon(c) not in image_catalog()]
+    if missing:
+        raise RuntimeError(f"у предметов нет значка в каталоге картинок: {missing}")
     with DbSession(get_engine()) as db:
         ensure_bootstrap_admin(UserRepo(db), cfg, db.commit)
     task = None
