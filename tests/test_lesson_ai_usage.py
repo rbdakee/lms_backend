@@ -47,9 +47,7 @@ from tests.test_lesson_ai_chat import (
     OTHER_PHONE,
     SilentAi,
     StreamingChatAi,
-    confirm,
     new_chat,
-    ready_chat,
     say,
 )
 from tests.test_lesson_ai_chat import Scene as ChatScene
